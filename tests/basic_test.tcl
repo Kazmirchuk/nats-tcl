@@ -11,20 +11,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-lappend auto_path [file normalize .]
+# shortcut to locate the nats package; use proper Tcl mechanisms in production! e.g. TCLLIBPATH
+lappend auto_path [file normalize [file join [file dirname [info script]] ..]]
 
 package require tcltest
 package require nats
 
-proc callback {param subj msg reply} {
+proc callback {param subj msg reply sid} {
     puts "callback $param $subj $msg $reply"
 }
-set nats::debug true
-#remember to parse login & passwd
-nats::connect "nats://localhost:4222"
-nats::subscribe foo [list callback one]
+set conn [nats::connection new]
+#-ping_interval 2000
+$conn configure -servers [list nats://localhost:4223 nats://localhost:4222] -randomize 0 -debug 1 
+$conn connect
+$conn subscribe foo [list callback one]
 after 1000
-nats::publish foo bla
+$conn publish foo bla
 #after 1000 nats::disconnect
 vwait forever
 

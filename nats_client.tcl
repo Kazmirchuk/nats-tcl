@@ -1,4 +1,5 @@
 # Copyright 2020 Petro Kazmirchuk https://github.com/Kazmirchuk
+
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -11,15 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#decouple events from handlers?
-#package require uevent
-
 package require struct::list
 package require cmdline
 package require uri
 package require json
 package require json::write
 package require oo::util
+package require tcl::chan::random
+package require tcl::randomseed
 
 # TODO: how to restore subscriptions when reconnected to another server?
 
@@ -57,24 +57,36 @@ namespace eval ::nats {
         { user_credentials.arg ""}
         { nkeys_seed.arg ""}
         { debug.boolean false}
-        { status.integer 0 }
     }
     
     oo::class create connection {
         variable config sock subscriptionCounter subscriptions serverInfo serverPool currentServerIdx subjectRegex writing_coro reading_coro
         variable connect_timer
+        # all outgoing messages are put in this list before being flushed to the socket, so that even when we are reconnecting, messages can still be sent
+        variable outBuffer
+        variable randomChan
+        variable syncResponse
+        variable requestsInboxPrefix
+        variable requestCounter
+        variable asyncRequests
         
         constructor {} {
-            set status $nats::status_closed
+            set config(status) $nats::status_closed
             set sock ""
             set subscriptionCounter 0
             array set subscriptions {}
             array set serverInfo {} ;# INFO from a current NATS server
             set serverPool "" ;# list of dicts with parsed nats:// URLs, possibly augmented with extra ones received from a NATS server
             set currentServerIdx ""
+            #consider replacing with string is alnum? does this allow Unicode?
             set subjectRegex {^[[:alnum:]_-]+$}
             set writing_coro ""
             set reading_coro ""
+            set outBuffer [list]
+            set randomChan [tcl::chan::random [tcl::randomseed]]
+            set requestsInboxPrefix ""
+            set requestCounter 1
+            array set asyncRequests {} ; # reqID -> {timer callback}
             # initialise default configuration
             # we need it because untyped options with default value "" are not returned by cmdline::typedGetoptions at all
             foreach option $nats::option_syntax {
@@ -86,6 +98,7 @@ namespace eval ::nats {
         }
         
         destructor {
+            close $randomChan
         }
         
         method cget {option} {
@@ -146,20 +159,25 @@ namespace eval ::nats {
             if {$config(randomize)} {
                 set serverPool [::struct::list shuffle $serverPool]
             }
-            foreach s $serverPool {
-                my DebugLog "Parsed URL: $s"
-            }
         }
         
-        method connect { {async false} } {
+        method connect { args } {
+            switch -- $args {
+                -async {
+                    set async 1
+                }
+                "" {
+                    set async 0
+                }
+                default {
+                    throw {NATS INVALID_ARG} "Unknown option $args"
+                }
+            }
             set config(status) $nats::status_connecting
             # now try connecting to the first server
             my ConnectNextServer
-            #there is a chance that at this point $connected is already true???
             if {!$async} {
-                my DebugLog "waiting for connection"
                 vwait [self object]::config(status)
-                my DebugLog "finished waiting"
             }
         }
         
@@ -170,7 +188,7 @@ namespace eval ::nats {
             #::nats::private::cleanup
         }
         
-        method publish {subject msg {reply_subj ""}} {
+        method publish {subject msg {replySubj ""}} {
             my CheckConnection
             set msgLen [string length $msg]
             if {$msgLen > $serverInfo(max_payload)} {
@@ -181,47 +199,130 @@ namespace eval ::nats {
                 throw {NATS INVALID_ARG} "Invalid subject $subject"
             }
             
-            set data "PUB $subject $reply_subj $msgLen"
-            my DebugLog "Sending $data\n $msg"
-            puts $sock $data
-            puts $sock $msg
+            set data "PUB $subject $replySubj $msgLen"
+            lappend outBuffer $data
+            lappend outBuffer $msg
         }
         
-        method subscribe {subject commandPrefix} {            
+        method subscribe {subject commandPrefix {queueGroup ""} } {            
             my CheckConnection
             if {![my CheckWildcard $subject]} {
                 throw {NATS INVALID_ARG} "Invalid subject $subject"
             }
             
+            if {[string length $commandPrefix] == 0} {
+                throw {NATS INVALID_ARG} "Invalid command prefix $commandPrefix"
+            }
+            if {$queueGroup ne "" && ![string is graph $queueGroup]} {
+                throw {NATS INVALID_ARG} "Invalid queue group $queueGroup"
+            }
+                                       
             incr subscriptionCounter
-            set subscriptions($subscriptionCounter) $commandPrefix
-            set data "SUB $subject $subscriptionCounter"
-            my DebugLog "Sending $data"
-            puts $sock $data
+            #remMsg -1 means "unlimited"
+            set subscriptions($subscriptionCounter) [dict create cmd $commandPrefix remMsg -1]
+            
+            #the format is SUB <subject> [queue group] <sid>
+            set data "SUB $subject $queueGroup $subscriptionCounter"
+            lappend outBuffer $data
+            return $subscriptionCounter
         }
         
-        method unsubscribe {subID {maxMessages ""}} {
+        method unsubscribe {subID {maxMessages 0}} {
             my CheckConnection
             
             if {![info exists subscriptions($subID)]} {
                 throw {NATS INVALID_ARG} "Invalid subscription ID $subID"
             }
             
-            if {[string length $maxMessages]} {
-                if {! ([string is integer -strict $maxMessages] && $maxMessages > 0)} {
-                    throw {NATS INVALID_ARG} "Invalid maxMessages $maxMessages"
+            if {! ([string is integer -strict $maxMessages] && $maxMessages >= 0)} {
+                throw {NATS INVALID_ARG} "Invalid maxMessages $maxMessages"
+            }
+            
+            #the format is UNSUB <sid> [max_msgs]
+            if {$maxMessages == 0} {
+                unset subscriptions($subID)
+                set data "UNSUB $subID"
+            } else {
+                dict update subscriptions($subID) remMsg v {set v $maxMessages}
+                set data "UNSUB $subID $maxMessages"
+            }
+            lappend outBuffer $data
+        }
+        
+        method request {subject message args} {
+            set timeout -1 ;# ms
+            set callback ""
+            
+            foreach {opt val} $args {
+                switch -- $opt {
+                    -timeout {
+                        set timeout $val
+                    }
+                    -callback {
+                        set callback $val
+                    }
                 }
             }
-            set data "UNSUB $subID $maxMessages"
-            my DebugLog "Sending $data"
-            puts $sock $data
-            if {$maxMessages == ""} {
-                # TODO: cleanup the array when $maxMessages > 0 too
-                unset subscriptions($subID)
+            if {$timeout != -1} {
+                if {! ([string is integer -strict $timeout] && $timeout > 0)} {
+                    throw {NATS INVALID_ARG} "Invalid timeout $timeout"
+                }
             }
+            
+            my InitReqSubscription
+            if {$callback eq ""} {
+                # sync request
+                my publish $subject $message "$requestsInboxPrefix.0"
+                set asyncRequests(0) ""
+                if {$timeout != -1} {
+                     set asyncRequests(0) [after $timeout [list set [self object]::syncResponse [list 1 ""]]]
+                }
+                vwait [self object]::syncResponse
+                lassign $syncResponse timedOut response
+                if {$timedOut} {
+                    throw {NATS TIMEOUT} "Request timeout"
+                }
+                after cancel $asyncRequests(0)
+                return $response
+            }
+            # async request
+            my publish $subject $message "$requestsInboxPrefix.$requestCounter"
+            set timerID ""
+            if {$timeout != -1} {  
+                set timerID [after $timeout [list [mymethod RequestCallback "..$requestCounter" "" "" -1]]]
+            }
+            set asyncRequests($requestCounter) [list $timerID $callback]
+            incr requestCounter
         }
         
         method ping {timeout} {
+        }
+        
+        method inbox {} {
+            # very quick and dirty!
+            return "_INBOX.[binary encode hex [read $randomChan 10]]"
+        }
+        
+        method RequestCallback {subj msg reply sid} {
+            set reqID [lindex [split $subj .] 2]
+            if {$reqID == 0} {
+                # resume from vwait in "method request"
+                set syncResponse [list 0 $msg]
+                return
+            }
+            if {![info exists asyncRequests($reqID)]} {
+                # ignore all further responses, if >1 arrives
+                return
+            }
+            lassign $asyncRequests($reqID) timerID callback
+            if {$sid == -1} {
+                #timeout
+                after 0 [list {*}$callback 1 ""]
+            } else {
+                after cancel $timerID
+                after 0 [list {*}$callback 0 $msg]
+            }
+            unset asyncRequests($reqID)
         }
         
         # --------- these procs execute in the coroutine writing_coro ---------------
@@ -238,7 +339,7 @@ namespace eval ::nats {
                 yield
             }
             set serverDict [lindex $serverPool $currentServerIdx]
-            my DebugLog "Connecting to server $currentServerIdx: $serverDict"
+            #my DebugLog "Connecting to server $currentServerIdx: $serverDict"
             set sock [socket -async [dict get $serverDict host] [dict get $serverDict port]]
             if {[info coroutine] eq ""} {
                 coroutine writing_coro {*}[mymethod WritingCoro]
@@ -252,7 +353,7 @@ namespace eval ::nats {
             set writing_coro [info coroutine]
             while {1} {
                 set reason [yield]
-                my DebugLog "WritingCoro woke up due to $reason"
+                #my DebugLog "WritingCoro woke up due to $reason"
                 # this event will arrive again and again if we don't disable it
                 chan event $sock writable ""
                 
@@ -276,7 +377,7 @@ namespace eval ::nats {
                 }
                 if { $reason eq "timeout"} {
                     chan close $sock
-                    my DebugLog "Server $currentServerIdx timed out"
+                    #my DebugLog "Server $currentServerIdx timed out"
                     my ConnectNextServer
                 }
                 if { $reason eq "exit"} {
@@ -291,7 +392,7 @@ namespace eval ::nats {
                 return
             }
             after $config(ping_interval) [mymethod Pinger]
-            puts $sock "PING"
+            lappend outBuffer "PING"
         }
         
         method Flusher {} {
@@ -299,6 +400,10 @@ namespace eval ::nats {
                 return
             }
             after $config(flush_interval) [mymethod Flusher]
+            foreach msg $outBuffer {
+                puts $sock $msg
+            }
+            set outBuffer [list]
             chan flush $sock
         }
         # --------- these procs execute in the coroutine reading_coro ---------------
@@ -318,13 +423,13 @@ namespace eval ::nats {
                         ]
             json::write::indented $ind
             set data "CONNECT $jsonMsg"
-            my DebugLog "Sending $data"
+            #my DebugLog "Sending $data"
             puts $sock $data
             flush $sock
             # exit from vwait in "connect"
             set config(status) $nats::status_connected
-            my Flusher
-            my Pinger
+            after $config(flush_interval) [mymethod Flusher]
+            after $config(ping_interval) [mymethod Pinger]
         }
         
         method INFO {cmd} {
@@ -338,36 +443,44 @@ namespace eval ::nats {
             # the format is <subject> <sid> [reply-to] <#bytes>
             set replyTo ""
             if {[llength $cmd] == 4} {
-                lassign $cmd subject subscriptionID replyTo expMsgLength
+                lassign $cmd subject subID replyTo expMsgLength
             } else {
-                lassign $cmd subject subscriptionID expMsgLength
+                lassign $cmd subject subID expMsgLength
             }
             # turn off crlf translation while we read the message body
             chan configure $sock -translation binary
             # account for these crlf bytes that follow the message
             incr expMsgLength 2
-            set messageBody ""
+            set messageBody [chan read $sock $expMsgLength]
             while {[string length $messageBody] != $expMsgLength} {
                 # wait for the message; we may need multiple reads to receive all of it
-                # it's cleaner to have a second "yield" here then putting this logic in readSocket
-                append messageBody [chan read $sock $expMsgLength]
+                # it's cleaner to have a second "yield" here than putting this logic in readSocket
                 yield
+                append messageBody [chan read $sock $expMsgLength]
             }
             chan configure $sock -translation crlf
             # remove the trailing crlf
             set messageBody [string range $messageBody 0 end-2]
-            my DebugLog "Received msg $messageBody length [string length $messageBody]"
-            if {[info exists subscriptions($subscriptionID)]} {
-                # I don't want any possible error in user code to mess up with my implementation, so let's schedule the execution in future
-                after idle [list {*}$subscriptions($subscriptionID) $subject $messageBody $replyTo $subscriptionID]
+            if {[info exists subscriptions($subID)]} {
+                # post the event
+                set cmdPrefix [dict get $subscriptions($subID) cmd]
+                after 0 [list {*}$cmdPrefix $subject $messageBody $replyTo $subID]
+                set remainingMsg [dict get $subscriptions($subID) remMsg]
+                if {$remainingMsg == 1} {
+                    unset subscriptions($subID)
+                } elseif {$remainingMsg > 1} {
+                    dict update subscriptions($subID) remMsg v {incr v -1}
+                }
             } else {
-                my DebugLog "unexpected message with subID $subscriptionID"
+                # TODO: remove after release; nats.py ignores messages with unknown subID
+                my DebugLog "unexpected message with subID $subID"
             }
+            
             # now we return back to readSocket and enter "yield" there
         }
         
         method PING {cmd} {
-            puts $sock "PONG"
+            lappend outBuffer "PONG"
         }
         
         method PONG {cmd} {
@@ -394,7 +507,6 @@ namespace eval ::nats {
                         break
                     } else {
                         # we don't have a full line yet - wait for next fileevent
-                        my DebugLog "no full line yet"
                         continue
                     }
                 }
@@ -414,6 +526,17 @@ namespace eval ::nats {
         }
         
         # ------------ coroutine end -----------------------------------------
+        
+        # all sync requests are using req ID = 0 (there is only one at a time)
+        # async requests use incrementing req ID > 0
+        method InitReqSubscription {} {
+            if {$requestsInboxPrefix ne {}} {
+                # we already subscribed
+                return
+            }
+            set requestsInboxPrefix [my inbox]
+            my subscribe "$requestsInboxPrefix.*" [mymethod RequestCallback]
+        }
         
         method CheckSubject {subj} {            
             if {[string length $subj] == 0} {

@@ -1,4 +1,5 @@
 # Copyright 2020 Petro Kazmirchuk https://github.com/Kazmirchuk
+
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -13,27 +14,80 @@
 
 # shortcut to locate the nats package; use proper Tcl mechanisms in production! e.g. TCLLIBPATH
 lappend auto_path [file normalize [file join [file dirname [info script]] ..]]
-
-package require tcltest
 package require nats
 
-proc callback {param subj msg reply sid} {
-    puts "callback $param $subj $msg $reply"
-}
+::tcltest::configure {*}$argv
+namespace import ::tcltest::*
+
 set conn [nats::connection new]
-#-ping_interval 2000
-$conn configure -servers [list nats://localhost:4223 nats://localhost:4222] -randomize 0 -debug 1 
-$conn connect
-$conn subscribe foo [list callback one]
-after 1000
-$conn publish foo bla
-#after 1000 nats::disconnect
-vwait forever
+$conn configure -servers [list nats://localhost:4222]
+
+proc callback {param subj msg reply sid} {
+    set ::message $msg
+}
+set ::message ""
+
+test basic-1 "connect NATS" -body {
+    $::conn connect -async
+    test_utils::setupChanObserver [set ${::conn}::sock] w
+    test_utils::sleep 1000
+    puts -nonewline [test_utils::getChanData]
+    expr {[$::conn cget -status] == $nats::status_connected}
+} -result {1} -output {CONNECT {"verbose":false,"pedantic":false,"tls_required":false,"name":"","lang":"Tcl","version":"0.9","protocol":1,"echo":true}}
+
+test basic-2 "subscribe to message" -body {
+    test_utils::setupChanObserver [set ${::conn}::sock] w
+    set sub_id [$::conn subscribe foo [list ::callback one]]
+    test_utils::sleep 1000
+    puts -nonewline [test_utils::getChanData]
+    set sub_id
+}  -result {1} -output {SUB foo  1}
+
+test basic-3 "Publish a message" -body {
+    test_utils::setupChanObserver [set ${::conn}::sock] w
+    $::conn publish foo bla
+    test_utils::sleep 1000
+    puts -nonewline [test_utils::getChanData]
+    set ::message
+} -result {bla} -output {PUB foo  3}
+
+test basic-4.1 "Synchronous request" -body {
+    test_utils::startResponder service
+    test_utils::setupChanObserver [set ${::conn}::sock] b
+    set result [$::conn request service question]
+    lassign [test_utils::getChanData 0] rdata wdata
+    test_utils::stopResponder
+    set result
+} -result {response} 
+
+test basic-4.2 "Synchronous request - written to socket" -body {
+    lassign [split $wdata \n] sub pub payload
+    # the first request starts with subscribing to INBOX.<random>.*
+    set check1 [regexp {SUB _INBOX.*.\*  ([[:digit:]]+)} $sub -> subID]
+    set check2 [regexp {PUB service _INBOX.*.0 (.*)} $pub -> msg_length]
+    set check3 [string equal $payload question]
+    set check4 [expr {$msg_length == [string length $payload]}]
+    expr {$check1 && $check2 && $check3 && $check4}
+} -result {1} 
+
+test basic-4.3 "Synchronous request - read from socket" -body {
+    lassign [split $rdata \n] msg payload
+    set check1 [regexp {MSG _INBOX.*.0 ([[:digit:]]+) (.*)} $msg -> subID2 msg_length]
+    set check2 [string equal $payload response]
+    set check3 [expr {$msg_length == [string length $payload]}]
+    set check4 [expr {$subID == $subID2}]
+    expr {$check1 && $check2 && $check3 && $check4}
+} -result {1} 
+
+
+
+$conn destroy
+cleanupTests
 
 #reply = nats::request <subj> <msg>
 #nats::asyncRequest <subj> <msg> <commandPrefix>
 #id = nats::subscribe <subj> <commandPrefix>
-nats::unsubscribe <id>
+#nats::unsubscribe <id>
 #
 #commandPrefix subj msg reply sub_id
 #

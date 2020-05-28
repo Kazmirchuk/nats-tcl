@@ -1,4 +1,4 @@
-# Copyright 2020 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2020 Petro Kazmirchuk https://github.com/Kazmirchuk
 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,112 +13,13 @@
 # limitations under the License.
 
 package require tcltest
-package require tcl::transform::observe
-package require tcl::chan::variable
 
-namespace eval test_utils {
-    variable sleepVar ""
-    
-    variable writingObs
-    variable readingObs
-    variable obsMode
-    variable readChan
-    variable writeChan
-    variable observedSock
-    
-    variable natsConn ""
-    
-    # sleep $delay ms in the event loop
-    proc sleep {delay} {
-        after $delay [list set ::test_utils::sleepVar 1]
-        vwait ::test_utils::sleepVar
-    }
-    
-    # $mode can be r (read), w (write), b (both)
-    proc setupChanObserver { sock mode } {
-        variable writingObs ""
-        variable readingObs ""
-        variable obsMode $mode
-        variable readChan ""
-        variable writeChan ""
-        variable observedSock $sock
-        
-        switch -- $obsMode {
-            r {
-                set readChan [tcl::chan::variable ::test_utils::readingObs]
-                tcl::transform::observe $sock {} $readChan
-            }
-            w {
-                set writeChan [tcl::chan::variable ::test_utils::writingObs]
-                tcl::transform::observe $sock $writeChan {}
-            }
-            b {
-                set readChan [tcl::chan::variable ::test_utils::readingObs]
-                set writeChan [tcl::chan::variable ::test_utils::writingObs]
-                tcl::transform::observe $sock $writeChan $readChan
-            }
-        }
-    }
-    
-    proc getChanData { {firstLine 1} } {
-        variable writingObs
-        variable readingObs
-        variable obsMode
-        variable readChan
-        variable writeChan
-        variable observedSock
-        
-        # remove the transformation
-        chan pop $observedSock
-        
-        if {$readChan ne ""} {
-            close $readChan
-        }
-        if {$writeChan ne ""} {
-            close $writeChan
-        }
-        # these variables contain \r\r\n in each line, and I couldn't get rid of them with chan configure -translation
-        # so just remove \r here
-        set writingObs [string map {\r {}} $writingObs]
-        set readingObs [string map {\r {}} $readingObs]
-        if {$firstLine} {
-            set writingObs [lindex [split $writingObs \n] 0]
-            set readingObs [lindex [split $readingObs \n] 0]
-        }
-        switch -- $obsMode {
-            r {
-                return $readingObs
-            }
-            w {
-                return $writingObs
-            }
-            b {
-                return [list $readingObs $writingObs]
-            }
-        }
-    }
-    
-    # a dummy service that after receiving a message waits for the specified time (ms) and then replies "42"
-    proc startResponder {subject} {
-        variable natsConn
-        set natsConn [nats::connection new]
-        $natsConn configure -servers nats://localhost:4222
-        $natsConn connect
-        $natsConn subscribe $subject [namespace current]::respond
-    }
-    proc respond {subj msg reply sid} {
-        variable natsConn
-        if {$msg != 0} {
-            sleep $msg
-        }
-        $natsConn publish $reply 42
-    }
-    proc stopResponder {} {
-        variable natsConn
-        $natsConn destroy
-    }
-}
+# shortcut to locate the nats package; use proper Tcl mechanisms in production! e.g. TCLLIBPATH
+set thisDir [file dirname [info script]]
+lappend auto_path [file normalize [file join $thisDir ..]]
+package require nats
 
+source [file join $thisDir test_utils.tcl]
 # by default tcltest will exit with 0 even if some tests failed
 proc tcltest::cleanupTestsHook {} {
     variable numTests

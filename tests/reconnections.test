@@ -1,0 +1,57 @@
+# Copyright (c) 2020 Petro Kazmirchuk https://github.com/Kazmirchuk
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+namespace import ::tcltest::*
+
+test_utils::startNats NATS1
+test_utils::startNats NATS2 -p 4223
+
+set conn [nats::connection new]
+$conn configure -servers [list nats://localhost:4222 nats://localhost:4223] -randomize 0 -debug 1
+
+test reconn-1 "Connect NATS" -body {
+    $conn connect -async
+    set check1 [expr {[$conn cget -status] == $nats::status_connecting}]
+    test_utils::sleep 500
+    set check2 [expr {[$conn cget -status] == $nats::status_connected}]
+    set srv [$conn cget -currentServer]
+    set check3 [string equal [dict get $srv host] "localhost"]
+    set check4 [expr {[dict get $srv port] == 4222}]
+    expr {$check1 && $check2 && $check3 && $check4}
+} -result {1}
+
+test_utils::stopNats NATS1
+
+test reconn-2 "Publish a message" -body {
+    $conn publish subject1 "hello"
+    # wait until flush & reconnect
+    test_utils::sleep 1000
+    set check2 [expr {[$conn cget -status] == $nats::status_connected}]
+    set srv [$conn cget -currentServer]
+    set check3 [string equal [dict get $srv host] "localhost"]
+    set check4 [expr {[dict get $srv port] == 4223}]
+    expr {$check2 && $check3 && $check4}
+} -result {1}
+
+test reconn-3 "Publish and receive a message" -body {
+    $conn subscribe subject1 [list test_utils::simpleCallback]
+    $conn publish subject1 "hello2"
+    vwait test_utils::simpleMsg
+    set test_utils::simpleMsg
+} -result {hello2}
+
+$conn destroy
+
+test_utils::stopNats NATS2
+cleanupTests

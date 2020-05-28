@@ -1,4 +1,4 @@
-# Copyright 2020 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2020 Petro Kazmirchuk https://github.com/Kazmirchuk
 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ package require json::write
 package require oo::util
 package require tcl::chan::random
 package require tcl::randomseed
+package require coroutine
 
 # TODO: how to restore subscriptions when reconnected to another server?
 
@@ -41,7 +42,7 @@ namespace eval ::nats {
         { verbose.boolean false             "If true, every protocol message is echoed by the server with +OK" }
         { allow_reconnect.boolean true      "Whether the client library should try to reconnect" }
         { connect_timeout.integer 2000      "Connection timeout (ms)"}
-        { reconnect_time_wait.integer 2000  "How long to wait between two reconnect attempts from the same server (ms)"}
+        { reconnect_time_wait.integer 2000  "How long to wait between two reconnect attempts to the same server (ms)"}
         { max_reconnect_attempts.integer 60 "Maximum number of reconnect attempts"}
         { ping_interval.integer 120000      "Interval (ms) to send PING messages to NATS server"}
         { max_outstanding_pings.integer 2   "Max number of PINGs without a reply from NATS before closing the connection"}
@@ -49,8 +50,8 @@ namespace eval ::nats {
         { randomize.boolean true            "Shuffle the list of NATS servers before connecting"}
         { echo.boolean true                 "If true, messages from this connection will be sent by the server back if the connection has matching subscriptions"}
         { tls.arg ""}
-        { user.arg ""}
-        { password.arg ""}
+        { user.arg ""                       "Default username when it is absent in a server URL"}
+        { password.arg ""                   "Default password when it is absent in a server URL"}
         { token.arg ""}
         { signature_cb.arg ""}
         { user_jwt_cb.arg ""}
@@ -60,8 +61,8 @@ namespace eval ::nats {
     }
     
     oo::class create connection {
-        variable config sock subscriptionCounter subscriptions serverInfo serverPool currentServerIdx subjectRegex writing_coro reading_coro
-        variable connect_timer
+        variable config sock subscriptionCounter subscriptions serverInfo serverPool currentServerIdx subjectRegex connecting_coro reading_coro
+
         # all outgoing messages are put in this list before being flushed to the socket, so that even when we are reconnecting, messages can still be sent
         variable outBuffer
         variable randomChan
@@ -70,6 +71,10 @@ namespace eval ::nats {
         variable requestCounter
         variable asyncRequests
         
+        variable pong
+        
+        variable timers
+        variable counters
         constructor {} {
             set config(status) $nats::status_closed
             set sock ""
@@ -80,13 +85,17 @@ namespace eval ::nats {
             set currentServerIdx ""
             #consider replacing with string is alnum? does this allow Unicode?
             set subjectRegex {^[[:alnum:]_-]+$}
-            set writing_coro ""
+            set connecting_coro ""
             set reading_coro ""
             set outBuffer [list]
             set randomChan [tcl::chan::random [tcl::randomseed]]
             set requestsInboxPrefix ""
             set requestCounter 1
+            # avoid a check for existing timer in "ping"
             array set asyncRequests {} ; # reqID -> {timer callback}
+            
+            set pong 1
+            array set timers {ping {} flush {} connect {} }
             # initialise default configuration
             # we need it because untyped options with default value "" are not returned by cmdline::typedGetoptions at all
             foreach option $nats::option_syntax {
@@ -149,6 +158,10 @@ namespace eval ::nats {
                 
                 #uri::split will return a dict with these keys: host, port, user, pwd
                 array set srv [uri::split "http://$url"]
+                # not interested in these
+                foreach k {fragment path query} {
+                    unset srv($k)
+                }
                 set srv(scheme) $scheme
                 if {[info exists srv(user)] && ![info exists srv(pwd)]} {
                     set srv(token) $srv(user)
@@ -173,7 +186,9 @@ namespace eval ::nats {
                     throw {NATS INVALID_ARG} "Unknown option $args"
                 }
             }
-            set config(status) $nats::status_connecting
+            if {$config(status) != $nats::status_closed} {
+                return
+            }
             # now try connecting to the first server
             my ConnectNextServer
             if {!$async} {
@@ -185,7 +200,7 @@ namespace eval ::nats {
             if {$config(status) == $nats::status_closed} {
                 return
             }
-            #::nats::private::cleanup
+            my CloseSocket
         }
         
         method publish {subject msg {replySubj ""}} {
@@ -263,39 +278,52 @@ namespace eval ::nats {
                     }
                 }
             }
-            if {$timeout != -1} {
-                if {! ([string is integer -strict $timeout] && $timeout > 0)} {
-                    throw {NATS INVALID_ARG} "Invalid timeout $timeout"
-                }
-            }
-            
+            my CheckTimeout $timeout
             my InitReqSubscription
+            set timerID ""
             if {$callback eq ""} {
                 # sync request
                 my publish $subject $message "$requestsInboxPrefix.0"
-                set asyncRequests(0) ""
                 if {$timeout != -1} {
-                     set asyncRequests(0) [after $timeout [list set [self object]::syncResponse [list 1 ""]]]
+                     set timerID [after $timeout [list set [self object]::syncResponse [list 1 ""]]]
                 }
+                # we don't want to wait for the flusher here, call it now, but don't schedule one more
+                my Flusher 0
                 vwait [self object]::syncResponse
                 lassign $syncResponse timedOut response
                 if {$timedOut} {
                     throw {NATS TIMEOUT} "Request timeout"
                 }
-                after cancel $asyncRequests(0)
+                after cancel $timerID
                 return $response
             }
             # async request
             my publish $subject $message "$requestsInboxPrefix.$requestCounter"
-            set timerID ""
             if {$timeout != -1} {  
-                set timerID [after $timeout [list [mymethod RequestCallback "..$requestCounter" "" "" -1]]]
+                set timerID [after $timeout [mymethod RequestCallback "..$requestCounter" "" "" -1]]
             }
+            
             set asyncRequests($requestCounter) [list $timerID $callback]
             incr requestCounter
         }
         
-        method ping {timeout} {
+        method ping { {timeout -1} } {
+            my CheckTimeout $timeout
+            if {$config(status) != $nats::status_connected} {
+                return 0
+            }
+            lappend outBuffer "PING"
+            my Flusher 0
+            set timerID ""
+            if {$timeout != -1} {
+                set timerID [after $timeout [list set [self object]::pong 0]]
+            }
+            vwait [self object]::pong
+            if {$pong} {
+                after cancel $timerID
+                return 1
+            }
+            return 0
         }
         
         method inbox {} {
@@ -304,6 +332,7 @@ namespace eval ::nats {
         }
         
         method RequestCallback {subj msg reply sid} {
+            #puts stderr "RequestCallback $subj $msg $reply $sid"
             set reqID [lindex [split $subj .] 2]
             if {$reqID == 0} {
                 # resume from vwait in "method request"
@@ -325,9 +354,10 @@ namespace eval ::nats {
             unset asyncRequests($reqID)
         }
         
-        # --------- these procs execute in the coroutine writing_coro ---------------
+        # --------- these procs execute in the coroutine connecting_coro ---------------
         # connect to Nth server in the pool
         method ConnectNextServer {} {
+            set config(status) $nats::status_connecting
             if {$currentServerIdx eq ""} {
                 set currentServerIdx 0
             } else {
@@ -335,34 +365,38 @@ namespace eval ::nats {
             }
             if {$currentServerIdx > [llength $serverPool]} {
                 set currentServerIdx 0
-                after $config(reconnect_time_wait) $writing_coro
-                yield
+                coroutine::util after $config(reconnect_time_wait)
             }
             set serverDict [lindex $serverPool $currentServerIdx]
             #my DebugLog "Connecting to server $currentServerIdx: $serverDict"
             set sock [socket -async [dict get $serverDict host] [dict get $serverDict port]]
             if {[info coroutine] eq ""} {
-                coroutine writing_coro {*}[mymethod WritingCoro]
+                coroutine connecting_coro {*}[mymethod ConnectingCoro]
             }
-            chan event $sock writable [list $writing_coro writable]
-            set connect_timer [after $config(connect_timeout) [list $writing_coro timeout]]
+            chan event $sock writable [list $connecting_coro writable]
+            set timers(connect) [after $config(connect_timeout) [list $connecting_coro timeout]]
         }
         
-        method WritingCoro {} {
+        method ConnectingCoro {} {
             # it's important to NOT terminate this coro until the connection is fully closed, see ConnectNextServer
-            set writing_coro [info coroutine]
+            set connecting_coro [info coroutine]
+            set reconnectCounter 0
             while {1} {
                 set reason [yield]
-                #my DebugLog "WritingCoro woke up due to $reason"
+                #my DebugLog "ConnectingCoro woke up due to $reason"
                 # this event will arrive again and again if we don't disable it
                 chan event $sock writable ""
-                
+                if {$reconnectCounter > $config(max_reconnect_attempts)} {
+                    chan close $sock
+                    break
+                }
+                incr reconnectCounter
                 if { $reason eq "writable"} {
-                    after cancel $connect_timer
+                    after cancel $timers(connect)
                     # the socket either connected or failed to connect
                     set errorMsg [chan configure $sock -error]
                     if { $errorMsg != "" } {
-                        my DebugLog "Failed to connect $currentServerIdx socket error: $errorMsg data: [chan configure $sock]"
+                        my DebugLog "Failed to connect $currentServerIdx socket error: $errorMsg"
                         chan close $sock
                         my ConnectNextServer
                         continue
@@ -384,9 +418,28 @@ namespace eval ::nats {
                     break
                 }
             }
-            my DebugLog "finished writing_coro"
+            my DebugLog "finished connecting_coro"
         }
-        
+        method CloseSocket { {broken 0} } {
+            # is it needed?
+            chan event $sock readable {}
+            # make sure we wait until successful flush, if connection was not broken
+            if {!$broken} {
+                chan configure $sock -blocking 1
+            }
+            # note: all buffered input is discarded, all buffered output is flushed
+            close $sock
+            set sock ""
+            after cancel $timers(ping)
+            after cancel $timers(flush)
+            $reading_coro 0
+            if {$broken} {
+                my ConnectNextServer
+            } else {
+                $connecting_coro exit
+                set config(status) $nats::status_closed
+            }
+        }
         method Pinger {} {
             if {$config(status) != $nats::status_connected} {
                 return
@@ -395,41 +448,77 @@ namespace eval ::nats {
             lappend outBuffer "PING"
         }
         
-        method Flusher {} {
+        method Flusher { {scheduleNext 1} } {
             if {$config(status) != $nats::status_connected} {
                 return
             }
-            after $config(flush_interval) [mymethod Flusher]
+            if {$scheduleNext} {
+                # when this method is called manually, scheduleNext == 0
+                set timers(flush) [after $config(flush_interval) [mymethod Flusher]]
+            }
             foreach msg $outBuffer {
                 puts $sock $msg
             }
+            
+            try {
+                chan flush $sock
+            } on error err {
+                my CloseSocket 1
+            }
+            # do NOT clear the buffer unless we had a successful flush!
             set outBuffer [list]
-            chan flush $sock
         }
         # --------- these procs execute in the coroutine reading_coro ---------------
         
         method SendConnect {} {
             set ind [json::write::indented]
             json::write::indented false
-            set jsonMsg [json::write::object \
-                         verbose $config(verbose) \
-                         pedantic $config(pedantic) \
-                         tls_required false \
-                         name [json::write::string $config(name)] \
-                         lang [json::write::string Tcl] \
-                         version [json::write::string 0.9] \
-                         protocol 1 \
-                         echo $config(echo) \
-                        ]
+            set connectParams [list verbose $config(verbose) \
+                                    pedantic $config(pedantic) \
+                                    tls_required false \
+                                    name [json::write::string $config(name)] \
+                                    lang [json::write::string Tcl] \
+                                    version [json::write::string 0.9] \
+                                    protocol 1 \
+                                    echo $config(echo)]
+            
+            my GetCredentials connectParams
+            set jsonMsg [json::write::object {*}$connectParams]
             json::write::indented $ind
-            set data "CONNECT $jsonMsg"
-            #my DebugLog "Sending $data"
-            puts $sock $data
-            flush $sock
+            lappend outBuffer "CONNECT $jsonMsg"
+            set config(currentServer) [lindex $serverPool $currentServerIdx]
             # exit from vwait in "connect"
             set config(status) $nats::status_connected
-            after $config(flush_interval) [mymethod Flusher]
-            after $config(ping_interval) [mymethod Pinger]
+            my Flusher
+            set timers(ping) [after $config(ping_interval) [mymethod Pinger]]
+        }
+        
+        method GetCredentials {varName} {
+            upvar $varName connectParams
+            if {![info exists serverInfo(auth_required)]} {
+                return
+            } 
+            if {!$serverInfo(auth_required)} {
+                return
+            }
+            set serverDict [lindex $serverPool $currentServerIdx]
+            if {[dict exists $serverDict user] && [dict exists $serverDict pwd]} {
+                lappend connectParams user [json::write::string [dict get $serverDict user]] pass [json::write::string [dict get $serverDict pwd]]
+                return
+            }
+            if {[dict exists $serverDict token]} {
+                lappend connectParams auth_token [json::write::string [dict get $serverDict token]]
+                return
+            }
+            if {$config(user) ne "" && $config(password) ne ""} {
+                lappend connectParams user [json::write::string $config(user)] pass [json::write::string $config(password)]
+                return
+            }
+            if {$config(token) ne ""} {
+                lappend connectParams auth_token [json::write::string $config(token)]]
+                return
+            }
+            #TODO throw
         }
         
         method INFO {cmd} {
@@ -484,7 +573,7 @@ namespace eval ::nats {
         }
         
         method PONG {cmd} {
-            my DebugLog "received PONG"
+            set pong 1
         }
         
         method OK {cmd} {
@@ -504,13 +593,14 @@ namespace eval ::nats {
                 if {$readCount < 0} {
                     if {[eof $sock]} {
                         # server closed the socket
+                        yieldto {*}[mymethod CloseSocket 1]
+                        # CloseSocket will invoke this coro once more with 0
                         break
                     } else {
                         # we don't have a full line yet - wait for next fileevent
                         continue
                     }
                 }
-                my DebugLog "Received $readCount bytes:\n$line"
                 # extract the first word from the line (INFO, MSG etc)
                 # protocol_arg will be empty in case of PING/PONG
                 set protocol_arg [lassign $line protocol_op]
@@ -518,10 +608,6 @@ namespace eval ::nats {
                 set protocol_op [string trimleft $protocol_op -+]
                 my $protocol_op $protocol_arg
             }
-            
-            set config(status) $nats::status_closed
-            close $sock
-            set sock ""
             my DebugLog "finished reading_coro"
         }
         
@@ -566,6 +652,14 @@ namespace eval ::nats {
                 throw {NATS NO_CONNECTION} "No connection to NATS server"
             }
         }
+        method CheckTimeout {timeout} {
+            if {$timeout != -1} {
+                if {! ([string is integer -strict $timeout] && $timeout > 0)} {
+                    throw {NATS INVALID_ARG} "Invalid timeout $timeout"
+                }
+            }
+        }
+        
         method BackgroundError {args} {
             my DebugLog "Background error: $args"
         }

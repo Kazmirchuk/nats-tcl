@@ -1,4 +1,4 @@
-# Copyright 2020 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2020 Petro Kazmirchuk https://github.com/Kazmirchuk
 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,83 +12,112 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# shortcut to locate the nats package; use proper Tcl mechanisms in production! e.g. TCLLIBPATH
-lappend auto_path [file normalize [file join [file dirname [info script]] ..]]
-package require nats
-
-::tcltest::configure {*}$argv
 namespace import ::tcltest::*
+tcltest::configure {*}$argv
+
+test_utils::startNats NATS
 
 set conn [nats::connection new]
-$conn configure -servers [list nats://localhost:4222]
+$conn configure -servers nats://localhost:4222
 
-proc callback {param subj msg reply sid} {
-    set ::message $msg
-}
-set ::message ""
+set responder [test_utils::responder new service]
 
-test basic-1 "connect NATS" -body {
-    $::conn connect -async
-    test_utils::setupChanObserver [set ${::conn}::sock] w
-    test_utils::sleep 1000
-    puts -nonewline [test_utils::getChanData]
-    expr {[$::conn cget -status] == $nats::status_connected}
+test basic-1 "Connect NATS" -body {
+    $conn connect -async
+    set obs [test_utils::chanObserver new [set ${::conn}::sock] w]
+    test_utils::sleep 500
+    puts -nonewline [$obs getChanData]
+    $obs destroy
+    expr {[$conn cget -status] == $nats::status_connected}
 } -result {1} -output {CONNECT {"verbose":false,"pedantic":false,"tls_required":false,"name":"","lang":"Tcl","version":"0.9","protocol":1,"echo":true}}
 
-test basic-2 "subscribe to message" -body {
-    test_utils::setupChanObserver [set ${::conn}::sock] w
-    set sub_id [$::conn subscribe foo [list ::callback one]]
+test basic-2 "Subscribe to a message" -body {
+    set obs [test_utils::chanObserver new [set ${::conn}::sock] w]
+    set sub_id [$conn subscribe subject1 [list test_utils::simpleCallback]]
     test_utils::sleep 1000
-    puts -nonewline [test_utils::getChanData]
+    puts -nonewline [$obs getChanData]
+    $obs destroy
     set sub_id
-}  -result {1} -output {SUB foo  1}
+}  -result {1} -output {SUB subject1  1}
 
 test basic-3 "Publish a message" -body {
-    test_utils::setupChanObserver [set ${::conn}::sock] w
-    $::conn publish foo bla
-    test_utils::sleep 1000
-    puts -nonewline [test_utils::getChanData]
-    set ::message
-} -result {bla} -output {PUB foo  3}
+    set obs [test_utils::chanObserver new [set ${::conn}::sock] w]
+    $conn publish subject1 hello
+    vwait test_utils::simpleMsg
+    puts -nonewline [$obs getChanData]
+    $obs destroy
+    set test_utils::simpleMsg
+} -result {hello} -output {PUB subject1  5}
 
-test basic-4.1 "Synchronous request" -body {
-    test_utils::startResponder service
-    test_utils::setupChanObserver [set ${::conn}::sock] b
-    set result [$::conn request service question]
-    lassign [test_utils::getChanData 0] rdata wdata
-    test_utils::stopResponder
+test basic-4 "Unsubscribe and publish again" -body {
+    set obs [test_utils::chanObserver new [set ${::conn}::sock] w]
+    $conn unsubscribe $sub_id
+    $conn publish subject1 "one more hello"
+    test_utils::sleep 500
+    puts -nonewline [$obs getChanData]
+    $obs destroy
+    set test_utils::simpleMsg
+} -result {hello} -output "UNSUB $sub_id"
+
+test basic-5.1 "Synchronous request" -body {
+    set obs [test_utils::chanObserver new [set ${::conn}::sock] b]
+    set result [$conn request service "0 hello"]
+    lassign [$obs getChanData 0] rdata wdata
+    $obs destroy
     set result
-} -result {response} 
+} -result {hello} 
 
-test basic-4.2 "Synchronous request - written to socket" -body {
+test basic-5.2 "Synchronous request - written to socket" -body {
     lassign [split $wdata \n] sub pub payload
     # the first request starts with subscribing to INBOX.<random>.*
     set check1 [regexp {SUB _INBOX.*.\*  ([[:digit:]]+)} $sub -> subID]
     set check2 [regexp {PUB service _INBOX.*.0 (.*)} $pub -> msg_length]
-    set check3 [string equal $payload question]
+    set check3 [string equal $payload "0 hello"]
     set check4 [expr {$msg_length == [string length $payload]}]
     expr {$check1 && $check2 && $check3 && $check4}
 } -result {1} 
 
-test basic-4.3 "Synchronous request - read from socket" -body {
+test basic-5.3 "Synchronous request - read from socket" -body {
     lassign [split $rdata \n] msg payload
     set check1 [regexp {MSG _INBOX.*.0 ([[:digit:]]+) (.*)} $msg -> subID2 msg_length]
-    set check2 [string equal $payload response]
+    set check2 [string equal $payload hello]
     set check3 [expr {$msg_length == [string length $payload]}]
     set check4 [expr {$subID == $subID2}]
     expr {$check1 && $check2 && $check3 && $check4}
 } -result {1} 
 
+test basic-5.4 "Synchronous request with timeout - success" -body {
+    set result [$conn request service "500 sync_req" -timeout 600]
+    set result
+} -result {sync_req} 
 
+test basic-5.5 "Synchronous request with timeout - failure" -body {
+    set result [$conn request service "600 sync_req" -timeout 500]
+} -returnCodes {error} -result {Request timeout}
 
+# wait until the delayed message arrives
+test_utils::sleep 500
+
+test basic-6.1 "Asynchronous request" -body {
+    $conn request service "0 async_req" -callback [list test_utils::asyncReqCallback]
+    vwait test_utils::simpleMsg
+    set test_utils::simpleMsg
+} -result {async_req}
+
+test basic-6.2 "Asynchronous request with timeout - success" -body {
+    #TODO: reduce timeout... force flush in responder not working?
+    $conn request service "0 async_req2" -timeout 1000 -callback [list test_utils::asyncReqCallback]
+    vwait test_utils::simpleMsg
+    set test_utils::simpleMsg
+} -result {async_req2}
+
+test basic-6.3 "Asynchronous request with timeout - failure" -body {
+    $conn request service "500 async_req3" -timeout 400 -callback [list test_utils::asyncReqCallback]
+    vwait test_utils::simpleMsg
+    set test_utils::simpleMsg
+} -result {timeout}
+
+$responder destroy
 $conn destroy
+test_utils::stopNats NATS
 cleanupTests
-
-#reply = nats::request <subj> <msg>
-#nats::asyncRequest <subj> <msg> <commandPrefix>
-#id = nats::subscribe <subj> <commandPrefix>
-#nats::unsubscribe <id>
-#
-#commandPrefix subj msg reply sub_id
-#
-#queue??

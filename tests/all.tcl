@@ -13,6 +13,7 @@
 # limitations under the License.
 
 package require tcltest
+package require control
 
 # shortcut to locate the nats package; use proper Tcl mechanisms in production! e.g. TCLLIBPATH
 set thisDir [file dirname [info script]]
@@ -25,9 +26,12 @@ proc tcltest::cleanupTestsHook {} {
     variable numTests
     set ::exitCode [expr {$numTests(Failed) > 0}]
 }
-
 tcltest::configure -testdir [file dirname [file normalize [info script]]] -singleproc 1
 tcltest::configure {*}$argv
+
+control::control assert enabled 1
+namespace import control::assert
+
 tcltest::runAllTests
 
 exit $exitCode

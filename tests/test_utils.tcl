@@ -18,7 +18,7 @@ package require processman
 package require oo::util
 
 namespace eval test_utils {
-    variable sleepVar ""
+    variable sleepVar 0
     
     variable writingObs
     variable readingObs
@@ -34,6 +34,14 @@ namespace eval test_utils {
     proc sleep {delay} {
         after $delay [list set ::test_utils::sleepVar 1]
         vwait ::test_utils::sleepVar
+    }
+    
+    proc new_sleep {delay} {
+        set varName "::[incr ::test_utils::sleepVar]"
+        set $varName 0
+        after $delay [list set $varName 1]
+        vwait $varName
+        unset $varName
     }
     
     oo::class create chanObserver {
@@ -111,21 +119,25 @@ namespace eval test_utils {
         method echo {subj msg reply sid} {
             lassign $msg delay payload
             if {$delay != 0} {
-                test_utils::sleep $delay
+                #DO NOT USE test_utils::sleep HERE! otherwise the responder must run in a separate thread
+                after $delay [mymethod sendReply $reply $payload]
+                return
             }
             $natsConn publish $reply $payload
             # force flush
-            if {![$natsConn ping]} {
-                # if this ping didn't succeed, smth went really wrong
-                error "responder's ping failed"
-            }
+            $natsConn ping
+            
+        }
+        method sendReply {replySubj payload} {
+            $natsConn publish $replySubj $payload
+            $natsConn ping
         }
         destructor {
             $natsConn destroy
         }
     }
     
-    proc simpleCallback {subj msg reply sid} {
+    proc simpleCallback {subj msg reply} {
         variable simpleMsg
         set simpleMsg $msg
     }

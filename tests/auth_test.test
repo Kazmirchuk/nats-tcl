@@ -20,7 +20,7 @@ test auth-1 "Connect to NATS using login/password in URL" -body {
     set conn [nats::connection new]
     $conn configure -servers nats://myname:dummy_password@localhost:4222
     $conn connect
-    $conn subscribe subject1 [list test_utils::simpleCallback]
+    $conn subscribe subject1 -callback test_utils::simpleCallback
     $conn publish subject1 "hello user"
     vwait test_utils::simpleMsg
     $conn destroy
@@ -31,7 +31,7 @@ test auth-2 "Connect to NATS using login/password in options" -body {
     set conn [nats::connection new]
     $conn configure -servers nats://localhost:4222 -user myname -password dummy_password
     $conn connect
-    $conn subscribe subject1 [list test_utils::simpleCallback]
+    $conn subscribe subject1 -callback test_utils::simpleCallback
     $conn publish subject1 "hello again"
     vwait test_utils::simpleMsg
     $conn destroy
@@ -45,7 +45,7 @@ test auth-3 "Connect to NATS using an authentication token in URL" -body {
     set conn [nats::connection new]
     $conn configure -servers nats://12345@localhost:4222
     $conn connect
-    $conn subscribe subject1 [list test_utils::simpleCallback]
+    $conn subscribe subject1 -callback test_utils::simpleCallback
     $conn publish subject1 "hello token"
     vwait test_utils::simpleMsg
     $conn destroy
@@ -57,11 +57,13 @@ test auth-4 "Connect to NATS using an authentication token in options" -body {
     puts stderr [$conn configure --help]
     $conn configure -servers nats://localhost:4222 -token 12345
     $conn connect
-    $conn subscribe subject1 [list test_utils::simpleCallback]
+    $conn subscribe subject1 -callback test_utils::simpleCallback
     $conn publish subject1 "hello token2"
     vwait test_utils::simpleMsg
     $conn destroy
     set test_utils::simpleMsg
 } -result {hello token2}
 
+$conn destroy
+test_utils::stopNats NATS
 cleanupTests

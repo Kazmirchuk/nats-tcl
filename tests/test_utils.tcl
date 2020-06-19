@@ -109,14 +109,14 @@ namespace eval test_utils {
     oo::class create responder {
         variable natsConn
         constructor {subject} {
-            set natsConn [nats::connection new]
+            set natsConn [nats::connection new "Responder"]
             $natsConn configure -servers nats://localhost:4222
             $natsConn connect
-            $natsConn subscribe $subject [mymethod echo]
+            $natsConn subscribe $subject -callback [mymethod echo]
             # force flush
             $natsConn ping
         }
-        method echo {subj msg reply sid} {
+        method echo {subj msg reply} {
             lassign $msg delay payload
             if {$delay != 0} {
                 #DO NOT USE test_utils::sleep HERE! otherwise the responder must run in a separate thread
@@ -157,5 +157,15 @@ namespace eval test_utils {
     }
     proc stopNats {id} {
         processman::kill $id
+    }
+    proc timestamp {} {
+        # workaround for not being able to format current time with millisecond precision
+        # should not be needed in Tcl 8.7, see https://core.tcl-lang.org/tips/doc/trunk/tip/423.md
+        set t [clock milliseconds]
+        set timeStamp [format "%s.%03d" \
+                          [clock format [expr {$t / 1000}] -format %T] \
+                          [expr {$t % 1000}] \
+                      ]
+        return $timeStamp
     }
 }

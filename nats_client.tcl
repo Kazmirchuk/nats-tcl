@@ -22,13 +22,18 @@ package require tcl::chan::random
 package require tcl::randomseed
 package require coroutine
 package require logger
+package require lambda
 
 namespace eval ::nats {
     
     # all options for "configure"
+    # due to a bug, when I pass a list to cmdline::typedGetoptions, it is returned wrapped in extra braces
+    # so all options that may be lists or may contain spaces are marked with .list here
+    # and then in "configure" I have special treatment to unpack them with [lindex $val 0]
+    # note that this bug does not occur with cmdline::getoptions
     set option_syntax {
         { servers.list ""                   "URLs of NATS servers"}
-        { connection_cb.arg ""              "Callback invoked when the connection is lost, restored or closed"}
+        { connection_cb.list ""             "Command prefix to be invoked when the connection is lost, restored or closed"}
         { name.arg ""                       "Client name sent to NATS server when connecting"}
         { pedantic.boolean false            "Pedantic protocol mode. If true some extra checks will be performed by the server"}
         { verbose.boolean false             "If true, every protocol message is echoed by the server with +OK" }
@@ -40,8 +45,8 @@ namespace eval ::nats {
         { randomize.boolean true            "Shuffle the list of NATS servers before connecting"}
         { echo.boolean true                 "If true, messages from this connection will be sent by the server back if the connection has matching subscriptions"}
         { tls_opts.list ""                  "Options for tls::import"}
-        { user.arg ""                       "Default username"}
-        { password.arg ""                   "Default password"}
+        { user.list ""                      "Default username"}
+        { password.list ""                  "Default password"}
         { token.arg ""                      "Default authentication token"}
         { error.arg ""                      "Last socket error (read-only)" }
         { logger.arg ""                     "Logger instance (read-only)" }
@@ -54,10 +59,7 @@ namespace eval ::nats {
 
         # improvised enum
         variable status_closed status_connecting status_connected
-        constructor {} {
-            puts "self object: [self object]"
-            puts "self namespace: [self namespace]"
-            puts "tail: [namespace tail [self object]]"
+        constructor { { conn_name "" } } {
             set status_closed 0
             set status_connecting 1
             set status_connected 2
@@ -70,8 +72,15 @@ namespace eval ::nats {
                 set name [lindex [split $name .] 0]
                 set config($name) $defValue
             }
-            #set config(logger) [logger::init [self object]]
-            #$config(logger)::setlevel info
+            set config(name) $conn_name
+            # create a logger with a unique name, smth like Obj58
+            set loggerName [namespace tail [self object]]
+            if {$conn_name ne ""} {
+                append loggerName "_$conn_name"
+            }
+            set config(logger) [logger::init $loggerName]
+            # default level in the logger package is debug, it's too verbose
+            $config(logger)::setlevel warn
             set config(status) $status_closed
             set sock "" ;# the TCP socket
             set coro "" ;# the coroutine handling readable and writeable events on the socket
@@ -91,14 +100,18 @@ namespace eval ::nats {
             set randomChan [tcl::chan::random [tcl::randomseed]] ;# generate inboxes
             set requestsInboxPrefix ""
             set pong 1 ;# sync variable for vwait in "ping". Set to 1 to avoid a check for existing timer in "ping"
-            #log trace set config(status)
         }
         
         destructor {
             my disconnect
             close $randomChan
-            #log subscriptions requests
-            #$config(logger)::delete
+            #if {[array size subscriptions]} {
+            #    $config(logger)::debug "Remaining subscriptions: [array get subscriptions]"
+            #}
+            if {[array size requests]} {
+                $config(logger)::debug "Remaining requests: [array get requests]"
+            }
+            $config(logger)::delete
         }
         
         method cget {option} {
@@ -130,17 +143,38 @@ namespace eval ::nats {
                 # -help also leads here
                 throw {NATS INVALID_ARG} $msg
             }
+            foreach {opt val} [array get options] {
+                # workaround for a bug in cmdline::typedGetoptions as explained above
+                if {[lsearch -index 0 $nats::option_syntax "$opt.list"] != -1} {
+                    set config($opt) [lindex $val 0]
+                } else {
+                    set config($opt) $val
+                }
+            }
             # avoid re-parsing servers if they were not in $args
-            array set config [array get options]
             if {[info exists options(servers)]} {
                 set serverPool [list]
                 set counters(curServer) ""
-                # typedGetoptions wraps lists in extra braces
-                foreach url [lindex $options(servers) 0] {
-                    lappend serverPool [my ParseServerUrl]
+                foreach url $config(servers) {
+                    lappend serverPool [my ParseServerUrl $url]
                 }
                 if {$config(randomize)} {
                     set serverPool [::struct::list shuffle $serverPool]
+                }
+            }
+            
+            if {[info exists options(connection_cb)]} {
+                if {$config(connection_cb) ne ""} {
+                    trace add variable config(status) write [lambda@ [namespace current] {v1 idx op } {
+                        #note: synchronous invocation! maybe in future take return value into account?
+                        variable config
+                        {*}$config(connection_cb) [my cget -status]
+                    }]
+                } else {
+                    #remove the trace
+                    foreach traceInfo [trace info variable config(status)] {
+                        trace remove variable config(status) {*}traceInfo
+                    }
                 }
             }
         }
@@ -189,11 +223,10 @@ namespace eval ::nats {
             # now try connecting to the first server
             $coro connect
             if {!$async} {
-                #log config(status)
+                $config(logger)::debug "Waiting for connection"
                 vwait [self object]::config(status)
                 if {$config(status) != $status_connected} {
-                    #TODO: handle TLS error
-                    throw {NATS CONNECT_FAIL} "No NATS servers are reachable"
+                    throw {NATS CONNECT_FAIL} $config(error)
                 }
             }
         }
@@ -203,7 +236,7 @@ namespace eval ::nats {
                 return
             }
             my CloseSocket
-            set config(status) $status_closed
+            #CoroMain will set config(status) to "closed"
         }
         
         method publish {subject msg {replySubj ""}} {
@@ -313,7 +346,7 @@ namespace eval ::nats {
                 my Flusher 0
                 set requests($reqID) [list 0]
                 vwait [self object]::requests($reqID)
-                lassign requests($reqID) ignored timedOut response
+                lassign $requests($reqID) ignored timedOut response
                 unset requests($reqID)
                 if {$timedOut} {
                     throw {NATS TIMEOUT} "Request timeout"
@@ -369,7 +402,7 @@ namespace eval ::nats {
             lassign $requests($reqID) reqType timer callback
             if {$reqType == 0} {
                 # resume from vwait in "method request"; "requests" array will be cleaned up there
-                set $requests($reqID) [list 0 0 $msg]
+                set requests($reqID) [list 0 0 $msg]
                 return
             }
             after cancel $timer
@@ -384,7 +417,7 @@ namespace eval ::nats {
                 chan configure $sock -blocking 1
             }
             # note: all buffered input is discarded, all buffered output is flushed
-            #log
+            $config(logger)::info "Closing socket"
             close $sock
             set sock ""
             unset serverInfo ;# when the variable is re-created, Tcl will remember that this is a data member, not just a local variable
@@ -402,7 +435,7 @@ namespace eval ::nats {
         method Pinger {} {
             set timers(ping) [after $config(ping_interval) [mymethod Pinger]]
             lappend outBuffer "PING"
-            #log
+            $config(logger)::debug "Sending PING"
         }
         
         method Flusher { {scheduleNext 1} } {
@@ -416,6 +449,7 @@ namespace eval ::nats {
             try {
                 chan flush $sock
             } on error err {
+                $config(logger)::error $err
                 my CloseSocket 1
                 $coro connect
             }
@@ -426,6 +460,11 @@ namespace eval ::nats {
         # --------- these procs execute in the coroutine ---------------
         # connect to Nth server in the pool
         method ConnectNextServer {} {
+            if { [llength $serverPool] == 0 } {
+                set config(error) "No servers in the pool"
+                after 0 [list $coro stop] ;# you cannot invoke a coroutine from inside the same coroutine
+                return
+            }
             set config(status) $status_connecting
             if {$counters(curServer) eq ""} {
                 set counters(curServer) 0
@@ -438,8 +477,10 @@ namespace eval ::nats {
                 coroutine::util after $config(reconnect_time_wait)
             }
             set serverDict [lindex $serverPool $counters(curServer)]
-            #log "Connecting to server $currentServerIdx: $serverDict"
-            set sock [socket -async [dict get $serverDict host] [dict get $serverDict port]]
+            set host [dict get $serverDict host]
+            set port [dict get $serverDict port]
+            $config(logger)::info "Connecting to server # $counters(curServer): $host:$port"
+            set sock [socket -async $host $port]
             chan event $sock writable [list $coro connected]
             set timers(connect) [after $config(connect_timeout) [list $coro connect_timeout]]
         }
@@ -461,7 +502,8 @@ namespace eval ::nats {
             set jsonMsg [json::write::object {*}$connectParams]
             json::write::indented $ind
             lappend outBuffer "CONNECT $jsonMsg"
-            set config(currentServer) [lindex $serverPool $currentServerIdx]
+            set config(currentServer) [lindex $serverPool $counters(curServer)]
+            set config(error) ""
             # exit from vwait in "connect"
             set config(status) $status_connected
             my Flusher
@@ -497,6 +539,36 @@ namespace eval ::nats {
         }
         
         method INFO {cmd} {
+            if {$config(status) == $status_connected} {
+                # when we say "proto":1 in CONNECT, we may receive information about other servers in the cluster - add them to serverPool
+                #example info:
+                # server_id NDHBLLCIGK3PQKD5RUAUPCZAO6HCLQC4MNHQYRF22T32X2I2DHKEUGGQ server_name NDHBLLCIGK3PQKD5RUAUPCZAO6HCLQC4MNHQYRF22T32X2I2DHKEUGGQ version 2.1.7 proto 1 git_commit bf0930e
+                # go go1.13.10 host 0.0.0.0 port 4222 max_payload 1048576 client_id 1 client_ip ::1 connect_urls
+                # {192.168.2.5:4222 192.168.91.1:4222 192.168.157.1:4222 192.168.157.1:4223 192.168.2.5:4223 192.168.91.1:4223}
+                set infoDict [json::json2dict $cmd]
+                if {[dict exists $infoDict connect_urls]} {
+                    foreach url [dict get $infoDict connect_urls] {
+                        # each URL is simply IP:port
+                        # TODO: make this check the same as in nats.py
+                        set unknownServer 1
+                        set parsedURL [my ParseServerUrl $url]
+                        foreach serverURL $serverPool {
+                            if {[dict get $serverURL host] eq [dict get $parsedURL host] && [dict get $serverURL port] == [dict get $parsedURL port]} {
+                                set unknownServer 0
+                                break
+                            }
+                        }
+                        if {$unknownServer} {
+                            lappend serverPool $parsedURL
+                        }
+                    }
+                    if {$config(randomize)} {
+                        set serverPool [::struct::list shuffle $serverPool]
+                    }
+                }
+                return
+            }
+            # we are establishing a new connection...
             # example info
             #{"server_id":"kfNjUNirYU3tRVC7akGOcS","version":"1.4.1","proto":1,"go":"go1.11.5","host":"0.0.0.0","port":4222,"max_payload":1048576,"client_id":3}
             array set serverInfo [json::json2dict $cmd]
@@ -511,9 +583,13 @@ namespace eval ::nats {
                 try {
                     tls::handshake $sock
                 } on error err {
-                    #log
+                    $config(logger)::error "TLS handshake failed: $err"
                     set config(error) "TLS handshake failed: $err"
-                    #my CloseSocket 1 ???
+                    chan close $sock
+                    # no point in trying to reconnect to it, so remove it from the pool
+                    set serverPool [lreplace serverPool $counters(curServer) $counters(curServer)]
+                    my ConnectNextServer
+                    return
                 }
                 chan configure $sock -blocking 0
             }
@@ -536,6 +612,11 @@ namespace eval ::nats {
             set messageBody "" 
             while {1} {
                 append messageBody [chan read $sock $remainingBytes]
+                if {[eof $sock]} {
+                    # server closed the socket - Tcl will invoke "CoroMain readable" again,
+                    # so no need to do anything here
+                    return
+                }
                 set actualLength [string length $messageBody]
                 # probably == should work ok, but just for safety let's use >=
                 if {$actualLength >= $expMsgLength} {
@@ -544,9 +625,19 @@ namespace eval ::nats {
                 set remainingBytes [expr {$expMsgLength - $actualLength}]
                 # wait for the remainder of the message; we may need multiple reads to receive all of it
                 # it's cleaner to have a second "yield" here than putting this logic in CoroMain
-                yield
-                #TODO: handle broken socket
-                #TODO: will I receive readable event if I don't read all bytes here? chan pending? chan eof? how to notify the coroutine?
+                set reason [yield]
+                switch -- $reason {
+                    readable {
+                        continue
+                    }
+                    stop {
+                        set config(status) $status_closed
+                        return -code break "" ;# break from the loop in CoroMain - is there a more elegant way?
+                    }
+                    default {
+                        $config(logger)::error "MSG: unknown reason $reason"
+                    }
+                }
             }
             chan configure $sock -translation crlf
             # remove the trailing crlf; is it efficient on large messages?
@@ -554,6 +645,7 @@ namespace eval ::nats {
             if {[info exists subscriptions($subID)]} {
                 # post the event
                 set cmdPrefix [dict get $subscriptions($subID) cmd]
+                # schedule execution of a user's callback
                 after 0 [list {*}$cmdPrefix $subject $messageBody $replyTo]
                 set remainingMsg [dict get $subscriptions($subID) remMsg]
                 if {$remainingMsg == 1} {
@@ -562,7 +654,7 @@ namespace eval ::nats {
                     dict update subscriptions($subID) remMsg v {incr v -1}
                 }
             } else {
-                #log "unexpected message with subID $subID"
+                $config(logger)::debug "Unexpected message with subID $subID"
             }
             
             # now we return back to CoroMain and enter "yield" there
@@ -600,7 +692,8 @@ namespace eval ::nats {
                             # the socket either connected or failed to connect
                             set errorMsg [chan configure $sock -error]
                             if { $errorMsg ne "" } {
-                                #log "Failed to connect to server $currentServerIdx socket error: $errorMsg"
+                                $config(logger)::error "Failed to connect to server # $counters(curServer) : $errorMsg"
+                                set config(error) $errorMsg
                                 chan close $sock
                                 my ConnectNextServer
                                 continue
@@ -612,15 +705,21 @@ namespace eval ::nats {
                             chan event $sock readable [list $coro readable]
                         } else {
                             chan close $sock
-                            #log "Server $currentServerIdx timed out"
+                            $config(logger)::error "Server # $counters(curServer) timed out"
+                            set config(error) "timeout"
                             my ConnectNextServer
                         }
                     }
                     readable {
+                        # confirmed by testing: apparently the Tcl TCP is implemented like:
+                        # 1. send "readable" event
+                        # 2. any bytes left in the input buffer? send the event again
+                        # so, it simplifies my work here - even if I don't read all available bytes with this "chan gets",
+                        # the coroutine will be invoked again as soon as a complete line is available
                         set readCount [chan gets $sock line]
                         #MAX_CONTROL_LINE_SIZE = 1024
                         if {$readCount < 0} {
-                            if {[eof $sock]} { ;# what if server wrote crlf and closed the socket? should I move eof before if?
+                            if {[eof $sock]} { 
                                 # server closed the socket
                                 my CloseSocket 1
                                 my ConnectNextServer
@@ -635,29 +734,28 @@ namespace eval ::nats {
                         set protocol_op [string trimleft $protocol_op -+]
                         my $protocol_op $protocol_arg
                         #TODO: handle protocol violation
-                        # TODO: what if more bytes available to read?
                     }
                     stop {
                         set config(status) $status_closed
                         break
                     }
                     default {
-                        #log "Unknown reason"
+                        $config(logger)::error "CoroMain: unknown reason $reason"
                     }
                 }
             }
-            #log "finished coroutine"
+            $config(logger)::debug "Finished coroutine"
         }
         
         # ------------ coroutine end -----------------------------------------
-        
+        #TODO: move to "request"
         method InitReqSubscription {} {
             if {$requestsInboxPrefix ne {}} {
                 # we already subscribed
                 return
             }
             set requestsInboxPrefix [my inbox]
-            my subscribe "$requestsInboxPrefix.*" [mymethod RequestCallback]
+            my subscribe "$requestsInboxPrefix.*" -callback [mymethod RequestCallback]
         }
         
         method CheckSubject {subj} {            

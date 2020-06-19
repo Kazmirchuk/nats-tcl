@@ -17,47 +17,62 @@ tcltest::configure {*}$argv
 
 test_utils::startNats NATS
 
-set conn [nats::connection new]
-$conn configure -servers nats://localhost:4222
+proc onConnectionChanged {status} {
+    #possible statuses: connecting connected closed
+    puts "New connection state: $status"
+}
+
+set conn [nats::connection new "BasicNats"]
+# available logger severity levels: debug info notice warn error critical alert emergency
+# default is "warn"
+[$conn cget -logger]::setlevel info
+$conn configure -servers nats://localhost:4222 -connection_cb onConnectionChanged
+$conn connect
+vwait forever
 
 set responder [test_utils::responder new service]
 
 test basic-1 "Connect NATS" -body {
+    # we need to connect asynchronously to be able to catch the CONNECT message
     $conn connect -async
     set obs [test_utils::chanObserver new [set ${::conn}::sock] w]
     test_utils::sleep 500
-    puts -nonewline [$obs getChanData]
+    set chanData [$obs getChanData]
+    assert {$chanData eq {CONNECT {"verbose":false,"pedantic":false,"tls_required":false,"name":"BasicNats","lang":"Tcl","version":"0.9","protocol":1,"echo":true}}} $chanData
     $obs destroy
-    expr {[$conn cget -status] == $nats::status_connected}
-} -result {1} -output {CONNECT {"verbose":false,"pedantic":false,"tls_required":false,"name":"","lang":"Tcl","version":"0.9","protocol":1,"echo":true}}
+    expr {[$conn cget -status] eq "connected"}
+} -result {1}
 
 test basic-2 "Subscribe to a message" -body {
     set obs [test_utils::chanObserver new [set ${::conn}::sock] w]
-    set sub_id [$conn subscribe subject1 [list test_utils::simpleCallback]]
+    set sub_id [$conn subscribe subject1 -callback test_utils::simpleCallback]
     test_utils::sleep 1000
-    puts -nonewline [$obs getChanData]
+    set chanData [$obs getChanData]
+    assert {$chanData eq {SUB subject1  1}} $chanData
     $obs destroy
     set sub_id
-}  -result {1} -output {SUB subject1  1}
+}  -result {1} 
 
 test basic-3 "Publish a message" -body {
     set obs [test_utils::chanObserver new [set ${::conn}::sock] w]
     $conn publish subject1 hello
     vwait test_utils::simpleMsg
-    puts -nonewline [$obs getChanData]
+    set chanData [$obs getChanData]
+    assert {$chanData eq {PUB subject1  5}} $chanData
     $obs destroy
     set test_utils::simpleMsg
-} -result {hello} -output {PUB subject1  5}
+} -result {hello} 
 
 test basic-4 "Unsubscribe and publish again" -body {
     set obs [test_utils::chanObserver new [set ${::conn}::sock] w]
     $conn unsubscribe $sub_id
     $conn publish subject1 "one more hello"
     test_utils::sleep 500
-    puts -nonewline [$obs getChanData]
+    set chanData [$obs getChanData]
+    assert {$chanData eq "UNSUB $sub_id"} $chanData
     $obs destroy
     set test_utils::simpleMsg
-} -result {hello} -output "UNSUB $sub_id"
+} -result {hello} 
 
 test basic-5.1 "Synchronous request" -body {
     set obs [test_utils::chanObserver new [set ${::conn}::sock] b]
@@ -71,14 +86,14 @@ test basic-5.2 "Synchronous request - written to socket" -body {
     lassign [split $wdata \n] sub pub payload
     # the first request starts with subscribing to INBOX.<random>.*
     assert {[regexp {SUB _INBOX.*.\*  ([[:digit:]]+)} $sub -> subID]}
-    assert {[regexp {PUB service _INBOX.*.0 (.*)} $pub -> msg_length]}
+    assert {[regexp {PUB service _INBOX.*.1 (.*)} $pub -> msg_length]}
     assert {$payload eq "0 hello"}
     assert {$msg_length == [string length $payload]}
 } 
 
 test basic-5.3 "Synchronous request - read from socket" -body {
     lassign [split $rdata \n] msg payload
-    assert {[regexp {MSG _INBOX.*.0 ([[:digit:]]+) (.*)} $msg -> subID2 msg_length]}
+    assert {[regexp {MSG _INBOX.*.1 ([[:digit:]]+) (.*)} $msg -> subID2 msg_length]}
     assert {$payload eq "hello"}
     assert {$msg_length == [string length $payload]}
     assert {$subID == $subID2}
@@ -96,7 +111,7 @@ test basic-5.5 "Synchronous request with timeout - failure" -body {
 test_utils::sleep 500
 
 test basic-6.1 "Asynchronous request" -body {
-    $conn request service "0 async_req" -callback [list test_utils::asyncReqCallback]
+    $conn request service "0 async_req" -callback test_utils::asyncReqCallback
     vwait test_utils::simpleMsg
     set test_utils::simpleMsg
 } -result {async_req}

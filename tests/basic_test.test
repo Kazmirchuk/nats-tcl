@@ -27,8 +27,6 @@ set conn [nats::connection new "BasicNats"]
 # default is "warn"
 [$conn cget -logger]::setlevel info
 $conn configure -servers nats://localhost:4222 -connection_cb onConnectionChanged
-$conn connect
-vwait forever
 
 set responder [test_utils::responder new service]
 

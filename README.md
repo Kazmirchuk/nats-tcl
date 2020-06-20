@@ -32,7 +32,7 @@ Simply clone the repository in some place where Tcl will be able to find it, e.g
 
 ## Usage
 
-Note that the client relies on an event loop to be running to send and deliver messages and uses only non-blocking sockets. Everything works in your Tcl interpreter and no background Tcl threads or interpreters are created under the hood. So, if your application might leave the event loop for a long time (e.g. a long computation without event processing), the NATS client should be created in a separate thread.
+Note that the client relies on a running event loop to send and deliver messages and uses only non-blocking sockets. Everything works in your Tcl interpreter and no background Tcl threads or interpreters are created under the hood. So, if your application might leave the event loop for a long time (e.g. a long computation without event processing), the NATS client should be created in a separate thread.
 
 Calls to blocking API (synchronous versions of `connect`, `request`, `ping`) involve `vwait` under the hood, so that other event processing can continue.
 
@@ -40,6 +40,8 @@ Calls to blocking API (synchronous versions of `connect`, `request`, `ping`) inv
 # All API is enclosed into a TclOO object called nats::connection
 # Giving a name to a connection is optional. 
 # It will be displayed in logs and sent to the NATS server
+# You can create as many connections as needed, they all will work independently. 
+# Although typically one connection per application is enough.
 set conn [nats::connection new "MyNats"]
 # default severity level is "warn", but you can lower it to see what happens under the hood
 [$conn cget -logger]::setlevel info
@@ -61,8 +63,9 @@ proc onMessage {subject message replyTo} {
 # and then you can use wildcars for subscriptions
 $conn subscribe "sample_subject.*" -callback onMessage
 
-# now whenever somebody sends a message to a matching subject, it will be delivered from the event loop, i.e. using "after 0"
-# publish a message ourselves
+# now whenever somebody sends a message to a matching subject, it will be delivered from the event loop,
+#  i.e. using "after 0"
+# let's publish a message ourselves
 $conn publish sample_subject.foo hello
 # and wait for the message to arrive
 vwait ::msg

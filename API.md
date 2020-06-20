@@ -7,7 +7,7 @@ package require nats ?0.9?
 
 [**::nats::connection new** *?conn_name?*](#constructor) <br/>
 [*objectName* **cget** *option*](#objectName-cget-option) <br/>
-[*objectName* **configure** *?option? ?value option value ...?*](#objectName-configure-?option?-?value-option-value...?) <br/>
+[*objectName* **configure** *?option? ?value option value ...?*](#objectName-configure-option-value-option-value...) <br/>
 [*objectName* **connect** *?-async?*](#objectName-connect-?-async?) <br/>
 [*objectName* **disconnect**](#objectName-disconnect) <br/>
 [*objectName* **publish** *subject msg ?replySubj?*](#objectName-publish-subject-msg-?replySubj?) <br/>

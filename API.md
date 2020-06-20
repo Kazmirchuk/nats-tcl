@@ -8,13 +8,13 @@ package require nats ?0.9?
 [**::nats::connection new** *?conn_name?*](#constructor) <br/>
 [*objectName* **cget** *option*](#objectName-cget-option) <br/>
 [*objectName* **configure** *?option? ?value option value ...?*](#objectName-configure-option-value-option-value) <br/>
-[*objectName* **connect** *?-async?*](#objectName-connect-?-async?) <br/>
+[*objectName* **connect** *?-async?*](#objectName-connect--async) <br/>
 [*objectName* **disconnect**](#objectName-disconnect) <br/>
-[*objectName* **publish** *subject msg ?replySubj?*](#objectName-publish-subject-msg-?replySubj?) <br/>
-[*objectName* **subscribe** *subject ?-queue queueName? ?-callback cmdPrefix?*](#objectName-subscribe-subject-?-queue-queueName?-?-callback-cmdPrefix?) <br/>
-[*objectName* **unsubscribe** *subID ?maxMessages?*](#objectName-unsubscribe-subID-?maxMessages?) <br/>
-[*objectName* **request** *subject message ?-timeout ms? ?-callback cmdPrefix?*](#objectName-request-subject-message-?-timeout-ms?-?-callback-cmdPrefix?) <br/>
-[*objectName* **ping** *?timeout?*](#objectName-ping-?timeout?) <br/>
+[*objectName* **publish** *subject msg ?replySubj?*](#objectName-publish-subject-msg-replySubj) <br/>
+[*objectName* **subscribe** *subject ?-queue queueName? ?-callback cmdPrefix?*](#objectName-subscribe-subject--queue-queueName--callback-cmdPrefix) <br/>
+[*objectName* **unsubscribe** *subID ?maxMessages?*](#objectName-unsubscribe-subID-maxMessages) <br/>
+[*objectName* **request** *subject message ?-timeout ms? ?-callback cmdPrefix?*](#objectName-request-subject-message--timeout-ms--callback-cmdPrefix) <br/>
+[*objectName* **ping** *?timeout?*](#objectName-ping-timeout) <br/>
 [*objectName* **inbox**](#objectName-inbox) <br/>
 [*objectName* **destroy**](#objectName-destroy)
 

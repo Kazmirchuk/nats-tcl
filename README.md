@@ -56,7 +56,7 @@ $conn connect
 set msg ""
 proc onMessage {subject message replyTo} {
     puts "Received $message on subject $subject"
-    set $::msg $message
+    set ::msg $message
     # if it is a request, $replyTo will contain the subject to reply
 }
 # you can design an hierarchical subject space using tokens and dots

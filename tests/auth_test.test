@@ -13,6 +13,7 @@
 # limitations under the License.
 
 namespace import ::tcltest::*
+tcltest::configure {*}$argv
 
 test_utils::startNats NATS --user myname --pass dummy_password
 
@@ -41,6 +42,7 @@ test auth-2 "Connect to NATS using login/password in options" -body {
 test_utils::stopNats NATS
 
 test_utils::startNats NATS --auth 12345
+
 test auth-3 "Connect to NATS using an authentication token in URL" -body {
     set conn [nats::connection new]
     $conn configure -servers nats://12345@localhost:4222
@@ -54,7 +56,6 @@ test auth-3 "Connect to NATS using an authentication token in URL" -body {
 
 test auth-4 "Connect to NATS using an authentication token in options" -body {
     set conn [nats::connection new]
-    puts stderr [$conn configure --help]
     $conn configure -servers nats://localhost:4222 -token 12345
     $conn connect
     $conn subscribe subject1 -callback test_utils::simpleCallback
@@ -64,6 +65,5 @@ test auth-4 "Connect to NATS using an authentication token in options" -body {
     set test_utils::simpleMsg
 } -result {hello token2}
 
-$conn destroy
 test_utils::stopNats NATS
 cleanupTests

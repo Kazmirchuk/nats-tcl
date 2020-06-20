@@ -1,0 +1,36 @@
+# Copyright (c) 2020 Petro Kazmirchuk https://github.com/Kazmirchuk
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+namespace import ::tcltest::*
+tcltest::configure {*}$argv
+
+test_utils::startNats NATS
+
+# actual effect of "pedantic" is difficult to test because of client-side checks, so I tested it manually
+
+test error_checks-1 "Connect in verbose+pedantic mode with echo off" -body {
+    set conn [nats::connection new]
+    $conn configure -servers nats://localhost:4222 -verbose true -pedantic true -echo false
+    $conn connect -async
+    set obs [test_utils::chanObserver new [set ${::conn}::sock] w]
+    test_utils::sleep 500
+    set chanData [$obs getChanData]
+    assert {$chanData eq {CONNECT {"verbose":true,"pedantic":true,"tls_required":false,"name":"","lang":"Tcl","version":"0.9","protocol":1,"echo":false}}} $chanData
+    assert {[$conn cget -status] eq "connected"}
+    $conn destroy
+} -result {}
+
+test_utils::stopNats NATS
+
+cleanupTests

@@ -189,11 +189,14 @@ namespace eval ::nats {
                 set scheme tls
             }
             
-            #uri::split will return a dict with these keys: host, port, user, pwd
+            #uri::split will return a dict with these keys: scheme, host, port, user, pwd (and others)
+            # note that these keys will always be present even if empty
             array set srv [uri::split "http://$url"]
-            # not interested in these
-            foreach k {fragment path query} {
-                unset srv($k)
+            # remove all empty elements
+            foreach key [array names srv] {
+                if {$srv($key) eq ""} {
+                    unset srv($key)
+                }
             }
             set srv(scheme) $scheme
             if {[info exists srv(user)] && ![info exists srv(pwd)]} {
@@ -235,6 +238,7 @@ namespace eval ::nats {
             if {$config(status) == $status_closed} {
                 return
             }
+            my Flusher 0
             my CloseSocket
             #CoroMain will set config(status) to "closed"
         }
@@ -532,7 +536,7 @@ namespace eval ::nats {
                 return
             }
             if {$config(token) ne ""} {
-                lappend connectParams auth_token [json::write::string $config(token)]]
+                lappend connectParams auth_token [json::write::string $config(token)]
                 return
             }
             #TODO throw
@@ -669,11 +673,11 @@ namespace eval ::nats {
         }
         
         method OK {cmd} {
-            
+            # nothing to do
         }
         
         method ERR {cmd} {
-            
+            $config(logger)::error $cmd
         }
         
         method CoroMain {} {

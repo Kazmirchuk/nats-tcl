@@ -1,6 +1,93 @@
-# nats-tcl
-NATS client library for Tcl applications
+# Tcl client library for the NATS message broker
 
-See https://nats.io and https://www.tcl.tk/
+[![License Apache 2.0](https://img.shields.io/badge/License-Apache2-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
-Work in progress!
+Learn more about NATS [here](https://nats.io) and Tcl/Tk [here](https://www.tcl.tk/).
+
+Feature-wise, the package is comparable to other NATS clients and is inspired by the official nats.py (Python asyncio client) and cnats (C client).
+
+With this package you can bring the power of the publish/subscribe mechanism to your Tcl and significantly simplify development of distributed applications.
+
+## Supported platforms
+
+The package is written in pure Tcl, without any C code, and so will work anywhere with `Tcl 8.6` and `Tcllib`. If you need to connect to a NATS server using TLS, of course you will need the `tls` package too.
+
+It has been tested on Windows 10 using the latest pre-built Tcl available from ActiveState (Tcl 8.6.9, Tcllib 1.18) and on openSUSE Leap 15.1 using self-built Tcl of the same version. It might work on earlier versions too.
+
+Regarding the NATS server version, I tested against v2.1.7, and the package should work with all previous releases of NATS, because the protocol remained very stable over years.
+
+## Installing
+Simply clone the repository in some place where Tcl will be able to find it, e.g. in `$auto_path` or `$tcl_library`. No need to compile anything! The actual implementation fits in only one file `nats_client.tcl`.
+
+## Supported features
+- Publish and subscribe to messages
+- Synchronous and asynchronous requests (optimized: under the hood a single wildcard subscription is used for all requests, like in cnats)
+- Standard `configure` interface with many options
+- Automatic reconnection in case of network or server failure
+- While the client is trying to reconnect, outgoing messages are buffered in memory and will be flushed as soon as the connection is restored
+- Authentication with NATS server using a login+password, an authentication token or an SSH certificate
+- Protected connections using TLS
+- Cluster support (including receiving additional server addresses from INFO messages)
+- Logging using the standard Tcl [logger](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/log/logger.md) package
+
+## Usage
+
+Note that the client relies on an event loop to be running to send and deliver messages and uses only non-blocking sockets. Everything works in your Tcl interpreter and no background Tcl threads or interpreters are created under the hood. So, if your application might leave the event loop for a long time (e.g. a long computation without event processing), the NATS client should be created in a separate thread.
+
+Calls to blocking API (synchronous versions of `connect`, `request`, `ping`) involve `vwait` under the hood, so that other event processing can continue.
+
+```Tcl
+# All API is enclosed into a TclOO object called nats::connection
+# Giving a name to a connection is optional. 
+# It will be displayed in logs and sent to the NATS server
+set conn [nats::connection new "MyNats"]
+# default severity level is "warn", but you can lower it to see what happens under the hood
+[$conn cget -logger]::setlevel info
+# the "configure" command is implemented using the "cmdline" package, 
+# so you can find out all available options in an interactive shell using -?
+# as a minimum you need to specify the URL of your NATS server, or a list of URLs
+$conn configure -servers nats://localhost:4222 
+# Now we can connect. By default this call will block unless you pass -async option.
+$conn connect
+
+# define a callback for incoming messages
+set msg ""
+proc onMessage {subject message replyTo} {
+    puts "Received $message on subject $subject"
+    set $::msg $message
+    # if it is a request, $replyTo will contain the subject to reply
+}
+# you can design an hierarchical subject space using tokens and dots
+# and then you can use wildcars for subscriptions
+$conn subscribe "sample_subject.*" -callback onMessage
+
+# now whenever somebody sends a message to a matching subject, it will be delivered from the event loop, i.e. using "after 0"
+# publish a message ourselves
+$conn publish sample_subject.foo hello
+# and wait for the message to arrive
+vwait ::msg
+
+# you can perform synchronous requests; timeout is specified in ms
+set result [$conn request service "I need help" -timeout 1000]
+# and asynchronous too
+proc asyncReqCallback {timedOut msg} {
+    # $timedOut will be true if nobody replied within the specified timeout
+}
+$conn request service "I need help" -timeout 1000 -callback asyncReqCallback
+
+# Finally don't forget to delete our object. Again, this is standard TclOO.
+# All pending outgoing messages will be flushed, and the TCP socket will be closed.
+$conn destroy
+```
+
+## TODO
+- The new authentication mechanism using NKey & [JWT](https://docs.nats.io/developing-with-nats/security/creds). This one will be difficult to do, because it requires support for _ed25519_ cryptography that is missing in Tcl. Could anyone point me in the right direction? :)
+- Better alignment with the behaviour of nats.py
+- Rewrite the server pool from a list of dicts to a proper TclOO class
+- Statistics
+- More tests and a benchmark
+
+## Running tests locally
+The tests are based on the standard Tcl unit testing framework, [tcltest](https://www.tcl.tk/man/tcl8.6/TclCmd/tcltest.htm). Simply run `tclsh tests/all.tcl` and the tests will be executed one after another. They assume that `nats-server` is available in your `$PATH`. 
+
+To run the TLS tests, you will need to provide certificates yourself. E.g. you can generate them using [mkcert](https://docs.nats.io/nats-server/configuration/securing_nats/tls#self-signed-certificates-for-testing).

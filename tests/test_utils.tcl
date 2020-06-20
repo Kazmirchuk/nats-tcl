@@ -156,6 +156,14 @@ namespace eval test_utils {
         sleep 500
     }
     proc stopNats {id} {
+        # processman::kill on Linux relies on odielib or Tclx packages that might not be available
+        if {$::tcl_platform(platform) eq "unix"} {
+            foreach pid [dict get $processman::process_list $id] {
+                catch {exec kill $pid}
+            }
+            after 500
+            return
+        }
         processman::kill $id
     }
     proc timestamp {} {

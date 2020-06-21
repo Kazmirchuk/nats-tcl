@@ -11,7 +11,7 @@ package require nats ?0.9?
 [*objectName* **connect** *?-async?*](#objectName-connect--async) <br/>
 [*objectName* **disconnect**](#objectName-disconnect) <br/>
 [*objectName* **publish** *subject msg ?replySubj?*](#objectName-publish-subject-msg-replySubj) <br/>
-[*objectName* **subscribe** *subject ?-queue queueName? ?-callback cmdPrefix?*](#objectName-subscribe-subject--queue-queueName--callback-cmdPrefix) <br/>
+[*objectName* **subscribe** *subject ?-queue queueGroup? ?-callback cmdPrefix?*](#objectName-subscribe-subject--queue-queueGroup--callback-cmdPrefix) <br/>
 [*objectName* **unsubscribe** *subID ?maxMessages?*](#objectName-unsubscribe-subID-maxMessages) <br/>
 [*objectName* **request** *subject message ?-timeout ms? ?-callback cmdPrefix?*](#objectName-request-subject-message--timeout-ms--callback-cmdPrefix) <br/>
 [*objectName* **ping** *?timeout?*](#objectName-ping-timeout) <br/>
@@ -26,7 +26,7 @@ All callbacks are treated as command prefixes (like [trace](https://www.tcl.tk/m
 **asyncRequestCallback** *timedOut message* (invoked from the event loop)<br/>
 ## Options
 
-The **configure** method accepts the following options. Make sure to set them *before* calling **connect**.
+The **configure** method accepts the following options. Dash in front of an option name is optional. Make sure to set them *before* calling **connect**.
 
 | Option        | Type   | Default | Comment |
 | ------------- |--------|---------|---------|
@@ -54,26 +54,52 @@ The **configure** method accepts the following options. Make sure to set them *b
 ## Description
 
 ### constructor
-construct
+Creates a new instance of nats::connection with default options and initialises a [logger](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/log/logger.md) instance with the severity level set to `warn`. If you pass in a connection name, it will be sent to NATS in a `CONNECT` message, and will be indicated in the logger name.
+
 ### objectName cget option
-get options
+Returns the current value of an option as described above.
+
 ### objectName configure ?option? ?value option value...?
-configure
+When given no arguments, returns a dict of all options with their current values. When given one option, returns its current value (same as `cget`). When given more arguments, assigns each value to an option. The only mandatory option is `servers`, and others have reasonable defaults. Under the hood it is implemented using the [cmdline::getoptions](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/cmdline/cmdline.md#3) command, so it understands the special `-?` option for interactive help.
+
 ### objectName connect ?-async? 
-connect
+Opens a TCP connection to one of the NATS servers specified in the `servers` list. Unless the `-async` option is given, this call blocks in a `vwait` loop until the connection is completed, including a TLS handshake if needed.
+
 ### objectName disconnect 
-disconnect
+Flushes all outgoing data, closes the TCP connection and sets the `status` to "closed".
+
 ### objectName publish subject msg ?replySubj? 
-publish
-### objectName subscribe subject ?-queue queueName? ?-callback cmdPrefix? 
-subscribe
+Publishes a message to the specified subject. See the NATS [documentation](https://docs.nats.io/nats-concepts/subjects) for more details about subjects and wildcards. The client will check subject's validity before sending. Allowed characters are Latin-1 characters, digits, dot, dash and underscore. <br/>
+`msg` is sent as is, it can be a binary string. If you specify `replySubj`, a responder will know where to send a reply. You can use the `inbox` method to generate a transient [subject name](https://docs.nats.io/developing-with-nats/sending/replyto) starting with _INBOX. However, using asynchronous requests might accomplish the same task in an easier manner - see below.<br/>
+Note that for higher throughput the message is only added to a buffer, and will be flushed to the TCP socket later.
+
+### objectName subscribe subject ?-queue queueGroup? ?-callback cmdPrefix? 
+Subscribes to a subject (possibly with wildcards) and returns a subscription ID. Whenever a message arrives, the command prefix will be invoked from the event loop with 3 additional arguments: `subject`, `message` and `replyTo` (might be empty). If you use the [-queue option](https://docs.nats.io/developing-with-nats/receiving/queues), only one subscriber in a given queueGroup will receive each message (load balancing).
+
 ### objectName unsubscribe subID ?maxMessages? 
-unsubscribe
+Unsubscribes from a subscription with a given `subID` immediately. If `maxMessages` is given, unsubscribes after this number of messages has been received.
+
 ### objectName request subject message ?-timeout ms? ?-callback cmdPrefix? 
-request
+Sends a message to the specified subject using an automatically generated transient `replyTo` subject (inbox). The message is flushed to the socket immediately.
+- If no callback is given, the request is synchronous and blocks in vwait until a reply is received. The reply is the return value. If no reply arrives within `timeout`, it raises an error "TIMEOUT".
+- If a callback is given, the call returns immediately, and when a reply is received or a timeout fires, the command prefix will be invoked from the event loop with 2 additional arguments: `timedOut` (true, if the request timed out) and a `reply`.
+
 ### objectName ping ?timeout? 
-ping
+A blocking call that triggers a ping-pong exchange with the NATS server and returns true upon success. If the server does not reply within the specified timeout, it returns false. Default timeout is unlimited. You can use this method to check if the server is alive or to force flush outgoing data.
+
 ### objectName inbox 
-inbox
+Returns a new inbox - random subject starting with _INBOX.
+
 ### objectName destroy
-destructor
+TclOO destructor. Flushes pending data and closes the TCP socket.
+
+## Error handling
+All synchronous errors are raised using `throw {NATS <error_type>} human-readable message`. Asynchronous errors are sent to the logger and can also be queried using 
+`$obj cget -error`.
+
+| Error type        | Reason   | 
+| ------------- |--------|
+| NO_CONNECTION | Attempt to subscribe or send a message before calling `connect` |
+| INVALID_ARG | Invalid argument |
+| CONNECT_FAIL | Raised by `connect` if it failed to connect to all servers |
+| TIMEOUT | Synchronous request timeout|

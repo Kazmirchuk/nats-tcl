@@ -137,6 +137,13 @@ test basic-6.4 "2 asynchronous requests" -body {
     assert {$test_utils::simpleMsg eq "async_req4"} $test_utils::simpleMsg
 }
 
+test basic-7 "Sending and receiving a binary message" -body {
+    set binString "\nhello\0world\r\n" ;# include a null byte and CR+LF that is a delimiter in the NATS protocol
+    $conn subscribe bin_subj -callback test_utils::simpleCallback
+    $conn publish bin_subj $binString
+    vwait test_utils::simpleMsg
+    assert { $test_utils::simpleMsg eq $binString } [binary encode hex $test_utils::simpleMsg]
+}
 
 $responder destroy
 $conn destroy

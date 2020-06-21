@@ -368,7 +368,7 @@ namespace eval ::nats {
         method ping { {timeout -1} } {
             my CheckTimeout $timeout
             if {$config(status) != $status_connected} {
-                return 0
+                return false
             }
             lappend outBuffer "PING"
             set timerID ""
@@ -379,9 +379,9 @@ namespace eval ::nats {
             vwait [self object]::pong
             if {$pong} {
                 after cancel $timerID
-                return 1
+                return true
             }
-            return 0
+            return false
         }
         
         method inbox {} {
@@ -448,7 +448,8 @@ namespace eval ::nats {
                 set timers(flush) [after $config(flush_interval) [mymethod Flusher]]
             }
             foreach msg $outBuffer {
-                puts $sock $msg
+                puts -nonewline $sock $msg
+                puts -nonewline $sock "\r\n"
             }
             try {
                 chan flush $sock
@@ -643,7 +644,8 @@ namespace eval ::nats {
                     }
                 }
             }
-            chan configure $sock -translation crlf
+            # revert to our default translation
+            chan configure $sock -translation {crlf binary}
             # remove the trailing crlf; is it efficient on large messages?
             set messageBody [string range $messageBody 0 end-2]
             if {[info exists subscriptions($subID)]} {
@@ -705,7 +707,10 @@ namespace eval ::nats {
                             # connection succeeded
                             # we want to call "flush" ourselves, so use -buffering full
                             # NATS protocol uses crlf as a delimiter
-                            chan configure $sock -translation crlf -blocking 0 -buffering full
+                            # when reading from socket, it's easier to let Tcl do EOL translation, unless we are in method MSG
+                            # when writing to socket, we need to turn off the translation when sending a message payload
+                            # but outBuffer doesn't know which element is a message, so it's easier to write CR+LF ourselves
+                            chan configure $sock -translation {crlf binary} -blocking 0 -buffering full -encoding binary
                             chan event $sock readable [list $coro readable]
                         } else {
                             chan close $sock

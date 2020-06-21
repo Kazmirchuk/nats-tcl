@@ -36,6 +36,8 @@ Note that the client relies on a running event loop to send and deliver messages
 
 Calls to blocking API (synchronous versions of `connect`, `request`, `ping`) involve `vwait` under the hood, so that other event processing can continue.
 
+Find the detailed API reference [here](API.md).
+
 ```Tcl
 # All API is enclosed into a TclOO object called nats::connection
 # Giving a name to a connection is optional. 

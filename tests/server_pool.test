@@ -1,0 +1,30 @@
+namespace import ::tcltest::*
+tcltest::configure {*}$argv
+
+set conn [nats::connection new]
+set sp [set ${conn}::serverPool] ;# access to a private variable only for test purposes!
+
+#set config(reconnect_time_wait) 0
+
+test server_pool-1 "Parse URL 1" -body {
+    $sp add nats-server.com
+} -result {scheme nats host nats-server.com port 4222 discovered false reconnects 0 last_attempt 0}
+
+test server_pool-2 "Parse URL 2" -body {
+    $sp add nats://some_token@nats-server.com
+} -result {scheme nats host nats-server.com port 4222 discovered false reconnects 0 last_attempt 0 auth_token some_token}
+
+test server_pool-3 "Parse URL 3" -body {
+    $sp add tls://user:pass@nats-server.com
+} -result {scheme tls host nats-server.com port 4222 discovered false reconnects 0 last_attempt 0 user user password pass}
+
+test server_pool-4 "Parse URL 4" -body {
+    $sp add tls://user:pass2@nats-server.com:2020 true
+} -result {scheme tls host nats-server.com port 2020 discovered true reconnects 0 last_attempt 0 user user password pass2}
+
+test server_pool-5 "Parse URL 5" -body {
+    $sp add nats://:2020
+} -result {Invalid URL nats://:2020} -errorCode {NATS INVALID_ARG}
+
+$conn destroy
+cleanupTests

@@ -4,27 +4,50 @@ tcltest::configure {*}$argv
 set conn [nats::connection new]
 set sp [set ${conn}::serverPool] ;# access to a private variable only for test purposes!
 
-#set config(reconnect_time_wait) 0
-
 test server_pool-1 "Parse URL 1" -body {
-    $sp add nats-server.com
-} -result {scheme nats host nats-server.com port 4222 discovered false reconnects 0 last_attempt 0}
+    $sp add nats-server1.com
+} -result {scheme nats host nats-server1.com port 4222 discovered false reconnects 0 last_attempt 0}
 
 test server_pool-2 "Parse URL 2" -body {
-    $sp add nats://some_token@nats-server.com
-} -result {scheme nats host nats-server.com port 4222 discovered false reconnects 0 last_attempt 0 auth_token some_token}
+    $sp add nats://some_token@nats-server2.com
+} -result {scheme nats host nats-server2.com port 4222 discovered false reconnects 0 last_attempt 0 auth_token some_token}
 
 test server_pool-3 "Parse URL 3" -body {
-    $sp add tls://user:pass@nats-server.com
-} -result {scheme tls host nats-server.com port 4222 discovered false reconnects 0 last_attempt 0 user user password pass}
+    $sp add tls://user:pass@nats-server3.com
+} -result {scheme tls host nats-server3.com port 4222 discovered false reconnects 0 last_attempt 0 user user password pass}
 
 test server_pool-4 "Parse URL 4" -body {
-    $sp add tls://user:pass2@nats-server.com:2020 true
-} -result {scheme tls host nats-server.com port 2020 discovered true reconnects 0 last_attempt 0 user user password pass2}
+    $sp add tls://user:pass2@nats-server4.com:2020 true
+} -result {scheme tls host nats-server4.com port 2020 discovered true reconnects 0 last_attempt 0 user user password pass2}
 
 test server_pool-5 "Parse URL 5" -body {
     $sp add nats://:2020
 } -result {Invalid URL nats://:2020} -errorCode {NATS INVALID_ARG}
+
+test server_pool-6 "Check pool size" -body {
+    llength [$sp all_servers]
+} -result 4
+
+test server_pool-7 "Add duplicate URL" -body {
+    $sp add nats://nats-server3.com
+    llength [$sp all_servers]
+} -result 4
+
+$conn configure -token dummy
+
+test server_pool-8 "Format credentials from URL" -body {
+    $sp format_credentials
+} -result {user {"user"} pass {"pass2"}}
+
+test server_pool-9 "Format credentials from config" -body {
+    $sp add nats-server9.com
+    $sp format_credentials
+} -result {auth_token {"dummy"}}
+
+test server_pool-10 "Clear the pool" -body {
+    $sp clear
+    llength [$sp all_servers]
+} -result 0
 
 $conn destroy
 cleanupTests

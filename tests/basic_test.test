@@ -12,21 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+package require lambda
+
 namespace import ::tcltest::*
 tcltest::configure {*}$argv
 
 test_utils::startNats NATS
 
-proc onConnectionChanged {status} {
-    #possible statuses: connecting connected closed
-    puts "New connection state: $status"
-}
-
 set conn [nats::connection new "BasicNats"]
 # available logger severity levels: debug info notice warn error critical alert emergency
 # default is "warn"
-[$conn cget -logger]::setlevel info
-$conn configure -servers nats://localhost:4222 -connection_cb onConnectionChanged
+[$conn logger]::setlevel info
+
+trace add variable ${conn}::status write [lambda {var idx op } {
+    upvar $var s
+    puts "New connection status: $s"
+}]
+
+$conn configure -servers nats://localhost:4222
 
 set responder [test_utils::responder new service]
 
@@ -38,7 +41,7 @@ test basic-1 "Connect NATS" -body {
     set chanData [$obs getChanData]
     assert {$chanData eq {CONNECT {"verbose":false,"pedantic":false,"tls_required":false,"name":"BasicNats","lang":"Tcl","version":"0.9","protocol":1,"echo":true}}} $chanData
     $obs destroy
-    expr {[$conn cget -status] eq "connected"}
+    expr {[set ${conn}::status] == 2}
 } -result {1}
 
 test basic-2 "Subscribe to a message" -body {
@@ -46,6 +49,7 @@ test basic-2 "Subscribe to a message" -body {
     set sub_id [$conn subscribe subject1 -callback test_utils::simpleCallback]
     test_utils::sleep 1000
     set chanData [$obs getChanData]
+    # double space is not accidental
     assert {$chanData eq {SUB subject1  1}} $chanData
     $obs destroy
     set sub_id
@@ -103,7 +107,7 @@ test basic-5.4 "Synchronous request with timeout - success" -body {
 
 test basic-5.5 "Synchronous request with timeout - failure" -body {
     $conn request service "600 sync_req" -timeout 500
-} -returnCodes {error} -result {Request timeout}
+} -returnCodes {error} -result {Request to service timed out}
 
 # wait until the delayed message arrives
 test_utils::sleep 500

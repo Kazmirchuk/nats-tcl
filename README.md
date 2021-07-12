@@ -39,6 +39,7 @@ Calls to blocking API (synchronous versions of `connect`, `request`, `ping`) inv
 Find the detailed API reference [here](API.md).
 
 ```Tcl
+package require nats
 # All API is enclosed into a TclOO object called nats::connection
 # Giving a name to a connection is optional. 
 # It will be displayed in logs and sent to the NATS server

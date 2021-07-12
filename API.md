@@ -16,14 +16,22 @@ package require nats ?0.9?
 [*objectName* **request** *subject message ?-timeout ms? ?-callback cmdPrefix?*](#objectName-request-subject-message--timeout-ms--callback-cmdPrefix) <br/>
 [*objectName* **ping** *?timeout?*](#objectName-ping-timeout) <br/>
 [*objectName* **inbox**](#objectName-inbox) <br/>
+[*objectName* **current_server**](#objectName-current_server) <br/>
+[*objectName* **logger**](#objectName-logger) <br/>
 [*objectName* **destroy**](#objectName-destroy)
 
 ## Callbacks
 All callbacks are treated as command prefixes (like [trace](https://www.tcl.tk/man/tcl8.6/TclCmd/trace.htm) callbacks), so in addition to a command itself they may include user-supplied arguments. They are invoked as follows:
 
-**connectionCallback** *status* (invoked at the moment the status changes) <br/>
 **subscriptionCallback** *subject message replyTo* (invoked from the event loop)<br/>
 **asyncRequestCallback** *timedOut message* (invoked from the event loop)<br/>
+
+## Public variables
+The connection object exposes 2 "public" read-only variables:
+- error - last socket error
+- status - connection status, one of $nats::status_closed, $nats::status_connecting or $nats::status_connected
+You can set up traces on these variables to get notified e.g. when a connection status changes.
+
 ## Options
 
 The **configure** method accepts the following options. Dash in front of an option name is optional. Make sure to set them *before* calling **connect**.
@@ -31,7 +39,6 @@ The **configure** method accepts the following options. Dash in front of an opti
 | Option        | Type   | Default | Comment |
 | ------------- |--------|---------|---------|
 | servers (mandatory)      | list   |         | URLs of NATS servers|
-| connection_cb | list   |         | Command prefix to be invoked when the connection is lost, restored or closed |
 | name          | string |         | Client name sent to NATS server when connecting|
 | pedantic      | boolean |false   | Pedantic protocol mode. If true some extra checks will be performed by NATS server|
 | verbose       | boolean | false | If true, every protocol message is echoed by the server with +OK. Has no effect on functioning of the client itself |
@@ -40,16 +47,12 @@ The **configure** method accepts the following options. Dash in front of an opti
 | ping_interval | integer | 120000 | Interval (ms) to send PING messages to NATS server|
 | max_outstanding_pings | integer | 2 | Max number of PINGs without a reply from NATS before closing the connection |
 | flush_interval | integer | 500 | Interval (ms) to flush sent messages. Synchronous requests are always flushed immediately. |
-| randomize | boolean | true | Shuffle the list of NATS servers before connecting|
 | echo | boolean | true | If true, messages from this connection will be sent by the server back if the connection has matching subscriptions|
 | tls_opts | list | | Options for tls::import |
 | user | string | | Default username|
 | password | string |   | Default password|
 | token | string | | Default authentication token|
-| error | string | | Last socket error (read-only) |
-| logger | command | | Logger instance (read-only) |
-| status | string | | Connection status: closed, connecting or connected (read-only) |
-| -? | | | Provides interactive help with all options
+| -? | | | Provides interactive help with all options|
 
 ## Description
 
@@ -89,6 +92,12 @@ A blocking call that triggers a ping-pong exchange with the NATS server and retu
 
 ### objectName inbox 
 Returns a new inbox - random subject starting with _INBOX.
+
+### objectName current_server 
+Returns a 2-element list with host and port of the current NATS server
+
+### objectName logger 
+Returns a logger instance
 
 ### objectName destroy
 TclOO destructor. Flushes pending data and closes the TCP socket.

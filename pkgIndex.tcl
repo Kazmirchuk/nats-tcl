@@ -1,1 +1,3 @@
-package ifneeded nats 0.9 [list source [file join $dir nats_client.tcl]]
+package ifneeded nats 0.9 \
+   "source \[file join [list $dir] server_pool.tcl\] ; \
+    source \[file join [list $dir] nats_client.tcl\]"

@@ -21,50 +21,46 @@ package require tcl::chan::random
 package require tcl::randomseed
 package require coroutine
 package require logger
-package require lambda
-
-source [file join [file dirname [dict get [info frame 0] file]] server_pool.tcl]
 
 namespace eval ::nats {
-    
+    # improvised enum
+    variable status_closed 0
+    variable status_connecting 1
+    variable status_connected 2
+}
 # all options for "configure"
 # due to a bug, when I pass a list to cmdline::typedGetoptions, it is returned wrapped in extra braces
 # so all options that may be lists or may contain spaces are marked with .list here
 # and then in "configure" I have special treatment to unpack them with [lindex $val 0]
 # note that this bug does not occur with cmdline::getoptions
-set option_syntax {
+set ::nats::option_syntax {
     { servers.list ""                   "URLs of NATS servers"}
-    { connection_cb.list ""             "Command prefix to be invoked when the connection is lost, restored or closed"}
     { name.arg ""                       "Client name sent to NATS server when connecting"}
     { pedantic.boolean false            "Pedantic protocol mode. If true some extra checks will be performed by the server"}
     { verbose.boolean false             "If true, every protocol message is echoed by the server with +OK" }
     { connect_timeout.integer 2000      "Connection timeout (ms)"}
     { reconnect_time_wait.integer 2000  "How long to wait between two reconnect attempts to the same server (ms)"}
+    { max_reconnect_attempts.integer 60 "Maximum number of reconnect attempts per server"}
     { ping_interval.integer 120000      "Interval (ms) to send PING messages to NATS server"}
     { max_outstanding_pings.integer 2   "Max number of PINGs without a reply from NATS before closing the connection"}
     { flush_interval.integer 500        "Interval (ms) to flush sent messages"}
-    { randomize.boolean true            "Shuffle the list of NATS servers before connecting"}
     { echo.boolean true                 "If true, messages from this connection will be sent by the server back if the connection has matching subscriptions"}
     { tls_opts.list ""                  "Options for tls::import"}
     { user.list ""                      "Default username"}
     { password.list ""                  "Default password"}
     { token.arg ""                      "Default authentication token"}
-    { error.arg ""                      "Last socket error (read-only)" }
-    { logger.arg ""                     "Logger instance (read-only)" }
-    { status.arg ""                     "Connection status: closed, connecting or connected (read-only)" }
+    { secure.boolean false              "Indicate to the server if the client wants a TLS connection"}
+    { send_asap.boolean false           "Make publish calls send the data immediately, reducing latency, but also throughput"}
 }
 
-oo::class create connection {
+oo::class create ::nats::connection {
     variable config sock coro timers counters subscriptions requests serverInfo serverPool \
-             subjectRegex outBuffer randomChan requestsInboxPrefix pong
+             subjectRegex outBuffer randomChan requestsInboxPrefix pong logger \
+             last_error status ;# these 2 are "public", so that users can set up traces on them if needed
 
-    # improvised enum
-    variable status_closed status_connecting status_connected
     constructor { { conn_name "" } } {
-        set status_closed 0
-        set status_connecting 1
-        set status_connected 2
-    
+        set status $nats::status_closed
+
         # initialise default configuration
         # we need it because untyped options with default value "" are not returned by cmdline::typedGetoptions at all
         foreach option $nats::option_syntax {
@@ -79,20 +75,20 @@ oo::class create connection {
         if {$conn_name ne ""} {
             append loggerName "_$conn_name"
         }
-        set config(logger) [logger::init $loggerName]
+        set logger [logger::init $loggerName]
         # default level in the logger package is debug, it's too verbose
-        $config(logger)::setlevel warn
-        set config(status) $status_closed
+        ${logger}::setlevel warn
+        
         set sock "" ;# the TCP socket
         set coro "" ;# the coroutine handling readable and writeable events on the socket
         array set timers {ping {} flush {} connect {} }
-        array set counters {subscription 0 request 0 curServer "" reconnect 0}
+        array set counters {subscription 0 request 0}
         array set subscriptions {} ;# subID -> dict (cmd , remMsg)
         # async reqs: reqID -> {1 timer callback} ; sync requests: reqID -> {0 timedOut response}
         # RequestCallback needs to distinguish between sync and async, so we need 0/1 in front
         array set requests {} 
         array set serverInfo {} ;# INFO from a current NATS server
-        set serverPool [nats::server_pool new] 
+        set serverPool [nats::server_pool new [self object]] 
         #consider replacing with string is alnum? does this allow Unicode?
         set subjectRegex {^[[:alnum:]_-]+$}
         # all outgoing messages are put in this list before being flushed to the socket,
@@ -106,21 +102,18 @@ oo::class create connection {
     destructor {
         my disconnect
         close $randomChan
-        $sp destroy
+        $serverPool destroy
         #if {[array size subscriptions]} {
-        #    $config(logger)::debug "Remaining subscriptions: [array get subscriptions]"
+        #    $logger::debug "Remaining subscriptions: [array get subscriptions]"
         #}
         if {[array size requests]} {
-            $config(logger)::debug "Remaining requests: [array get requests]"
+            ${logger}::debug "Remaining requests: [array get requests]"
         }
-        $config(logger)::delete
+        ${logger}::delete
     }
     
     method cget {option} {
         set opt [string trimleft $option -]
-        if {$opt eq "status"} {
-            return [string map [list $status_closed "closed" $status_connecting "connecting" $status_connected "connected"] $config(status)]
-        }
         if {[info exists config($opt)]} {
             return $config($opt)
         }
@@ -155,57 +148,19 @@ oo::class create connection {
         }
         # avoid re-parsing servers if they were not in $args
         if {[info exists options(servers)]} {
-            set serverPool [list]
-            set counters(curServer) ""
+            $serverPool clear
             foreach url $config(servers) {
-                lappend serverPool [my ParseServerUrl $url]
-            }
-            if {$config(randomize)} {
-                set serverPool [::struct::list shuffle $serverPool]
-            }
-        }
-        
-        if {[info exists options(connection_cb)]} {
-            if {$config(connection_cb) ne ""} {
-                trace add variable config(status) write [lambda@ [namespace current] {v1 idx op } {
-                    #note: synchronous invocation! maybe in future take return value into account?
-                    variable config
-                    {*}$config(connection_cb) [my cget -status]
-                }]
-            } else {
-                #remove the trace
-                foreach traceInfo [trace info variable config(status)] {
-                    trace remove variable config(status) {*}traceInfo
-                }
+                $serverPool add $url
             }
         }
     }
 
-    method ParseServerUrl {url} {
-        # replace nats/tls scheme with http and delegate parsing to the uri package
-        set scheme nats
-        if {[string equal -length 7 $url "nats://"]} {
-            set url [string range $url 7 end]
-        } elseif {[string equal -length 6 $url "tls://"]} {
-            set url [string range $url 6 end]
-            set scheme tls
-        }
-        
-        #uri::split will return a dict with these keys: scheme, host, port, user, pwd (and others)
-        # note that these keys will always be present even if empty
-        array set srv [uri::split "http://$url"]
-        # remove all empty elements
-        foreach key [array names srv] {
-            if {$srv($key) eq ""} {
-                unset srv($key)
-            }
-        }
-        set srv(scheme) $scheme
-        if {[info exists srv(user)] && ![info exists srv(pwd)]} {
-            set srv(token) $srv(user)
-            unset srv(user)
-        }
-        return [array get srv]
+    method logger {} {
+        return $logger
+    }
+    
+    method current_server {} {
+        return [$serverPool current_server]
     }
     
     method connect { args } {
@@ -220,7 +175,7 @@ oo::class create connection {
                 throw {NATS INVALID_ARG} "Unknown option $args"
             }
         }
-        if {$config(status) != $status_closed} {
+        if {$status != $nats::status_closed} {
             return
         }
         # this coroutine will handle all work to connect and read from the socket
@@ -228,21 +183,25 @@ oo::class create connection {
         # now try connecting to the first server
         $coro connect
         if {!$async} {
-            $config(logger)::debug "Waiting for connection"
-            vwait [self object]::config(status)
-            if {$config(status) != $status_connected} {
-                throw {NATS CONNECT_FAIL} $config(error)
+            ${logger}::debug "Waiting for connection"
+            if {[info coroutine] eq ""} {
+                vwait [self object]::status
+            } else {
+                coroutine::util vwait [self object]::status
+            }
+            if {$status != $nats::status_connected} {
+                throw {NATS CONNECT_FAIL} $last_error
             }
         }
     }
     
     method disconnect {} {
-        if {$config(status) == $status_closed} {
+        if {$status == $nats::status_closed} {
             return
         }
         my Flusher 0
         my CloseSocket
-        #CoroMain will set config(status) to "closed"
+        #CoroMain will set status to "closed"
     }
     
     method publish {subject msg {replySubj ""}} {
@@ -356,11 +315,15 @@ oo::class create connection {
             # we don't want to wait for the flusher here, call it now, but don't schedule one more
             my Flusher 0
             set requests($reqID) [list 0]
-            vwait [self object]::requests($reqID)
+            if {[info coroutine] eq ""} {
+                vwait [self object]::requests($reqID)
+            } else {
+                coroutine::util vwait [self object]::requests($reqID)
+            }
             lassign $requests($reqID) ignored timedOut response
             unset requests($reqID)
             if {$timedOut} {
-                throw {NATS TIMEOUT} "Request timeout"
+                throw {NATS TIMEOUT} "Request to $subject timed out"
             }
             after cancel $timerID
             return $response
@@ -374,7 +337,7 @@ oo::class create connection {
     
     method ping { {timeout -1} } {
         my CheckTimeout $timeout
-        if {$config(status) != $status_connected} {
+        if {$status != $nats::status_connected} {
             return false
         }
         lappend outBuffer "PING"
@@ -383,7 +346,11 @@ oo::class create connection {
             set timerID [after $timeout [list set [self object]::pong 0]]
         }
         my Flusher 0
-        vwait [self object]::pong
+        if {[info coroutine] eq ""} {
+            vwait [self object]::pong
+        } else {
+            coroutine::util vwait [self object]::pong
+        }
         if {$pong} {
             after cancel $timerID
             return true
@@ -428,7 +395,7 @@ oo::class create connection {
             chan configure $sock -blocking 1
         }
         # note: all buffered input is discarded, all buffered output is flushed
-        $config(logger)::info "Closing socket"
+        ${logger}::info "Closing socket"
         close $sock
         set sock ""
         unset serverInfo ;# when the variable is re-created, Tcl will remember that this is a data member, not just a local variable
@@ -440,13 +407,13 @@ oo::class create connection {
                 $coro stop
             }
         }
-        # note that we don't set config(status) here, because it can be "closed" or "connecting" depending on a caller
+        # note that we don't set status here, because it can be "closed" or "connecting" depending on a caller
     }
     
     method Pinger {} {
         set timers(ping) [after $config(ping_interval) [mymethod Pinger]]
         lappend outBuffer "PING"
-        $config(logger)::debug "Sending PING"
+        ${logger}::debug "Sending PING"
     }
     
     method Flusher { {scheduleNext 1} } {
@@ -455,13 +422,13 @@ oo::class create connection {
             set timers(flush) [after $config(flush_interval) [mymethod Flusher]]
         }
         foreach msg $outBuffer {
+            append msg "\r\n"
             puts -nonewline $sock $msg
-            puts -nonewline $sock "\r\n"
         }
         try {
             chan flush $sock
         } on error err {
-            $config(logger)::error $err
+            ${logger}::error $err
             my CloseSocket 1
             $coro connect
         }
@@ -472,26 +439,15 @@ oo::class create connection {
     # --------- these procs execute in the coroutine ---------------
     # connect to Nth server in the pool
     method ConnectNextServer {} {
-        if { [llength $serverPool] == 0 } {
-            set config(error) "No servers in the pool"
+        try {
+            lassign [$serverPool next_server] host port
+        } trap {NATS NO_SERVERS} err {
+            set last_error $err
             after 0 [list $coro stop] ;# you cannot invoke a coroutine from inside the same coroutine
             return
         }
-        set config(status) $status_connecting
-        if {$counters(curServer) eq ""} {
-            set counters(curServer) 0
-        } else {
-            incr counters(curServer)
-        }
-        if {$counters(curServer) >= [llength $serverPool]} {
-            set counters(curServer) 0
-            # in case none of the servers are available, avoid running in a tight loop
-            coroutine::util after $config(reconnect_time_wait)
-        }
-        set serverDict [lindex $serverPool $counters(curServer)]
-        set host [dict get $serverDict host]
-        set port [dict get $serverDict port]
-        $config(logger)::info "Connecting to server # $counters(curServer): $host:$port"
+        set status $nats::status_connecting
+        ${logger}::info "Connecting to the server at $host:$port"
         set sock [socket -async $host $port]
         chan event $sock writable [list $coro connected]
         set timers(connect) [after $config(connect_timeout) [list $coro connect_timeout]]
@@ -510,48 +466,26 @@ oo::class create connection {
                                 protocol 1 \
                                 echo $config(echo)]
         
-        my GetCredentials connectParams
+        if {[info exists serverInfo(auth_required)] && $serverInfo(auth_required)} {
+            try {
+                lappend connectParams {*}[$serverPool format_credentials]
+            } trap {NATS NO_CREDS} err {
+                #TODO: try another server
+            }
+        } 
+
         set jsonMsg [json::write::object {*}$connectParams]
         json::write::indented $ind
         lappend outBuffer "CONNECT $jsonMsg"
-        set config(currentServer) [lindex $serverPool $counters(curServer)]
-        set config(error) ""
+        set last_error ""
         # exit from vwait in "connect"
-        set config(status) $status_connected
+        set status $nats::status_connected
         my Flusher
         set timers(ping) [after $config(ping_interval) [mymethod Pinger]]
     }
     
-    method GetCredentials {varName} {
-        upvar $varName connectParams
-        if {![info exists serverInfo(auth_required)]} {
-            return
-        } 
-        if {!$serverInfo(auth_required)} {
-            return
-        }
-        set serverDict [lindex $serverPool $counters(curServer)]
-        if {[dict exists $serverDict user] && [dict exists $serverDict pwd]} {
-            lappend connectParams user [json::write::string [dict get $serverDict user]] pass [json::write::string [dict get $serverDict pwd]]
-            return
-        }
-        if {[dict exists $serverDict token]} {
-            lappend connectParams auth_token [json::write::string [dict get $serverDict token]]
-            return
-        }
-        if {$config(user) ne "" && $config(password) ne ""} {
-            lappend connectParams user [json::write::string $config(user)] pass [json::write::string $config(password)]
-            return
-        }
-        if {$config(token) ne ""} {
-            lappend connectParams auth_token [json::write::string $config(token)]
-            return
-        }
-        #TODO throw
-    }
-    
     method INFO {cmd} {
-        if {$config(status) == $status_connected} {
+        if {$status == $nats::status_connected} {
             # when we say "proto":1 in CONNECT, we may receive information about other servers in the cluster - add them to serverPool
             #example info:
             # server_id NDHBLLCIGK3PQKD5RUAUPCZAO6HCLQC4MNHQYRF22T32X2I2DHKEUGGQ server_name NDHBLLCIGK3PQKD5RUAUPCZAO6HCLQC4MNHQYRF22T32X2I2DHKEUGGQ version 2.1.7 proto 1 git_commit bf0930e
@@ -560,22 +494,7 @@ oo::class create connection {
             set infoDict [json::json2dict $cmd]
             if {[dict exists $infoDict connect_urls]} {
                 foreach url [dict get $infoDict connect_urls] {
-                    # each URL is simply IP:port
-                    # TODO: make this check the same as in nats.py
-                    set unknownServer 1
-                    set parsedURL [my ParseServerUrl $url]
-                    foreach serverURL $serverPool {
-                        if {[dict get $serverURL host] eq [dict get $parsedURL host] && [dict get $serverURL port] == [dict get $parsedURL port]} {
-                            set unknownServer 0
-                            break
-                        }
-                    }
-                    if {$unknownServer} {
-                        lappend serverPool $parsedURL
-                    }
-                }
-                if {$config(randomize)} {
-                    set serverPool [::struct::list shuffle $serverPool]
+                    $serverPool add $url
                 }
             }
             return
@@ -590,16 +509,18 @@ oo::class create connection {
             package require tls
             # I couldn't figure out how to use tls::import with non-blocking sockets
             chan configure $sock -blocking 1
-            set serverDict [lindex $serverPool $counters(curServer)]
-            tls::import $sock -require 1 -servername [dict get $serverDict host] {*}$config(tls_opts)
+            lassign [$serverPool current_server] host port
+            # TODO: move -require 1 to tls_opts to make it optional
+            tls::import $sock -require 1 -servername $host {*}$config(tls_opts)
             try {
                 tls::handshake $sock
             } on error err {
-                $config(logger)::error "TLS handshake failed: $err"
-                set config(error) "TLS handshake failed: $err"
+                ${logger}::error "TLS handshake failed: $err"
+                set last_error "TLS handshake failed: $err"
                 chan close $sock
-                # no point in trying to reconnect to it, so remove it from the pool
-                set serverPool [lreplace serverPool $counters(curServer) $counters(curServer)]
+                # TODO no point in trying to reconnect to it, so remove it from the pool
+                # set serverPool [lreplace serverPool $counters(curServer) $counters(curServer)]
+                # nats.py doesn't do it?
                 my ConnectNextServer
                 return
             }
@@ -643,11 +564,11 @@ oo::class create connection {
                     continue
                 }
                 stop {
-                    set config(status) $status_closed
+                    set status $nats::status_closed
                     return -code break "" ;# break from the loop in CoroMain - is there a more elegant way?
                 }
                 default {
-                    $config(logger)::error "MSG: unknown reason $reason"
+                    ${logger}::error "MSG: unknown reason $reason"
                 }
             }
         }
@@ -667,7 +588,7 @@ oo::class create connection {
                 dict update subscriptions($subID) remMsg v {incr v -1}
             }
         } else {
-            $config(logger)::debug "Unexpected message with subID $subID"
+            ${logger}::debug "Unexpected message with subID $subID"
         }
         
         # now we return back to CoroMain and enter "yield" there
@@ -686,11 +607,12 @@ oo::class create connection {
     }
     
     method ERR {cmd} {
-        $config(logger)::error $cmd
+        ${logger}::error $cmd
     }
     
     method CoroMain {} {
         set coro [info coroutine]
+        ${logger}::debug "Started coroutine $coro"
         while {1} {
             set reason [yield]
             switch -- $reason {
@@ -705,8 +627,8 @@ oo::class create connection {
                         # the socket either connected or failed to connect
                         set errorMsg [chan configure $sock -error]
                         if { $errorMsg ne "" } {
-                            $config(logger)::error "Failed to connect to server # $counters(curServer) : $errorMsg"
-                            set config(error) $errorMsg
+                            ${logger}::error "Failed to connect to server $serverPool  : $errorMsg"
+                            set last_error $errorMsg
                             chan close $sock
                             my ConnectNextServer
                             continue
@@ -721,8 +643,8 @@ oo::class create connection {
                         chan event $sock readable [list $coro readable]
                     } else {
                         chan close $sock
-                        $config(logger)::error "Server # $counters(curServer) timed out"
-                        set config(error) "timeout"
+                        ${logger}::warn "NATS server timed out"
+                        set last_error "Connection timeout"
                         my ConnectNextServer
                     }
                 }
@@ -752,20 +674,20 @@ oo::class create connection {
                     #TODO: handle protocol violation
                 }
                 stop {
-                    set config(status) $status_closed
+                    set status $nats::status_closed
                     break
                 }
                 default {
-                    $config(logger)::error "CoroMain: unknown reason $reason"
+                    ${logger}::error "CoroMain: unknown reason $reason"
                 }
             }
         }
-        $config(logger)::debug "Finished coroutine"
+        ${logger}::debug "Finished coroutine $coro"
     }
     
     # ------------ coroutine end -----------------------------------------
     
-    method CheckSubject {subj} {            
+    method CheckSubject {subj} {
         if {[string length $subj] == 0} {
             return false
         }
@@ -791,7 +713,7 @@ oo::class create connection {
     }
     
     method CheckConnection {} {
-        if {$config(status) == $status_closed} {
+        if {$status == $nats::status_closed} {
             throw {NATS NO_CONNECTION} "No connection to NATS server"
         }
     }
@@ -803,7 +725,6 @@ oo::class create connection {
             }
         }
     }
-} ;# end of class connection
-} ;# end of namespace
+}
 
 package provide nats 0.9

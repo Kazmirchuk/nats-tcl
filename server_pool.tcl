@@ -13,20 +13,19 @@
 # limitations under the License.
 
 package require uri
-package require struct::list
 package require json::write
 
-# rename server_pool ""
-namespace eval ::nats {
-oo::class create server_pool {
-    variable servers ;# list of dicts working as FIFO queue
-    # each dict contains: host port scheme discovered reconnects last_attempt (mandatory), user password auth_token (optional)
-    constructor {} {
-        puts "pool created"
-    }
+namespace eval ::nats {}
+
+oo::class create ::nats::server_pool {
+    variable servers conn
     
+    constructor {c} {
+        set servers [list] ;# list of dicts working as FIFO queue
+        # each dict contains: host port scheme discovered reconnects last_attempt (mandatory), user password auth_token (optional)
+        set conn $c ;# need a reference to the config array
+    }
     destructor {
-        puts "pool destroyed"   
     }
     
     method add {url {discovered false}} {
@@ -50,7 +49,11 @@ oo::class create server_pool {
         if {$parsed(port) eq ""} {
             set parsed(port) 4222
         }
-        #check for duplicates!
+        foreach s $servers {
+            if { "$parsed(host):$parsed(port)" eq "[dict get $s host]:[dict get $s port]" } {
+                return "";# we already know this server
+            }
+        }
         
         set newServer [dict create scheme $scheme host $parsed(host) port $parsed(port) discovered $discovered reconnects 0 last_attempt 0]
         if {$parsed(user) ne ""} {
@@ -65,8 +68,8 @@ oo::class create server_pool {
         return $newServer
     }
     
-    method next_server {conf_arr} {
-        upvar $conf_arr config
+    method next_server {} {
+        upvar #0 ${conn}::config config
         
         while {1} {
             if { [llength $servers] == 0 } {
@@ -87,11 +90,11 @@ oo::class create server_pool {
             lappend servers $s
             break
         }
-        return [dict get $s host] [dict get $s port]
+        return [list [dict get $s host] [dict get $s port]]
     }
     
     method current_server_connected {ok} {
-        set s [my current_server]
+        set s [lindex $servers end]
         dict set s last_attempt [clock seconds]
         if {$ok} {
             dict set s reconnects 0
@@ -101,10 +104,10 @@ oo::class create server_pool {
         lset servers end $s
     }
     
-    method format_credentials {conf_arr} {
-        upvar $conf_arr config
-        set s [my current_server]
-        set result [list]
+    method format_credentials {} {
+        upvar #0 ${conn}::config config
+        
+        set s [lindex $servers end]
         
         if {[dict exists $s user] && [dict exists $s password]} {
             return [list user [json::write::string [dict get $s user]] pass [json::write::string [dict get $s password]]]
@@ -121,26 +124,16 @@ oo::class create server_pool {
         throw {NATS NO_CREDS} "No credentials known for NATS server at [dict get $s host]:[dict get $s port]"
     }
     
-    method shuffle {} {
-        set servers [::struct::list shuffle $servers]
-    }
-    
     method current_server {} {
-        return [lindex $servers end]
+        set s [lindex $servers end]
+        return [list [dict get $s host] [dict get $s port]]
     }
     
     method all_servers {} {
         return $servers
     }
     
-    method discovered_servers {} {
-        set result [list]
-        foreach s $servers {
-            if {[dict get $s discovered]} {
-                lappend result $s
-            }
-        }
-        return $result
+    method clear {} {
+        set servers [list]
     }
-} ;# end of class server_pool
-} ;# end of namespace
+}

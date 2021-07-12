@@ -28,8 +28,9 @@ All callbacks are treated as command prefixes (like [trace](https://www.tcl.tk/m
 
 ## Public variables
 The connection object exposes 2 "public" read-only variables:
-- error - last socket error
+- last_error - last socket error
 - status - connection status, one of $nats::status_closed, $nats::status_connecting or $nats::status_connected
+
 You can set up traces on these variables to get notified e.g. when a connection status changes.
 
 ## Options
@@ -56,7 +57,7 @@ The **configure** method accepts the following options. Dash in front of an opti
 
 ## Description
 
-### constructor
+### constructor ?conn_name?
 Creates a new instance of nats::connection with default options and initialises a [logger](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/log/logger.md) instance with the severity level set to `warn`. If you pass in a connection name, it will be sent to NATS in a `CONNECT` message, and will be indicated in the logger name.
 
 ### objectName cget option
@@ -94,17 +95,17 @@ A blocking call that triggers a ping-pong exchange with the NATS server and retu
 Returns a new inbox - random subject starting with _INBOX.
 
 ### objectName current_server 
-Returns a 2-element list with host and port of the current NATS server
+Returns a 2-element list with host and port of the current NATS server.
 
 ### objectName logger 
-Returns a logger instance
+Returns a logger instance.
 
 ### objectName destroy
 TclOO destructor. Flushes pending data and closes the TCP socket.
 
 ## Error handling
 All synchronous errors are raised using `throw {NATS <error_type>} human-readable message`. Asynchronous errors are sent to the logger and can also be queried using 
-`$obj cget -error`.
+`set ${obj}::last_error`.
 
 | Error type        | Reason   | 
 | ------------- |--------|

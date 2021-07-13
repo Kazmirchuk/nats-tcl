@@ -18,13 +18,13 @@ cd tests/cert
 test_utils::startNats NATS --tls --tlscert=server-cert.pem --tlskey=server-key.pem --tlscacert=rootCA.pem
 
 set conn [nats::connection new TLS_NATS]
-[$conn cget -logger]::setlevel info
+[$conn logger]::setlevel info
 
 # my certificates are self-signed and not known by the system, so Tcl should reject them
 test tls-1 "Try connecting to NATS without CA" -body {
     $conn configure -servers tls://localhost:4222
     $conn connect
-} -result {No servers in the pool} -returnCodes {error}
+} -match glob -result {*certificate verify failed} -returnCodes {error}
 
 test tls-2 "Connect to NATS using CA" -body {
     $conn configure -servers tls://localhost:4222 -tls_opts "-cafile rootCA.pem" -ping_interval 60000

@@ -165,6 +165,7 @@ namespace eval test_utils {
             return
         }
         processman::kill $id
+        puts stderr "[timestamp] Stopped $id"
     }
     proc timestamp {} {
         # workaround for not being able to format current time with millisecond precision

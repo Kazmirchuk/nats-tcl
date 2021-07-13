@@ -27,7 +27,7 @@ test error_checks-1 "Connect in verbose+pedantic mode with echo off" -body {
     test_utils::sleep 500
     set chanData [$obs getChanData]
     assert {$chanData eq {CONNECT {"verbose":true,"pedantic":true,"tls_required":false,"name":"","lang":"Tcl","version":"0.9","protocol":1,"echo":false}}} $chanData
-    assert {[$conn cget -status] eq "connected"}
+    assert {[set ${conn}::status] eq $nats::status_connected}
     $conn destroy
 } -result {}
 

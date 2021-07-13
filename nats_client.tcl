@@ -54,9 +54,12 @@ set ::nats::option_syntax {
 }
 
 oo::class create ::nats::connection {
+    # "private" variables
     variable config sock coro timers counters subscriptions requests serverInfo serverPool \
-             subjectRegex outBuffer randomChan requestsInboxPrefix pong logger \
-             last_error status ;# these 2 are "public", so that users can set up traces on them if needed
+             subjectRegex outBuffer randomChan requestsInboxPrefix pong logger
+    
+    # these 2 are "public", so that users can set up traces on them if needed
+    variable last_error status
 
     constructor { { conn_name "" } } {
         set status $nats::status_closed

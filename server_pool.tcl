@@ -90,7 +90,7 @@ oo::class create ::nats::server_pool {
             lappend servers $s
             break
         }
-        return [list [dict get $s host] [dict get $s port]]
+        return [my current_server]
     }
     
     method current_server_connected {ok} {

@@ -15,59 +15,35 @@
 namespace import ::tcltest::*
 tcltest::configure {*}$argv
 
-set subjectRegex {^[[:alnum:]_-]+$}
+set conn [nats::connection new]
 
-proc CheckSubject {subj} {
-    if {[string length $subj] == 0} {
-        return false
-    }
-    foreach token [split $subj .] {
-        if {![regexp -- $::subjectRegex $token]} {
-            return false
-        }
-    }
-    return true
-}
-
-proc CheckWildcard {subj} {
-    if {[string length $subj] == 0} {
-        return false
-    }
-    foreach token [split $subj .] {
-        if {[regexp -- $::subjectRegex $token] || $token == "*" || $token == ">" } {
-            continue
-        }
-        return false
-    }
-    return true
-}
-
+# access to a private method only for test purposes!
 test regex-1 "Check exact subjects" -body {
     # these are valid
-    assert {[CheckSubject foo]}
-    assert {[CheckSubject FOO.ba_r]}
-    assert {[CheckSubject foo1.bAr2.ba-z]}
+    assert {[${conn}::my CheckSubject foo]}
+    assert {[${conn}::my CheckSubject FOO.ba_r]}
+    assert {[${conn}::my CheckSubject foo1.bAr2.ba-z]}
     # these are invalid
-    assert {![CheckSubject ""]}
-    assert {![CheckSubject .]}
-    assert {![CheckSubject foo..bar]}
-    assert {![CheckSubject "foo. .bar"]}
-    assert {![CheckSubject "fOo. bar"]}
-    assert {![CheckSubject fo*o]}
-    assert {![CheckSubject foo.]}
+    assert {![${conn}::my CheckSubject ""]}
+    assert {![${conn}::my CheckSubject .]}
+    assert {![${conn}::my CheckSubject foo..bar]}
+    assert {![${conn}::my CheckSubject "foo. .bar"]}
+    assert {![${conn}::my CheckSubject "fOo. bar"]}
+    assert {![${conn}::my CheckSubject fo*o]}
+    assert {![${conn}::my CheckSubject foo.]}
 } -result {}
 
 test regex-2 "Check subjects with wildcards" -body {
-    assert {[CheckWildcard foo.*]}
-    assert {[CheckWildcard foo.bar]}
-    assert {[CheckWildcard foo]}
-    assert {[CheckWildcard foo.>]}
-    assert {[CheckWildcard *.foo.*]}
+    assert {[${conn}::my CheckWildcard foo.*]}
+    assert {[${conn}::my CheckWildcard foo.bar]}
+    assert {[${conn}::my CheckWildcard foo]}
+    assert {[${conn}::my CheckWildcard foo.>]}
+    assert {[${conn}::my CheckWildcard *.foo.*]}
     # invalid wildcards
-    assert {![CheckWildcard foo*]}
-    assert {![CheckWildcard foo>]}
-    assert {![CheckWildcard foo.*bar]}
-    assert {![CheckWildcard *foo.*]}
+    assert {![${conn}::my CheckWildcard foo*]}
+    assert {![${conn}::my CheckWildcard foo>]}
+    assert {![${conn}::my CheckWildcard foo.*bar]}
+    assert {![${conn}::my CheckWildcard *foo.*]}
 } -result {}
 
 cleanupTests

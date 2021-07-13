@@ -105,37 +105,6 @@ namespace eval test_utils {
             }
         }
     }
-    # a dummy service that after receiving a message waits for the specified time (ms) and then replies with the same message
-    oo::class create responder {
-        variable natsConn
-        constructor {subject} {
-            set natsConn [nats::connection new "Responder"]
-            $natsConn configure -servers nats://localhost:4222
-            $natsConn connect
-            $natsConn subscribe $subject -callback [mymethod echo]
-            # force flush
-            $natsConn ping
-        }
-        method echo {subj msg reply} {
-            lassign $msg delay payload
-            if {$delay != 0} {
-                #DO NOT USE test_utils::sleep HERE! otherwise the responder must run in a separate thread
-                after $delay [mymethod sendReply $reply $payload]
-                return
-            }
-            $natsConn publish $reply $payload
-            # force flush
-            $natsConn ping
-            
-        }
-        method sendReply {replySubj payload} {
-            $natsConn publish $replySubj $payload
-            $natsConn ping
-        }
-        destructor {
-            $natsConn destroy
-        }
-    }
     
     proc simpleCallback {subj msg reply} {
         variable simpleMsg
@@ -155,6 +124,7 @@ namespace eval test_utils {
         processman::spawn $id nats-server {*}$args
         sleep 500
     }
+    
     proc stopNats {id} {
         # processman::kill on Linux relies on odielib or Tclx packages that might not be available
         if {$::tcl_platform(platform) eq "unix"} {
@@ -167,6 +137,18 @@ namespace eval test_utils {
         processman::kill $id
         puts stderr "[timestamp] Stopped $id"
     }
+    
+    # processman::kill doesn't work reliably with tclsh, so instead we send a NATS message to stop the responder gracefully
+    proc startResponder {} {
+        set scriptPath [file join [file dirname [info script]] responder.tcl]
+        exec [info nameofexecutable] $scriptPath &
+        sleep 1000
+    }
+    
+    proc stopResponder {conn} {
+        $conn publish service [list 0 exit]
+    }
+    
     proc timestamp {} {
         # workaround for not being able to format current time with millisecond precision
         # should not be needed in Tcl 8.7, see https://core.tcl-lang.org/tips/doc/trunk/tip/423.md

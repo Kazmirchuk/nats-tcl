@@ -16,6 +16,7 @@ namespace import ::tcltest::*
 
 cd tests/cert
 test_utils::startNats NATS --tls --tlscert=server-cert.pem --tlskey=server-key.pem --tlscacert=rootCA.pem
+cd ../..
 
 set conn [nats::connection new TLS_NATS]
 [$conn logger]::setlevel info
@@ -30,8 +31,6 @@ test tls-2 "Connect to NATS using CA" -body {
     $conn configure -servers tls://localhost:4222 -tls_opts "-cafile rootCA.pem" -ping_interval 60000
     $conn connect
 } -result {}
-
-cd ../..
 
 $conn destroy
 test_utils::stopNats NATS

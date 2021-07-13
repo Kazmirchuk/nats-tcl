@@ -31,7 +31,7 @@ trace add variable ${conn}::status write [lambda {var idx op } {
 
 $conn configure -servers nats://localhost:4222
 
-set responder [test_utils::responder new service]
+test_utils::startResponder
 
 test basic-1 "Connect NATS" -body {
     # we need to connect asynchronously to be able to catch the CONNECT message
@@ -149,7 +149,7 @@ test basic-7 "Sending and receiving a binary message" -body {
     assert { $test_utils::simpleMsg eq $binString } [binary encode hex $test_utils::simpleMsg]
 }
 
-$responder destroy
+test_utils::stopResponder $conn
 $conn destroy
 test_utils::stopNats NATS
 cleanupTests

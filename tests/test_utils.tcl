@@ -1,16 +1,7 @@
 # Copyright (c) 2020 Petro Kazmirchuk https://github.com/Kazmirchuk
 
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
 package require tcl::transform::observe
 package require tcl::chan::variable
@@ -123,6 +114,7 @@ namespace eval test_utils {
     proc startNats {id args} {
         processman::spawn $id nats-server {*}$args
         sleep 500
+        puts stderr "[nats::timestamp] Started $id"
     }
     
     proc stopNats {id} {
@@ -135,7 +127,7 @@ namespace eval test_utils {
             return
         }
         processman::kill $id
-        puts stderr "[timestamp] Stopped $id"
+        puts stderr "[nats::timestamp] Stopped $id"
     }
     
     # processman::kill doesn't work reliably with tclsh, so instead we send a NATS message to stop the responder gracefully
@@ -147,16 +139,5 @@ namespace eval test_utils {
     
     proc stopResponder {conn} {
         $conn publish service [list 0 exit]
-    }
-    
-    proc timestamp {} {
-        # workaround for not being able to format current time with millisecond precision
-        # should not be needed in Tcl 8.7, see https://core.tcl-lang.org/tips/doc/trunk/tip/423.md
-        set t [clock milliseconds]
-        set timeStamp [format "%s.%03d" \
-                          [clock format [expr {$t / 1000}] -format %T] \
-                          [expr {$t % 1000}] \
-                      ]
-        return $timeStamp
     }
 }

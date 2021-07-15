@@ -1,16 +1,7 @@
 # Copyright (c) 2021 Petro Kazmirchuk https://github.com/Kazmirchuk
 
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
 package require uri
 package require json::write
@@ -70,19 +61,24 @@ oo::class create ::nats::server_pool {
     
     method next_server {} {
         upvar #0 ${conn}::config config
+        upvar #0 ${conn}::status status
         
         while {1} {
             if { [llength $servers] == 0 } {
-                throw {NATS NO_SERVERS} "No servers available for connection"
+                throw {NATS NO_SERVERS} "Server pool is empty"
             }
-            set now [clock seconds]
+            
             #"pop" a server; using struct::queue seems like an overkill for such a small list
             set s [lindex $servers 0]
+            # during initial connecting process we go through the pool only once
+            if {$status == $nats::status_connecting && [dict get $s reconnects]}  {
+                throw {NATS NO_SERVERS} "No servers available for connection"
+            }
             set servers [lreplace $servers 0 0]
             if {$config(max_reconnect_attempts) > 0 && [dict get $s reconnects] > $config(max_reconnect_attempts)} {
                 continue ;# remove the server from the pool
             }
-            
+            set now [clock seconds]
             if {$now < [expr {[dict get $s last_attempt] + $config(reconnect_time_wait)}]} {
                 coroutine::util after $config(reconnect_time_wait)
             }
@@ -135,5 +131,15 @@ oo::class create ::nats::server_pool {
     
     method clear {} {
         set servers [list]
+    }
+    
+    method reset_counters {} {
+        set new_list [list]
+        foreach s $servers {
+            dict set s last_attempt 0
+            dict set s reconnects 0
+            lappend new_list $s
+        }
+        set servers $new_list
     }
 }

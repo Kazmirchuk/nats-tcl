@@ -1,17 +1,7 @@
 # Copyright (c) 2020 Petro Kazmirchuk https://github.com/Kazmirchuk
 
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
 package require cmdline
 package require json
@@ -21,12 +11,14 @@ package require tcl::chan::random
 package require tcl::randomseed
 package require coroutine
 package require logger
+package require control
 
 namespace eval ::nats {
     # improvised enum
     variable status_closed 0
     variable status_connecting 1
     variable status_connected 2
+    variable status_reconnecting 3
 }
 # all options for "configure"
 # due to a bug, when I pass a list to cmdline::typedGetoptions, it is returned wrapped in extra braces
@@ -58,8 +50,8 @@ oo::class create ::nats::connection {
     variable config sock coro timers counters subscriptions requests serverInfo serverPool \
              subjectRegex outBuffer randomChan requestsInboxPrefix pong logger
     
-    # these 2 are "public", so that users can set up traces on them if needed
-    variable last_error status
+    # "public" variables, so that users can set up traces if needed
+    variable status last_error
 
     constructor { { conn_name "" } } {
         set status $nats::status_closed
@@ -79,14 +71,21 @@ oo::class create ::nats::connection {
             append loggerName "_$conn_name"
         }
         set logger [logger::init $loggerName]
-        # default level in the logger package is debug, it's too verbose
+        # default timestamp of the logger looks like Tue Jul 13 15:16:58 CEST 2021, which is not very useful
+        # and there's no documented way to customize it
+        proc ${logger}::stdoutcmd {level text} {
+            variable service
+            puts "\[[nats::timestamp] $service $level\] $text"
+        }
+        
+        # default level in the logger is debug, it's too verbose
         ${logger}::setlevel warn
         
         set sock "" ;# the TCP socket
         set coro "" ;# the coroutine handling readable and writeable events on the socket
         array set timers {ping {} flush {} connect {} }
         array set counters {subscription 0 request 0}
-        array set subscriptions {} ;# subID -> dict (cmd , remMsg)
+        array set subscriptions {} ;# subID -> dict (subj, queue, cmd, maxMsgs, recMsgs)
         # async reqs: reqID -> {1 timer callback} ; sync requests: reqID -> {0 timedOut response}
         # RequestCallback needs to distinguish between sync and async, so we need 0/1 in front
         array set requests {} 
@@ -181,20 +180,25 @@ oo::class create ::nats::connection {
         if {$status != $nats::status_closed} {
             return
         }
+        
+        if {[llength [$serverPool all_servers]] == 0} {
+            throw {NATS NO_SERVERS} "Server pool is empty"
+        }
+        $serverPool reset_counters
+        
         # this coroutine will handle all work to connect and read from the socket
         coroutine coro {*}[mymethod CoroMain]
         # now try connecting to the first server
+        set status $nats::status_connecting
         $coro connect
         if {!$async} {
             ${logger}::debug "Waiting for connection"
-            if {[info coroutine] eq ""} {
-                vwait [self object]::status
-            } else {
-                coroutine::util vwait [self object]::status
-            }
+            my CoroVwait [self object]::status
             if {$status != $nats::status_connected} {
-                throw {NATS CONNECT_FAIL} $last_error
+                #NTH: report a more specific error like AUTH_FAILED,TLS_FAILED if server pool=1? check with other NATS clients
+                throw {NATS CONNECT_FAILED} "No NATS servers available"
             }
+            ${logger}::debug "Finished waiting for connection"
         }
     }
     
@@ -227,6 +231,7 @@ oo::class create ::nats::connection {
         my CheckConnection
         set queue ""
         set callback ""
+        set maxMsgs 0
         foreach {opt val} $args {
             switch -- $opt {
                 -queue {
@@ -235,8 +240,11 @@ oo::class create ::nats::connection {
                 -callback {
                     set callback $val
                 }
+                -max_msgs {
+                    set maxMsgs $val
+                }
                 default {
-                    throw {NATS INVALID_ARG} "Unknown option $args"
+                    throw {NATS INVALID_ARG} "Unknown option $opt"
                 }
             }
         }
@@ -248,41 +256,62 @@ oo::class create ::nats::connection {
         if {[string length $callback] == 0} {
             throw {NATS INVALID_ARG} "Invalid callback"
         }
+        
+        if {! ([string is integer -strict $maxMsgs] && $maxMsgs >= 0)} {
+            throw {NATS INVALID_ARG} "Invalid max_msgs $maxMsgs"
+        }
+        
         #rules for queue names are more relaxed than for subjects
         if {$queue ne "" && ![string is graph $queue]} {
             throw {NATS INVALID_ARG} "Invalid queue group $queue"
         }
                                    
         set subID [incr counters(subscription)]
-        #remMsg -1 means "unlimited"
-        set subscriptions($subID) [dict create cmd $callback remMsg -1]
+        set subscriptions($subID) [dict create subj $subject queue $queue cmd $callback maxMsgs $maxMsgs recMsgs 0]
         
         #the format is SUB <subject> [queue group] <sid>
-        set data "SUB $subject $queue $subID"
-        lappend outBuffer $data
+        if {$status != $nats::status_reconnecting} {
+            # it will be sent anyway when we reconnect
+            lappend outBuffer "SUB $subject $queue $subID"
+        }
         return $subID
     }
     
-    method unsubscribe {subID {maxMessages 0}} {
+    method unsubscribe {subID args} {
         my CheckConnection
+        set maxMsgs 0
+        foreach {opt val} $args {
+            switch -- $opt {
+                -max_msgs {
+                    set maxMsgs $val
+                }
+                default {
+                    throw {NATS INVALID_ARG} "Unknown option $opt"
+                }
+            }
+        }
+        
+        if {! ([string is integer -strict $maxMsgs] && $maxMsgs >= 0)} {
+            throw {NATS INVALID_ARG} "Invalid max_msgs $maxMsgs"
+        }
         
         if {![info exists subscriptions($subID)]} {
             throw {NATS INVALID_ARG} "Invalid subscription ID $subID"
         }
         
-        if {! ([string is integer -strict $maxMessages] && $maxMessages >= 0)} {
-            throw {NATS INVALID_ARG} "Invalid maxMessages $maxMessages"
-        }
-        
         #the format is UNSUB <sid> [max_msgs]
-        if {$maxMessages == 0} {
+        if {$maxMsgs == 0} {
             unset subscriptions($subID)
             set data "UNSUB $subID"
         } else {
-            dict update subscriptions($subID) remMsg v {set v $maxMessages}
-            set data "UNSUB $subID $maxMessages"
+            #TODO: should i set rec other clients don't
+            dict set subscriptions($subID) maxMsgs $maxMsgs
+            set data "UNSUB $subID $maxMsgs"
         }
-        lappend outBuffer $data
+        if {$status != $nats::status_reconnecting} {
+            # it will be sent anyway when we reconnect
+            lappend outBuffer $data
+        }
     }
     
     method request {subject message args} {
@@ -292,14 +321,17 @@ oo::class create ::nats::connection {
         foreach {opt val} $args {
             switch -- $opt {
                 -timeout {
+                    my CheckTimeout $val
                     set timeout $val
                 }
                 -callback {
                     set callback $val
                 }
+                default {
+                    throw {NATS INVALID_ARG} "Unknown option $opt"
+                }
             }
         }
-        my CheckTimeout $timeout
         
         if {$requestsInboxPrefix eq ""} {
             set requestsInboxPrefix [my inbox]
@@ -318,11 +350,7 @@ oo::class create ::nats::connection {
             # we don't want to wait for the flusher here, call it now, but don't schedule one more
             my Flusher 0
             set requests($reqID) [list 0]
-            if {[info coroutine] eq ""} {
-                vwait [self object]::requests($reqID)
-            } else {
-                coroutine::util vwait [self object]::requests($reqID)
-            }
+            my CoroVwait [self object]::requests($reqID)
             lassign $requests($reqID) ignored timedOut response
             unset requests($reqID)
             if {$timedOut} {
@@ -339,21 +367,17 @@ oo::class create ::nats::connection {
     }
     
     method ping { {timeout -1} } {
-        my CheckTimeout $timeout
         if {$status != $nats::status_connected} {
             return false
         }
-        lappend outBuffer "PING"
         set timerID ""
         if {$timeout != -1} {
+            my CheckTimeout $timeout
             set timerID [after $timeout [list set [self object]::pong 0]]
         }
+        lappend outBuffer "PING"
         my Flusher 0
-        if {[info coroutine] eq ""} {
-            vwait [self object]::pong
-        } else {
-            coroutine::util vwait [self object]::pong
-        }
+        my CoroVwait [self object]::pong
         if {$pong} {
             after cancel $timerID
             return true
@@ -393,15 +417,23 @@ oo::class create ::nats::connection {
     
     method CloseSocket { {broken 0} } {
         chan event $sock readable {}
-        # make sure we wait until successful flush, if connection was not broken
-        if {!$broken} {
+        # this method is only for closing an established connection
+        # it is not convenient to re-use it for all cases of close $sock
+        # because it does a lot of other work
+        control::assert {$status == $nats::status_connected}
+        if {$broken} {
+            $serverPool current_server_connected false
+            set status $nats::status_reconnecting
+        } else {
+            # make sure we wait until successful flush, if connection was not broken
+            # TODO do it only for destructor? before exiting process
             chan configure $sock -blocking 1
+            lassign [$serverPool current_server] host port
+            ${logger}::info "Closing connection to $host:$port" ;# in case of broken socket, the error will be logged elsewhere
         }
-        # note: all buffered input is discarded, all buffered output is flushed
-        ${logger}::info "Closing socket"
-        close $sock
+        close $sock ;# all buffered input is discarded, all buffered output is flushed
         set sock ""
-        unset serverInfo ;# when the variable is re-created, Tcl will remember that this is a data member, not just a local variable
+        array unset serverInfo
         after cancel $timers(ping)
         after cancel $timers(flush)
         
@@ -410,7 +442,6 @@ oo::class create ::nats::connection {
                 $coro stop
             }
         }
-        # note that we don't set status here, because it can be "closed" or "connecting" depending on a caller
     }
     
     method Pinger {} {
@@ -424,14 +455,16 @@ oo::class create ::nats::connection {
             # when this method is called manually, scheduleNext == 0
             set timers(flush) [after $config(flush_interval) [mymethod Flusher]]
         }
-        foreach msg $outBuffer {
-            append msg "\r\n"
-            puts -nonewline $sock $msg
-        }
         try {
+            foreach msg $outBuffer {
+                append msg "\r\n"
+                puts -nonewline $sock $msg
+            }
             chan flush $sock
         } on error err {
-            ${logger}::error $err
+            lassign [$serverPool current_server] host port
+            ${logger}::error "Failed to send data to $host:$port: $err"
+            my AsyncError BROKEN_SOCKET $err
             my CloseSocket 1
             $coro connect
         }
@@ -439,17 +472,20 @@ oo::class create ::nats::connection {
         set outBuffer [list]
     }
     
+    method CoroVwait {var} {
+        if {[info coroutine] eq ""} {
+            vwait $var
+        } else {
+            coroutine::util vwait $var
+        }
+    }
+    
     # --------- these procs execute in the coroutine ---------------
     # connect to Nth server in the pool
     method ConnectNextServer {} {
-        try {
-            lassign [$serverPool next_server] host port
-        } trap {NATS NO_SERVERS} err {
-            set last_error $err
-            after 0 [list $coro stop] ;# you cannot invoke a coroutine from inside the same coroutine
-            return
-        }
-        set status $nats::status_connecting
+        # if it throws NO_SERVERS, we have exhausted all servers in the pool
+        # we must stop the coroutine, so let the error propagate
+        lassign [$serverPool next_server] host port
         ${logger}::info "Connecting to the server at $host:$port"
         set sock [socket -async $host $port]
         chan event $sock writable [list $coro connected]
@@ -480,11 +516,30 @@ oo::class create ::nats::connection {
         set jsonMsg [json::write::object {*}$connectParams]
         json::write::indented $ind
         lappend outBuffer "CONNECT $jsonMsg"
+        #TODO check for ok auth before declaring success
         set last_error ""
+        $serverPool current_server_connected true
+        lassign [$serverPool current_server] host port
+        ${logger}::info "Connected to the server at $host:$port"
         # exit from vwait in "connect"
         set status $nats::status_connected
-        my Flusher
+        my RestoreSubs
+        my Flusher ;# flush the buffer now if it has any data
         set timers(ping) [after $config(ping_interval) [mymethod Pinger]]
+    }
+    
+    method RestoreSubs {} {
+        foreach subID [array names subscriptions] {
+            set subject [dict get $subscriptions($subID) subj]
+            set queue [dict get $subscriptions($subID) queue]
+            set maxMsgs [dict get $subscriptions($subID) maxMsgs]
+            set recMsgs [dict get $subscriptions($subID) recMsgs]
+            lappend outBuffer "SUB $subject $queue $subID"
+            if {$maxMsgs > 0} {
+                set remainingMsgs [expr {$maxMsgs - $recMsgs}]
+                lappend outBuffer "UNSUB $subID $remainingMsgs"
+            }
+        }
     }
     
     method INFO {cmd} {
@@ -518,13 +573,14 @@ oo::class create ::nats::connection {
             try {
                 tls::handshake $sock
             } on error err {
-                ${logger}::error "TLS handshake failed: $err"
-                set last_error "TLS handshake failed: $err"
-                chan close $sock
+                ${logger}::error "TLS handshake with server $host:$port failed: $err"
+                my AsyncError TLS_FAILED $err
+                close $sock
                 # TODO no point in trying to reconnect to it, so remove it from the pool
                 # set serverPool [lreplace serverPool $counters(curServer) $counters(curServer)]
                 # nats.py doesn't do it?
-                my ConnectNextServer
+                $serverPool current_server_connected false
+                my ConnectNextServer ;#TODO replace
                 return
             }
             chan configure $sock -blocking 0
@@ -549,7 +605,7 @@ oo::class create ::nats::connection {
         while {1} {
             append messageBody [chan read $sock $remainingBytes]
             if {[eof $sock]} {
-                # server closed the socket - Tcl will invoke "CoroMain readable" again,
+                # server closed the socket - Tcl will invoke "CoroMain readable" again and close the socket
                 # so no need to do anything here
                 return
             }
@@ -567,8 +623,7 @@ oo::class create ::nats::connection {
                     continue
                 }
                 stop {
-                    set status $nats::status_closed
-                    return -code break "" ;# break from the loop in CoroMain - is there a more elegant way?
+                    throw {NATS STOP_CORO} "Stop coroutine" ;# break from the main loop
                 }
                 default {
                     ${logger}::error "MSG: unknown reason $reason"
@@ -577,23 +632,26 @@ oo::class create ::nats::connection {
         }
         # revert to our default translation
         chan configure $sock -translation {crlf binary}
-        # remove the trailing crlf; is it efficient on large messages?
-        set messageBody [string range $messageBody 0 end-2]
+        
         if {[info exists subscriptions($subID)]} {
-            # post the event
+            # remove the trailing crlf; is it efficient on large messages?
+            set messageBody [string range $messageBody 0 end-2]
+            
+            set maxMsgs [dict get $subscriptions($subID) maxMsgs]
+            set recMsgs [dict get $subscriptions($subID) recMsgs]
+            
             set cmdPrefix [dict get $subscriptions($subID) cmd]
-            # schedule execution of a user's callback
             after 0 [list {*}$cmdPrefix $subject $messageBody $replyTo]
-            set remainingMsg [dict get $subscriptions($subID) remMsg]
-            if {$remainingMsg == 1} {
-                unset subscriptions($subID)
-            } elseif {$remainingMsg > 1} {
-                dict update subscriptions($subID) remMsg v {incr v -1}
+            
+            incr recMsgs
+            if {$maxMsgs > 0 && $maxMsgs == $recMsgs} {
+                unset subscriptions($subID) ;# UNSUB has already been sent, no need to do it here
+            } else {
+                dict set subscriptions($subID) recMsgs $recMsgs
             }
         } else {
-            ${logger}::debug "Unexpected message with subID $subID"
+            # if we unsubscribe while there are pending incoming messages, we may get here - nothing to do
         }
-        
         # now we return back to CoroMain and enter "yield" there
     }
     
@@ -611,81 +669,117 @@ oo::class create ::nats::connection {
     
     method ERR {cmd} {
         ${logger}::error $cmd
+        my AsyncError SERVER_ERR $cmd
     }
     
     method CoroMain {} {
         set coro [info coroutine]
         ${logger}::debug "Started coroutine $coro"
-        while {1} {
-            set reason [yield]
-            switch -- $reason {
-                connect {
-                    my ConnectNextServer
-                }
-                connected - connect_timeout {
-                    # this event will arrive again and again if we don't disable it
-                    chan event $sock writable {}
-                    if { $reason eq "connected"} {
-                        after cancel $timers(connect)
-                        # the socket either connected or failed to connect
-                        set errorMsg [chan configure $sock -error]
-                        if { $errorMsg ne "" } {
-                            ${logger}::error "Failed to connect to server $serverPool  : $errorMsg"
-                            set last_error $errorMsg
-                            chan close $sock
-                            my ConnectNextServer
-                            continue
-                        }
-                        # connection succeeded
-                        # we want to call "flush" ourselves, so use -buffering full
-                        # NATS protocol uses crlf as a delimiter
-                        # when reading from socket, it's easier to let Tcl do EOL translation, unless we are in method MSG
-                        # when writing to socket, we need to turn off the translation when sending a message payload
-                        # but outBuffer doesn't know which element is a message, so it's easier to write CR+LF ourselves
-                        chan configure $sock -translation {crlf binary} -blocking 0 -buffering full -encoding binary
-                        chan event $sock readable [list $coro readable]
-                    } else {
-                        chan close $sock
-                        ${logger}::warn "NATS server timed out"
-                        set last_error "Connection timeout"
-                        my ConnectNextServer
-                    }
-                }
-                readable {
-                    # confirmed by testing: apparently the Tcl TCP is implemented like:
-                    # 1. send "readable" event
-                    # 2. any bytes left in the input buffer? send the event again
-                    # so, it simplifies my work here - even if I don't read all available bytes with this "chan gets",
-                    # the coroutine will be invoked again as soon as a complete line is available
-                    set readCount [chan gets $sock line]
-                    #MAX_CONTROL_LINE_SIZE = 1024
-                    if {$readCount < 0} {
-                        if {[eof $sock]} { 
-                            # server closed the socket
-                            my CloseSocket 1
-                            my ConnectNextServer
-                        }
-                        # else - we don't have a full line yet - wait for next chan event
-                        continue
-                    }
-                    # extract the first word from the line (INFO, MSG etc)
-                    # protocol_arg will be empty in case of PING/PONG/OK
-                    set protocol_arg [lassign $line protocol_op]
-                    # in case of -ERR or +OK
-                    set protocol_op [string trimleft $protocol_op -+]
-                    my $protocol_op $protocol_arg
-                    #TODO: handle protocol violation
-                }
-                stop {
-                    set status $nats::status_closed
+        try {
+            while {1} {
+                set reason [yield]
+                if {$reason eq "stop"} {
                     break
                 }
-                default {
+                if {$reason ni [list connect connected connect_timeout readable]} {
                     ${logger}::error "CoroMain: unknown reason $reason"
+                }
+                my ProcessEvent $reason
+            }
+        } trap {NATS STOP_CORO} {msg opts} {
+            # we get here after call to "disconnect" during MSG; the socket has been already closed,
+            # so we only need to update the status
+        } trap {NATS} {msg opts} {
+            #todo: try yieldto? 
+            #my AsyncError [lindex [dict get $opts -errorcode] 1] $msg
+            #NO_SERVERS error from next_server leads here; don't overwrite the real last_error
+            ${logger}::error $msg
+        } trap {} {msg opts} {
+            ${logger}::error "Unexpected error: $msg $opts"
+        } finally {}
+        set status $nats::status_closed
+        ${logger}::debug "Finished coroutine $coro"
+    }
+    
+    method ProcessEvent {reason} {
+        switch -- $reason {
+            connect {
+                my ConnectNextServer
+            }
+            connected - connect_timeout {
+                # this event will arrive again and again if we don't disable it
+                chan event $sock writable {}
+                lassign [$serverPool current_server] host port
+                if { $reason eq "connected"} {
+                    after cancel $timers(connect)
+                    # the socket either connected or failed to connect
+                    set errorMsg [chan configure $sock -error]
+                    if { $errorMsg ne "" } {
+                        ${logger}::error "Failed to connect to server $host:$port: $errorMsg"
+                        my AsyncError CONNECT_FAILED $errorMsg
+                        close $sock
+                        $serverPool current_server_connected false
+                        my ConnectNextServer
+                        return
+                    }
+                    # connection succeeded
+                    # we want to call "flush" ourselves, so use -buffering full
+                    # NATS protocol uses crlf as a delimiter
+                    # when reading from socket, it's easier to let Tcl do EOL translation, unless we are in method MSG
+                    # when writing to socket, we need to turn off the translation when sending a message payload
+                    # but outBuffer doesn't know which element is a message, so it's easier to write CR+LF ourselves
+                    chan configure $sock -translation {crlf binary} -blocking 0 -buffering full -encoding binary
+                    chan event $sock readable [list $coro readable]
+                } else {
+                    close $sock
+                    ${logger}::error "Connection timeout for $host:$port"
+                    my AsyncError CONNECT_TIMEOUT "Connection timeout for $host:$port"
+                    $serverPool current_server_connected false
+                    my ConnectNextServer
+                }
+            }
+            readable {
+                # confirmed by testing: apparently the Tcl TCP is implemented like:
+                # 1. send "readable" event
+                # 2. any bytes left in the input buffer? send the event again
+                # so, it simplifies my work here - even if I don't read all available bytes with this "chan gets",
+                # the coroutine will be invoked again as soon as a complete line is available
+                #TODO do i need catch around gets? if remote end aborts network connection
+                set readCount [chan gets $sock line]
+                if {[chan pending input $sock] > 1024} {
+                    # max length of control line in the NATS protocol is 1024 (see MAX_CONTROL_LINE_SIZE in nats.py)
+                    # this should not happen unless the NATS server is malfunctioning
+                    ${logger}::error "Maximum control line exceeded"
+                    my AsyncError SERVER_ERR "Maximum control line exceeded"
+                    my CloseSocket 1
+                    my ConnectNextServer
+                    return
+                }
+                if {$readCount < 0} {
+                    if {[eof $sock]} { 
+                        # server closed the socket
+                        #set err [chan configure $sock -error] - no point in this, $err will be blank
+                        lassign [$serverPool current_server] host port
+                        ${logger}::error "Failed to read data from $host:$port"
+                        my AsyncError BROKEN_SOCKET "Failed to read from socket"
+                        my CloseSocket 1
+                        my ConnectNextServer
+                    }
+                    # else - we don't have a full line yet - wait for next chan event
+                    return
+                }
+                # extract the first word from the line (INFO, MSG etc)
+                # protocol_arg will be empty in case of PING/PONG/OK
+                set protocol_arg [lassign $line protocol_op]
+                # in case of -ERR or +OK
+                set protocol_op [string trimleft $protocol_op -+]
+                if {$protocol_op in [list MSG INFO ERR OK PING PONG]} {
+                    my $protocol_op $protocol_arg
+                } else {
+                    ${logger}::warn "Invalid protocol $protocol_op"
                 }
             }
         }
-        ${logger}::debug "Finished coroutine $coro"
     }
     
     # ------------ coroutine end -----------------------------------------
@@ -722,11 +816,26 @@ oo::class create ::nats::connection {
     }
     
     method CheckTimeout {timeout} {
-        if {$timeout != -1} {
-            if {! ([string is integer -strict $timeout] && $timeout > 0)} {
-                throw {NATS INVALID_ARG} "Invalid timeout $timeout"
-            }
+        if {! ([string is integer -strict $timeout] && $timeout > 0)} {
+            throw {NATS INVALID_ARG} "Invalid timeout $timeout"
         }
+    }
+    
+    method AsyncError {code msg} {
+        set last_error [dict create code "NATS $code" message $msg]
+    }
+}
+
+namespace eval ::nats {
+    proc timestamp {} {
+        # workaround for not being able to format current time with millisecond precision
+        # should not be needed in Tcl 8.7, see https://core.tcl-lang.org/tips/doc/trunk/tip/423.md
+        set t [clock milliseconds]
+        set timeStamp [format "%s.%03d" \
+                          [clock format [expr {$t / 1000}] -format %T] \
+                          [expr {$t % 1000}] \
+                      ]
+        return $timeStamp
     }
 }
 

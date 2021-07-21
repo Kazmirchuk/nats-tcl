@@ -4,9 +4,11 @@
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
 namespace import ::tcltest::test
+namespace import test_utils::*
+
 tcltest::configure {*}$argv
 
-test_utils::startNats NATS
+startNats NATS
 
 set conn [nats::connection new "BasicNats"]
 # available logger severity levels: debug info notice warn error critical alert emergency
@@ -24,90 +26,120 @@ trace add variable ${conn}::last_error write [lambda {var idx op } {
 
 $conn configure -servers nats://localhost:4222
 
-test_utils::startResponder
+startResponder
 
 test basic-1 "Connect NATS" -body {
     # we need to connect asynchronously to be able to catch the CONNECT message
     $conn connect -async
-    set obs [test_utils::chanObserver new [set ${::conn}::sock] w]
-    test_utils::sleep 500
+    set obs [test_utils::chanObserver new $conn w]
+    while {[set ${conn}::status] ne $nats::status_connected} {
+        vwait ${conn}::status
+    }
     set chanData [$obs getChanData]
     assert {$chanData eq {CONNECT {"verbose":false,"pedantic":false,"tls_required":false,"name":"BasicNats","lang":"Tcl","version":"0.9","protocol":1,"echo":true}}} $chanData
     $obs destroy
-    expr {[set ${conn}::status] == 2}
-} -result {1}
+    set ${conn}::last_error
+} -result {}
 
 test basic-2 "Subscribe to a message" -body {
-    set obs [test_utils::chanObserver new [set ${::conn}::sock] w]
+    set obs [test_utils::chanObserver new $conn w]
     set sub_id [$conn subscribe subject1 -callback test_utils::simpleCallback]
-    test_utils::sleep 1000
+    wait_flush $conn
     set chanData [$obs getChanData]
     # double space is not accidental
-    assert {$chanData eq {SUB subject1  1}} $chanData
+    assert {$chanData eq "SUB subject1  $sub_id"} $chanData
     $obs destroy
     set sub_id
 }  -result {1} 
 
 test basic-3 "Publish a message" -body {
-    set obs [test_utils::chanObserver new [set ${::conn}::sock] w]
-    $conn publish subject1 hello
-    vwait test_utils::simpleMsg
-    set chanData [$obs getChanData]
-    assert {$chanData eq {PUB subject1  5}} $chanData
+    set obs [chanObserver new $conn b]
+    duration {
+        $conn publish subject1 hello
+        vwait test_utils::simpleMsg
+    } elapsed
+    lassign [$obs getChanData] readData writtenData
+    assert {$writtenData eq {PUB subject1  5}} $writtenData
+    assert {$readData eq "MSG subject1 $sub_id 5"} $readData
+    assert {$elapsed < 1000} $elapsed ;# time to flush and receive MSG from the server
     $obs destroy
     set test_utils::simpleMsg
 } -result {hello} 
 
 test basic-4 "Unsubscribe and publish again" -body {
-    set obs [test_utils::chanObserver new [set ${::conn}::sock] w]
+    set obs [chanObserver new $conn b]
     $conn unsubscribe $sub_id
     $conn publish subject1 "one more hello"
-    test_utils::sleep 500
-    set chanData [$obs getChanData]
-    assert {$chanData eq "UNSUB $sub_id"} $chanData
+    duration {
+        wait_flush $conn
+    } elapsed
+    lassign [$obs getChanData 0] readData writtenData
+    assert {[lindex $writtenData 0] eq "UNSUB $sub_id"} $writtenData
+    assert {[lindex $writtenData 1] eq "PUB subject1  [string length {one more hello}]"} $writtenData
+    assert {$elapsed < 600} $elapsed ;# time to flush
+    # check that the server did not send MSG back
+    assert {[llength $readData] == 0} $readData
     $obs destroy
     set test_utils::simpleMsg
 } -result {hello} 
 
 test basic-5.1 "Synchronous request" -body {
-    set obs [test_utils::chanObserver new [set ${::conn}::sock] b]
-    set result [$conn request service "0 hello"]
+    set obs [chanObserver new $conn b]
+    duration {
+        set result [$conn request service "0 hello"]
+    } elapsed
+    assert {$elapsed < 400} $elapsed ;# flush is immediate; actual roundtrip time on localhost ~40ms
     lassign [$obs getChanData 0] rdata wdata
     $obs destroy
     set result
 } -result {hello} 
 
 test basic-5.2 "Synchronous request - written to socket" -body {
-    lassign [split $wdata \n] sub pub payload
+    lassign $wdata sub pub payload
     # the first request starts with subscribing to INBOX.<random>.*
     assert {[regexp {SUB _INBOX.*.\*  ([[:digit:]]+)} $sub -> subID]}
     assert {[regexp {PUB service _INBOX.*.1 (.*)} $pub -> msg_length]}
-    assert {$payload eq "0 hello"}
     assert {$msg_length == [string length $payload]}
-} 
+    set payload
+} -result {0 hello} 
 
 test basic-5.3 "Synchronous request - read from socket" -body {
-    lassign [split $rdata \n] msg payload
+    lassign $rdata msg payload
     assert {[regexp {MSG _INBOX.*.1 ([[:digit:]]+) (.*)} $msg -> subID2 msg_length]}
-    assert {$payload eq "hello"}
     assert {$msg_length == [string length $payload]}
     assert {$subID == $subID2}
-}
+    set payload
+} -result {hello} 
 
 test basic-5.4 "Synchronous request with timeout - success" -body {
-    $conn request service "500 sync_req" -timeout 600
+    duration {
+        set result [$conn request service "500 sync_req" -timeout 600]
+    } elapsed
+    assert {$elapsed >= 500 && $elapsed < 600} $elapsed
+    set result
 } -result {sync_req} 
 
 test basic-5.5 "Synchronous request with timeout - failure" -body {
-    $conn request service "600 sync_req" -timeout 500
+    duration {
+        $conn request service "600 sync_req" -timeout 500
+    } elapsed
+    assert {$elapsed >= 500 && $elapsed < 590} $elapsed
 } -returnCodes {error} -result {Request to service timed out}
 
 # wait until the delayed message arrives
-test_utils::sleep 500
+sleep 500
 
 test basic-6.1 "Asynchronous request" -body {
-    $conn request service "0 async_req" -callback test_utils::asyncReqCallback
-    vwait test_utils::simpleMsg
+    duration {
+        $conn request service "100 async_req" -callback test_utils::asyncReqCallback
+    } elapsed
+    assert {$elapsed < 50} $elapsed ;# async request returns immediately
+    
+    duration {
+        vwait test_utils::simpleMsg
+    } elapsed
+    assert {$elapsed >= 100 && $elapsed < 500} $elapsed
+    
     set test_utils::simpleMsg
 } -result {async_req}
 
@@ -144,7 +176,7 @@ test basic-7 "Sending and receiving a binary message" -body {
 
 # check all config options
 
-test_utils::stopResponder $conn
+stopResponder $conn
 $conn destroy
-test_utils::stopNats NATS
+stopNats NATS
 tcltest::cleanupTests

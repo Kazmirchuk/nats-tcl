@@ -55,7 +55,8 @@ oo::class create ::nats::connection {
 
     constructor { { conn_name "" } } {
         set status $nats::status_closed
-
+        set last_error ""
+        
         # initialise default configuration
         # we need it because untyped options with default value "" are not returned by cmdline::typedGetoptions at all
         foreach option $nats::option_syntax {
@@ -185,6 +186,7 @@ oo::class create ::nats::connection {
             throw {NATS NO_SERVERS} "Server pool is empty"
         }
         $serverPool reset_counters
+        set last_error ""
         
         # this coroutine will handle all work to connect and read from the socket
         coroutine coro {*}[mymethod CoroMain]
@@ -517,7 +519,6 @@ oo::class create ::nats::connection {
         json::write::indented $ind
         lappend outBuffer "CONNECT $jsonMsg"
         #TODO check for ok auth before declaring success
-        set last_error ""
         $serverPool current_server_connected true
         lassign [$serverPool current_server] host port
         ${logger}::info "Connected to the server at $host:$port"
@@ -559,7 +560,8 @@ oo::class create ::nats::connection {
         }
         # we are establishing a new connection...
         # example info
-        #{"server_id":"kfNjUNirYU3tRVC7akGOcS","version":"1.4.1","proto":1,"go":"go1.11.5","host":"0.0.0.0","port":4222,"max_payload":1048576,"client_id":3}
+        #{"server_id":"kfNjUNirYU3tRVC7akGOcS","version":"1.4.1","proto":1,"go":"go1.11.5","host":"0.0.0.0","port":4222,"max_payload":1048576,"client_id":3,"client_ip":"::1"}
+        # optional: auth_required, tls_required, tls_verify
         array set serverInfo [json::json2dict $cmd]
         if {[info exists serverInfo(tls_required)] && $serverInfo(tls_required)} {
             #NB! NATS server will never accept a TLS connection. Always start connecting with plain TCP,

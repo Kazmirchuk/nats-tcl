@@ -7,18 +7,11 @@ package require tcl::transform::observe
 package require tcl::chan::variable
 package require processman
 package require oo::util
+package require control
 
 namespace eval test_utils {
     variable sleepVar 0
     
-    variable writingObs
-    variable readingObs
-    variable obsMode
-    variable readChan
-    variable writeChan
-    variable observedSock
-    
-    variable natsConn ""
     variable simpleMsg ""
     
     # sleep $delay ms in the event loop
@@ -27,38 +20,48 @@ namespace eval test_utils {
         vwait ::test_utils::sleepVar
     }
     
-    proc new_sleep {delay} {
-        set varName "::[incr ::test_utils::sleepVar]"
-        set $varName 0
-        after $delay [list set $varName 1]
-        vwait $varName
-        unset $varName
+    proc wait_flush {conn} {
+        # wait until Flusher executes
+        vwait ${conn}::timers(flush)
+    }
+    
+    # I don't like that [time] ignores the result of $body, and I need milliseconds rather than microseconds
+    proc duration {body var} {
+        upvar 1 $var elapsed
+        set now [clock millis]
+        set code [catch {uplevel 1 $body} result]
+        set elapsed [expr {[clock millis] - $now}]
+        if {$code == 1} {
+            return -errorinfo [::control::ErrorInfoAsCaller uplevel duration] -errorcode $::errorCode -code error $result
+        } else {
+            return -code $code $result
+        }
     }
     
     oo::class create chanObserver {
         variable writingObs readingObs obsMode readChan writeChan observedSock
         # $mode can be r (read), w (write), b (both)
-        constructor {sock mode} {
+        constructor {nats_conn mode} {
             set writingObs ""
             set readingObs ""
             set obsMode $mode
             set readChan ""
             set writeChan ""
-            set observedSock $sock
+            set observedSock [set ${nats_conn}::sock]
             
             switch -- $obsMode {
                 r {
                     set readChan [tcl::chan::variable [self object]::readingObs]
-                    tcl::transform::observe $sock {} $readChan
+                    tcl::transform::observe $observedSock {} $readChan
                 }
                 w {
                     set writeChan [tcl::chan::variable [self object]::writingObs]
-                    tcl::transform::observe $sock $writeChan {}
+                    tcl::transform::observe $observedSock $writeChan {}
                 }
                 b {
                     set readChan [tcl::chan::variable [self object]::readingObs]
                     set writeChan [tcl::chan::variable [self object]::writingObs]
-                    tcl::transform::observe $sock $writeChan $readChan
+                    tcl::transform::observe $observedSock $writeChan $readChan
                 }
             }
         }
@@ -79,9 +82,11 @@ namespace eval test_utils {
             set writingObs [string map {PING\n {} PONG\n {} } $writingObs]
             set readingObs [string map {\r {} } $readingObs]
             set readingObs [string map {PING\n {} PONG\n {}} $readingObs]
+            set writingObs [split $writingObs \n]
+            set readingObs [split $readingObs \n]
             if {$firstLine} {
-                set writingObs [lindex [split $writingObs \n] 0]
-                set readingObs [lindex [split $readingObs \n] 0]
+                set writingObs [lindex $writingObs 0]
+                set readingObs [lindex $readingObs 0]
             }
             switch -- $obsMode {
                 r {
@@ -140,4 +145,6 @@ namespace eval test_utils {
     proc stopResponder {conn} {
         $conn publish service [list 0 exit]
     }
+    
+    namespace export sleep wait_flush chanObserver duration startNats stopNats startResponder stopResponder
 }

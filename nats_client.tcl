@@ -106,12 +106,6 @@ oo::class create ::nats::connection {
         my disconnect
         close $randomChan
         $serverPool destroy
-        #if {[array size subscriptions]} {
-        #    $logger::debug "Remaining subscriptions: [array get subscriptions]"
-        #}
-        if {[array size requests]} {
-            ${logger}::debug "Remaining requests: [array get requests]"
-        }
         ${logger}::delete
     }
     
@@ -156,6 +150,7 @@ oo::class create ::nats::connection {
                 $serverPool add $url
             }
         }
+        return
     }
 
     method logger {} {
@@ -202,15 +197,18 @@ oo::class create ::nats::connection {
             }
             ${logger}::debug "Finished waiting for connection"
         }
+        return
     }
     
     method disconnect {} {
         if {$status == $nats::status_closed} {
             return
         }
-        my Flusher 0
+        # my Flusher 0 - Flusher has reconnecting logic that can get in our way in case flushing fails
+        # it's easier to duplicate flushing code in CloseSocket
         my CloseSocket
         #CoroMain will set status to "closed"
+        return
     }
     
     method publish {subject msg {replySubj ""}} {
@@ -227,6 +225,7 @@ oo::class create ::nats::connection {
         set data "PUB $subject $replySubj $msgLen"
         lappend outBuffer $data
         lappend outBuffer $msg
+        return
     }
     
     method subscribe {subject args } { 
@@ -275,6 +274,9 @@ oo::class create ::nats::connection {
         if {$status != $nats::status_reconnecting} {
             # it will be sent anyway when we reconnect
             lappend outBuffer "SUB $subject $queue $subID"
+            if {$maxMsgs > 0} {
+                lappend outBuffer "UNSUB $subID $maxMsgs"
+            }
         }
         return $subID
     }
@@ -302,11 +304,10 @@ oo::class create ::nats::connection {
         }
         
         #the format is UNSUB <sid> [max_msgs]
-        if {$maxMsgs == 0} {
+        if {$maxMsgs == 0 || [dict get $subscriptions($subID) recMsgs] >= $maxMsgs} {
             unset subscriptions($subID)
             set data "UNSUB $subID"
         } else {
-            #TODO: should i set rec other clients don't
             dict set subscriptions($subID) maxMsgs $maxMsgs
             set data "UNSUB $subID $maxMsgs"
         }
@@ -314,6 +315,7 @@ oo::class create ::nats::connection {
             # it will be sent anyway when we reconnect
             lappend outBuffer $data
         }
+        return
     }
     
     method request {subject message args} {
@@ -332,6 +334,13 @@ oo::class create ::nats::connection {
                 default {
                     throw {NATS INVALID_ARG} "Unknown option $opt"
                 }
+            }
+        }
+        
+        # it's easy to forget that only sync requests do auto-flush
+        if {$callback ne "" && $timeout != -1} {
+            if {$config(flush_interval) >= $timeout} {
+                throw {NATS INVALID_ARG} "Wrong timeout: async requests need at least flush_interval ms to complete"
             }
         }
         
@@ -366,6 +375,7 @@ oo::class create ::nats::connection {
             set timerID [after $timeout [mymethod RequestCallback "" "" "" $reqID]]
         }
         set requests($reqID) [list 1 $timerID $callback]
+        return
     }
     
     method ping { {timeout -1} } {
@@ -404,6 +414,7 @@ oo::class create ::nats::connection {
         set reqID [lindex [split $subj .] 2]
         if {![info exists requests($reqID)]} {
             # ignore all further responses, if >1 arrives; or it could be an overdue message
+            ${logger}::debug "RequestCallback got [string range $msg 0 15] on reqID $reqID - discarded"
             return
         }
         lassign $requests($reqID) reqType timer callback
@@ -427,11 +438,16 @@ oo::class create ::nats::connection {
             $serverPool current_server_connected false
             set status $nats::status_reconnecting
         } else {
+            # we get here only from method disconnect
+            lassign [$serverPool current_server] host port
+            ${logger}::info "Closing connection to $host:$port" ;# in case of broken socket, the error will be logged elsewhere
             # make sure we wait until successful flush, if connection was not broken
             # TODO do it only for destructor? before exiting process
             chan configure $sock -blocking 1
-            lassign [$serverPool current_server] host port
-            ${logger}::info "Closing connection to $host:$port" ;# in case of broken socket, the error will be logged elsewhere
+            foreach msg $outBuffer {
+                append msg "\r\n"
+                puts -nonewline $sock $msg
+            }
         }
         close $sock ;# all buffered input is discarded, all buffered output is flushed
         set sock ""
@@ -653,6 +669,7 @@ oo::class create ::nats::connection {
             }
         } else {
             # if we unsubscribe while there are pending incoming messages, we may get here - nothing to do
+            ${logger}::debug "Got [string range $messageBody 0 15] on subID $subID - discarded"
         }
         # now we return back to CoroMain and enter "yield" there
     }

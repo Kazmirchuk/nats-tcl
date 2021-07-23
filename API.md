@@ -80,13 +80,13 @@ Note that for higher throughput the message is only added to a buffer, and will 
 ### objectName subscribe subject ?-queue queueGroup? ?-callback cmdPrefix? 
 Subscribes to a subject (possibly with wildcards) and returns a subscription ID. Whenever a message arrives, the command prefix will be invoked from the event loop with 3 additional arguments: `subject`, `message` and `replyTo` (might be empty). If you use the [-queue option](https://docs.nats.io/developing-with-nats/receiving/queues), only one subscriber in a given queueGroup will receive each message (load balancing).
 
-### objectName unsubscribe subID ?maxMessages? 
-Unsubscribes from a subscription with a given `subID` immediately. If `maxMessages` is given, unsubscribes after this number of messages has been received.
+### objectName unsubscribe subID ?-max_msgs maxMsgs? 
+Unsubscribes from a subscription with a given `subID` immediately. If `-max_msgs` is given, unsubscribes after this number of messages has been received **on this `subID`**. In other words, if you have already received 10 messages, and then you call `unsubscribe $subID -max_msgs 10`, you will be unsubscribed immediately.
 
 ### objectName request subject message ?-timeout ms? ?-callback cmdPrefix? 
 Sends a message to the specified subject using an automatically generated transient `replyTo` subject (inbox). The message is flushed to the socket immediately.
 - If no callback is given, the request is synchronous and blocks in vwait until a reply is received. The reply is the return value. If no reply arrives within `timeout`, it raises an error "TIMEOUT".
-- If a callback is given, the call returns immediately, and when a reply is received or a timeout fires, the command prefix will be invoked from the event loop with 2 additional arguments: `timedOut` (true, if the request timed out) and a `reply`.
+- If a callback is given, the call returns immediately, and when a reply is received or a timeout fires, the command prefix will be invoked from the event loop with 2 additional arguments: `timedOut` (equal to 1, if the request timed out) and a `reply`.
 
 ### objectName ping ?timeout? 
 A blocking call that triggers a ping-pong exchange with the NATS server and returns true upon success. If the server does not reply within the specified timeout, it returns false. Default timeout is unlimited. You can use this method to check if the server is alive or to force flush outgoing data.

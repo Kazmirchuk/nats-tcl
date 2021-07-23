@@ -136,15 +136,35 @@ namespace eval test_utils {
     }
     
     # processman::kill doesn't work reliably with tclsh, so instead we send a NATS message to stop the responder gracefully
-    proc startResponder {} {
+    proc startResponder { {subj "service"} {queue ""}} {
         set scriptPath [file join [file dirname [info script]] responder.tcl]
-        exec [info nameofexecutable] $scriptPath &
-        sleep 1000
+        exec [info nameofexecutable] $scriptPath $subj $queue &
+        sleep 500
     }
     
-    proc stopResponder {conn} {
-        $conn publish service [list 0 exit]
+    proc stopResponder {conn {subj "service"}} {
+        $conn publish $subj [list 0 exit]
+        wait_flush $conn
     }
     
-    namespace export sleep wait_flush chanObserver duration startNats stopNats startResponder stopResponder
+    # control:assert is garbage and doesn't perform substitution on failed expressions, so I can't even know a value of offending variable etc
+    # also tried to do this
+    #control::control assert callback [lambda {msg} {
+    #    return -code error [uplevel 1 [list subst $msg]]
+    #}]
+    # but it doesn't work when assert is in a proc
+    proc assert {expression} {
+        set code [catch {uplevel 1 [list expr $expression]} res]
+        if {$code} {
+            return -code $code $res
+        }
+        if {![string is boolean -strict $res]} {
+            return -code error "invalid boolean expression: $expression"
+        }
+        if {$res} {return}
+        set msg "assertion failed: [uplevel 1 [list subst $expression]]"
+        return -code error $msg
+    }
+    
+    namespace export sleep wait_flush chanObserver duration startNats stopNats startResponder stopResponder assert
 }

@@ -8,8 +8,13 @@
 package require lambda
 
 proc echo {subj msg reply} {
-    lassign $msg delay payload
+    #lassign $msg delay payload - doesn't work with binary payload
+    set pos [string first " " $msg]
+    set delay [string range $msg 0 [expr {$pos - 1}]]
+    set payload [string range $msg [expr {$pos + 1}] end]
+    
     if {$payload eq "exit"} {
+        puts "Responder $subj exiting..."
         exit
     }
     after $delay [lambda {reply payload} {
@@ -22,10 +27,17 @@ set thisDir [file dirname [info script]]
 lappend auto_path [file normalize [file join $thisDir ..]]
 package require nats
 
+lassign $argv subj queue
+
 set conn [nats::connection new]
 $conn configure -servers nats://localhost:4222
 $conn connect
-$conn subscribe service -callback echo
+if {$queue eq "" } {
+    $conn subscribe $subj -callback echo
+} else {
+    $conn subscribe $subj -callback echo -queue $queue
+}
+#force flush
 $conn ping
-
+puts "Responder listening on $subj : $queue"
 vwait forever

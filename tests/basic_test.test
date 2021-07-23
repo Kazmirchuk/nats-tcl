@@ -36,63 +36,123 @@ test basic-1 "Connect NATS" -body {
         vwait ${conn}::status
     }
     set chanData [$obs getChanData]
-    assert {$chanData eq {CONNECT {"verbose":false,"pedantic":false,"tls_required":false,"name":"BasicNats","lang":"Tcl","version":"0.9","protocol":1,"echo":true}}} $chanData
+    assert {$chanData eq {CONNECT {"verbose":false,"pedantic":false,"tls_required":false,"name":"BasicNats","lang":"Tcl","version":"0.9","protocol":1,"echo":true}}}
     $obs destroy
     set ${conn}::last_error
 } -result {}
 
-test basic-2 "Subscribe to a message" -body {
+test basic-2.1 "Subscribe to a message" -body {
     set obs [test_utils::chanObserver new $conn w]
     set sub_id [$conn subscribe subject1 -callback test_utils::simpleCallback]
     wait_flush $conn
     set chanData [$obs getChanData]
     # double space is not accidental
-    assert {$chanData eq "SUB subject1  $sub_id"} $chanData
+    assert {$chanData eq "SUB subject1  $sub_id"}
     $obs destroy
     set sub_id
-}  -result {1} 
+}  -result 1
 
-test basic-3 "Publish a message" -body {
+test basic-2.2 "Publish a message" -body {
     set obs [chanObserver new $conn b]
     duration {
         $conn publish subject1 hello
         vwait test_utils::simpleMsg
     } elapsed
     lassign [$obs getChanData] readData writtenData
-    assert {$writtenData eq {PUB subject1  5}} $writtenData
-    assert {$readData eq "MSG subject1 $sub_id 5"} $readData
-    assert {$elapsed < 1000} $elapsed ;# time to flush and receive MSG from the server
+    assert {$writtenData eq {PUB subject1  5}}
+    assert {$readData eq "MSG subject1 $sub_id 5"}
+    assert {$elapsed < 1000} ;# time to flush and receive MSG from the server
     $obs destroy
     set test_utils::simpleMsg
-} -result {hello} 
+} -result "hello"
 
-test basic-4 "Unsubscribe and publish again" -body {
+test basic-2.3 "Unsubscribe and publish again" -body {
     set obs [chanObserver new $conn b]
     $conn unsubscribe $sub_id
+    assert {[info exists ${conn}::subscriptions($sub_id)] == 0}
     $conn publish subject1 "one more hello"
     duration {
         wait_flush $conn
     } elapsed
     lassign [$obs getChanData 0] readData writtenData
-    assert {[lindex $writtenData 0] eq "UNSUB $sub_id"} $writtenData
-    assert {[lindex $writtenData 1] eq "PUB subject1  [string length {one more hello}]"} $writtenData
-    assert {$elapsed < 600} $elapsed ;# time to flush
+    assert {[lindex $writtenData 0] eq "UNSUB $sub_id"}
+    assert {[lindex $writtenData 1] eq "PUB subject1  [string length {one more hello}]"}
+    assert {$elapsed < 600} ;# time to flush
     # check that the server did not send MSG back
-    assert {[llength $readData] == 0} $readData
+    assert {[llength $readData] == 0}
     $obs destroy
     set test_utils::simpleMsg
-} -result {hello} 
+} -result "hello"
+
+test basic-3.1 "Subscribe to a limited number of messages" -body {
+    set obs [test_utils::chanObserver new $conn b]
+    set msg_count 0
+    set sub_id [$conn subscribe subj_max_msgs -max_msgs 10 -callback [lambda {subject message replyTo} {
+        incr ::msg_count
+        assert {$message == $::msg_count}
+    }]]
+    # we send 20 messages, but will receive only 10 back
+    for {set i 1} {$i <= 20} {incr i} {
+        $conn publish subj_max_msgs $i
+    }
+    wait_flush $conn
+    sleep 400
+    lassign [$obs getChanData 0] rdata wdata
+    assert {[lindex $wdata 0] eq "SUB subj_max_msgs  $sub_id"}
+    assert {[lindex $wdata 1] eq "UNSUB $sub_id 10"}
+    assert {[lindex $wdata end-1] == 20} ;# payload of the last sent message
+    # each MSG will create 2 rows in rdata, so check that UNSUB was effective, and we've received 10 messages back +/- one or PING
+    assert {[llength $rdata] < 25}
+        
+    $obs destroy
+    set msg_count
+}  -result 10
+
+test basic-3.2 "SubID has expired after -max_msgs" -body {
+    $conn unsubscribe $sub_id
+} -match glob -result {Invalid subscription ID*} -returnCodes {error} -errorCode {NATS INVALID_ARG}
+
+test basic-4.1 "Subscribe and unsubscribe with -max_msgs" -body {
+    set msg_count 0
+    set sub_id [$conn subscribe subj_max_msgs2 -callback [lambda {subject message replyTo} {
+        incr ::msg_count
+        assert {$message == $::msg_count}
+    }]]
+    # at first, send 5 messages 
+    for {set i 1} {$i <= 5} {incr i} {
+        $conn publish subj_max_msgs2 $i
+    }
+    wait_flush $conn
+    sleep 400
+    assert {$msg_count == 5}
+
+    # unsubscribe after 5 more messages, i.e. 10 in total
+    set obs [test_utils::chanObserver new $conn w]
+    $conn unsubscribe $sub_id -max_msgs 10
+
+    # send 10 more messages
+    for {set i 6} {$i <= 15} {incr i} {
+        $conn publish subj_max_msgs2 $i
+    }
+    wait_flush $conn
+    set chanData [$obs getChanData]
+    $obs destroy
+    assert {$chanData eq "UNSUB $sub_id 10"}
+    sleep 400
+    assert {[info exists ${conn}::subscriptions($sub_id)] == 0}
+    set msg_count
+} -result 10
 
 test basic-5.1 "Synchronous request" -body {
     set obs [chanObserver new $conn b]
     duration {
         set result [$conn request service "0 hello"]
     } elapsed
-    assert {$elapsed < 400} $elapsed ;# flush is immediate; actual roundtrip time on localhost ~40ms
+    assert {$elapsed < 400}  ;# flush is immediate; actual roundtrip time on localhost ~40ms
     lassign [$obs getChanData 0] rdata wdata
     $obs destroy
     set result
-} -result {hello} 
+} -result "hello"
 
 test basic-5.2 "Synchronous request - written to socket" -body {
     lassign $wdata sub pub payload
@@ -105,78 +165,155 @@ test basic-5.2 "Synchronous request - written to socket" -body {
 
 test basic-5.3 "Synchronous request - read from socket" -body {
     lassign $rdata msg payload
-    assert {[regexp {MSG _INBOX.*.1 ([[:digit:]]+) (.*)} $msg -> subID2 msg_length]}
+    assert {[regexp {MSG _INBOX.*.([[:digit:]]+) ([[:digit:]]+) (.*)} $msg -> req_id subID2 msg_length]}
     assert {$msg_length == [string length $payload]}
     assert {$subID == $subID2}
+    assert {[info exists ${conn}::requests($req_id)] == 0}
     set payload
-} -result {hello} 
+} -result "hello"
 
-test basic-5.4 "Synchronous request with timeout - success" -body {
+test basic-6 "Synchronous request with timeout - success" -body {
     duration {
         set result [$conn request service "500 sync_req" -timeout 600]
     } elapsed
-    assert {$elapsed >= 500 && $elapsed < 600} $elapsed
+    assert {$elapsed >= 500 && $elapsed < 600}
     set result
-} -result {sync_req} 
+} -result "sync_req"
 
-test basic-5.5 "Synchronous request with timeout - failure" -body {
+test basic-7 "Synchronous request with timeout - failure" -body {
     duration {
         $conn request service "600 sync_req" -timeout 500
     } elapsed
-    assert {$elapsed >= 500 && $elapsed < 590} $elapsed
+    assert {$elapsed >= 500 && $elapsed < 590}
 } -returnCodes {error} -result {Request to service timed out}
 
-# wait until the delayed message arrives
+# wait until the delayed message arrives - you will see it in the debug log
 sleep 500
 
-test basic-6.1 "Asynchronous request" -body {
+test basic-8 "Asynchronous request" -body {
     duration {
         $conn request service "100 async_req" -callback test_utils::asyncReqCallback
     } elapsed
-    assert {$elapsed < 50} $elapsed ;# async request returns immediately
+    assert {$elapsed < 50} ;# async request returns immediately
     
     duration {
         vwait test_utils::simpleMsg
     } elapsed
-    assert {$elapsed >= 100 && $elapsed < 500} $elapsed
+    assert {$elapsed < 1000} ;# async requests don't auto-flush! confirmed against the reference nats.go
     
     set test_utils::simpleMsg
-} -result {async_req}
+} -result "async_req"
 
-test basic-6.2 "Asynchronous request with timeout - success" -body {
-    #TODO: reduce timeout... force flush in responder not working?
-    $conn request service "0 async_req2" -timeout 600 -callback [list test_utils::asyncReqCallback]
-    vwait test_utils::simpleMsg
-    set test_utils::simpleMsg
-} -result {async_req2}
+test basic-9 "Asynchronous request with timeout - success" -body {
+    duration {
+        $conn request service "0 async_req2" -timeout 600 -callback [lambda {timedOut msg} {
+            # let's use lambda here for the sake of example
+            assert {[string is false -strict $timedOut]}
+            assert {$msg eq "async_req2"}
+            set test_utils::simpleMsg ""
+        }]
+        
+        vwait test_utils::simpleMsg
+    } elapsed
+    assert {$elapsed < 600}
+} 
 
-test basic-6.3 "Asynchronous request with timeout - failure" -body {
-    $conn request service "500 async_req3" -timeout 400 -callback [list test_utils::asyncReqCallback]
-    vwait test_utils::simpleMsg
-    set test_utils::simpleMsg
-} -result {timeout}
-
-test basic-6.4 "2 asynchronous requests" -body {
-    #send two async requests, where the second request should complete faster than the first
-    $conn request service "500 async_req4" -timeout 1500 -callback [list test_utils::asyncReqCallback]
-    $conn request service "100 async_req5" -timeout 1000 -callback [list test_utils::asyncReqCallback]
-    vwait test_utils::simpleMsg
-    assert {$test_utils::simpleMsg eq "async_req5"} $test_utils::simpleMsg
-    vwait test_utils::simpleMsg
-    assert {$test_utils::simpleMsg eq "async_req4"} $test_utils::simpleMsg
+test basic-10 "Asynchronous request with timeout - failure" -body {
+    duration {
+        # timeout must be longer than flush_interval!
+        $conn request service "1000 async_req3" -timeout 600 -callback [lambda {timedOut msg} {
+            assert {[string is true -strict $timedOut]}
+            assert {$msg eq ""}
+            set test_utils::simpleMsg ""
+        }]
+        
+        vwait test_utils::simpleMsg
+    } elapsed
+    assert {$elapsed >= 600}
 }
 
-test basic-7 "Sending and receiving a binary message" -body {
+# wait until the delayed message arrives
+sleep 500
+
+test basic-11 "2 asynchronous requests" -body {
+    #send two async requests, where the second request should complete faster than the first
+    # this will take at least 1 s
+    duration {
+        $conn request service "500 async_req4" -timeout 1500 -callback test_utils::asyncReqCallback
+        $conn request service "100 async_req5" -timeout 1000 -callback test_utils::asyncReqCallback
+        vwait test_utils::simpleMsg
+        assert {$test_utils::simpleMsg eq "async_req5"}
+        vwait test_utils::simpleMsg
+        assert {$test_utils::simpleMsg eq "async_req4"}
+    } elapsed
+    assert {$elapsed >=500 && $elapsed < 1300} 
+}
+
+# testing confirmed that
+# [binary decode hex 0a68656c6c6f00776f726c640d0a]  :internal representation = bytearray,no string representation
+# "\nhello\0world\r\n" :internal representation = string
+# [encoding convertfrom identity "\nhello\0world\r\n"] :internal representation = pure string (deprecated by https://core.tcl-lang.org/tips/doc/trunk/tip/345.md)
+# produce exactly the same byte arrays
+# a byte array without string rep can be created as
+# set x [binary format a* $x]
+# exchange of byte arrays has been tested manually with cnats in both directions
+
+test basic-12 "Sending and receiving a binary message" -body {
     set binString "\nhello\0world\r\n" ;# include a null byte and CR+LF that is a delimiter in the NATS protocol
-    $conn subscribe bin_subj -callback test_utils::simpleCallback
+    set sub_id [$conn subscribe bin_subj -callback test_utils::simpleCallback]
     $conn publish bin_subj $binString
     vwait test_utils::simpleMsg
-    assert { $test_utils::simpleMsg eq $binString } [binary encode hex $test_utils::simpleMsg]
+    assert { [binary encode hex $test_utils::simpleMsg] eq [binary encode hex $binString] }
+    assert { [string length $test_utils::simpleMsg] == 14}
+    $conn unsubscribe $sub_id
+    wait_flush $conn
 }
 
-# check all config options
+test basic-13 "Binary message request" -body {
+    set reply [$conn request service "0 $binString"]
+    assert { [binary encode hex $reply] eq [binary encode hex $binString] }
+    assert { [string length $reply] == 14}
+}
+
+for {set i 0} { $i < 5} {incr i} {
+    startResponder multi_subj
+}
+
+test basic-14 "Synchronous request with multiple responders" -body {
+    set obs [chanObserver new $conn r]
+    duration {
+        set result [$conn request multi_subj "0 foobar"] ;# will return the first reply
+    } elapsed
+    assert {$elapsed < 400}
+    sleep 500 ;# ensure we receive the other 4 replies
+    set rdata [$obs getChanData 0]
+    assert { [llength [lsearch -all $rdata "foobar"]] == 5}
+    $obs destroy
+    set result
+} -result "foobar"
+
+test basic-15 "Asynchronous request with multiple responders" -body {
+    $conn request multi_subj "0 foobar2" -timeout 600 -callback [lambda {timedOut msg} {
+        assert {[string is false -strict $timedOut]}
+        assert {$msg eq "foobar2"}
+        set test_utils::simpleMsg 1
+    }]
+    vwait test_utils::simpleMsg
+    sleep 500 ;# ensure we receive the other 4 replies - you will see them in the debug log
+}
+
+stopResponder $conn multi_subj ;# stop all 5 responders
 
 stopResponder $conn
+
+test basic-end "Check internal state after disconnection" -body {
+    $conn disconnect
+    assert {[set ${conn}::sock] eq ""}
+    assert {[array size ${conn}::subscriptions] == 1} ;# one remaining subscription is the wildcard for requests
+    assert {[array size ${conn}::requests] == 0}
+    assert {[llength [set ${conn}::outBuffer]] == 0}
+}
+
 $conn destroy
 stopNats NATS
 tcltest::cleanupTests

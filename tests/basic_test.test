@@ -293,27 +293,68 @@ test basic-14 "Synchronous request with multiple responders" -body {
 } -result "foobar"
 
 test basic-15 "Asynchronous request with multiple responders" -body {
+    set msg_count 0
     $conn request multi_subj "0 foobar2" -timeout 600 -callback [lambda {timedOut msg} {
+        incr ::msg_count
         assert {[string is false -strict $timedOut]}
         assert {$msg eq "foobar2"}
-        set test_utils::simpleMsg 1
+        puts "in callback"
     }]
-    vwait test_utils::simpleMsg
+    vwait ::msg_count
     sleep 500 ;# ensure we receive the other 4 replies - you will see them in the debug log
-}
+    set msg_count ;# check the lambda was called only once
+} -result 1
 
 stopResponder $conn multi_subj ;# stop all 5 responders
 
-stopResponder $conn
+test basic-16 "Queue groups and publish with replyTo" -body {
+    # start 2 responders on queue group QG1 and 3 more on QG2
+    for {set i 0} { $i < 2} {incr i} {
+        startResponder test_qg QG1
+    }
+    for {set i 0} { $i < 3} {incr i} {
+        startResponder test_qg QG2
+    }
+    set msg_count 0
+    set myReplyTo [$conn inbox]
+    set sub_id [$conn subscribe $myReplyTo -callback [lambda {subject message replyTo} {
+        incr ::msg_count
+        assert {$subject eq $::myReplyTo}
+        assert {$message eq "queue group test"}
+        assert {$replyTo eq ""}
+    }]]
+    
+    $conn publish test_qg "0 queue group test" $myReplyTo
+    $conn ping ;# flush
+    sleep 500
+    assert {$msg_count == 2}
+    $conn unsubscribe $sub_id
+    # because of queue groups I need to send as many "exit" messages as number of responders in the biggest queue group
+    for {set i 0} { $i < 3} {incr i} {
+        stopResponder $conn test_qg
+        sleep 1000
+    }
+} 
 
-test basic-end "Check internal state after disconnection" -body {
+test basic-17 "Check internal state after disconnection" -body {
     $conn disconnect
     assert {[set ${conn}::sock] eq ""}
+    assert {[set ${conn}::status] == $nats::status_closed}
     assert {[array size ${conn}::subscriptions] == 1} ;# one remaining subscription is the wildcard for requests
     assert {[array size ${conn}::requests] == 0}
     assert {[llength [set ${conn}::outBuffer]] == 0}
 }
 
+test basic-18 "Check the wildcard subscription after reconnection" -body {
+    # the server pool is not cleared until you call $conn configure -servers again
+    lassign [$conn current_server] host port
+    assert {$host eq "localhost"}
+    assert {$port == 4222}
+    $conn connect
+    $conn request service "0 one last request" -timeout 400
+} -result "one last request"
+
+stopResponder $conn
 $conn destroy
 stopNats NATS
 tcltest::cleanupTests

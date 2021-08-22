@@ -4,9 +4,10 @@
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
 namespace import ::tcltest::test
+namespace import test_utils::*
 
-test_utils::startNats NATS1
-test_utils::startNats NATS2 -p 4223
+startNats NATS1
+startNats NATS2 -p 4223
 
 set conn [nats::connection new]
 
@@ -34,7 +35,7 @@ test reconn-1 "Connect NATS" -body {
     assert {$port == 4222}
 } -result {}
 
-test_utils::stopNats NATS1
+stopNats NATS1
 
 test reconn-2 "Publish a message" -body {
     $conn publish subject1 "hello"
@@ -57,5 +58,5 @@ test reconn-3 "Publish and receive a message" -body {
 
 $conn destroy
 
-test_utils::stopNats NATS2
+stopNats NATS2
 tcltest::cleanupTests

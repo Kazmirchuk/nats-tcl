@@ -17,7 +17,8 @@ proc tcltest::cleanupTestsHook {} {
     variable numTests
     set ::exitCode [expr {$numTests(Failed) > 0}]
 }
-tcltest::configure -testdir [file dirname [file normalize [info script]]] -singleproc 1
+cd $thisDir
+tcltest::configure -testdir $thisDir -singleproc 1
 tcltest::configure {*}$argv
 
 tcltest::runAllTests

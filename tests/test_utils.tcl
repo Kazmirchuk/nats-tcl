@@ -65,7 +65,7 @@ namespace eval test_utils {
                 }
             }
         }
-        method getChanData { {firstLine 1} } {
+        method getChanData { {firstLine 1} {filterPing 1}} {
             # remove the transformation
             chan pop $observedSock
             
@@ -79,9 +79,11 @@ namespace eval test_utils {
             # so just remove \r here
             # also we are not interested in PING/PONG, but we need a separate call to "string map" to clean them up *after* removing \r
             set writingObs [string map {\r {} } $writingObs]
-            set writingObs [string map {PING\n {} PONG\n {} } $writingObs]
             set readingObs [string map {\r {} } $readingObs]
-            set readingObs [string map {PING\n {} PONG\n {}} $readingObs]
+            if {$filterPing} {
+                set writingObs [string map {PING\n {} PONG\n {} } $writingObs]
+                set readingObs [string map {PING\n {} PONG\n {}} $readingObs]
+            }
             set writingObs [split $writingObs \n]
             set readingObs [split $readingObs \n]
             if {$firstLine} {

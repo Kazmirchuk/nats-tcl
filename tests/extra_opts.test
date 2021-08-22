@@ -1,29 +1,192 @@
-# Copyright (c) 2020 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2021 Petro Kazmirchuk https://github.com/Kazmirchuk
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
 namespace import ::tcltest::test
+namespace import test_utils::*
+
 tcltest::configure {*}$argv
 
-test_utils::startNats NATS
+startNats NATS
 
+set conn [nats::connection new "ExtraOptions"]
+[$conn logger]::setlevel debug
+
+trace add variable ${conn}::status write [lambda {var idx op } {
+    upvar $var s
+    puts "New status: $s"
+}]
+trace add variable ${conn}::last_error write [lambda {var idx op } {
+    upvar $var e
+    puts "Async error: $e"
+}]
+
+$conn configure -servers nats://localhost:4222
+
+test extra_opts-1.1 "Check that we can force flush with ping command" -body {
+    set test_utils::simpleMsg ""
+    $conn configure -flush_interval 60000 ;# set to smth very high, 1 minute, to be sure that Flusher doesn't kick in
+    $conn connect
+    $conn subscribe subject1 -callback test_utils::simpleCallback
+    duration {
+        $conn publish subject1 hello
+        $conn ping
+        # "ping" enters vwait to receive PONG, so by the time we enter our vwait, we may have already received the message
+        if {$test_utils::simpleMsg ne "hello"} {
+            vwait test_utils::simpleMsg
+        }
+    } elapsed
+    assert {$elapsed < 400} ;# actually will be <10ms with local NATS
+    $conn disconnect
+    assert {[$conn cget -flush_interval] == 60000} ;# disconnect does not reset the configuration!
+    set test_utils::simpleMsg
+} -result "hello"
+
+test extra_opts-1.2 "Check that we can reduce the flush interval" -body {
+    set test_utils::simpleMsg ""
+    $conn configure -flush_interval 100 ;# make it less than default 500ms
+    $conn connect
+    $conn subscribe subject1 -callback test_utils::simpleCallback
+    $conn publish subject1 hello2
+    duration {
+        vwait test_utils::simpleMsg
+    } elapsed
+    assert {$elapsed < 300}
+    $conn disconnect
+    $conn reset -flush_interval
+    set test_utils::simpleMsg
+} -result "hello2"
+
+test extra_opts-1.3 "Check the send_asap=true option" -body {
+    set test_utils::simpleMsg ""
+    $conn configure -send_asap true
+    $conn connect
+    $conn subscribe subject1 -callback test_utils::simpleCallback
+    $conn publish subject1 hello3
+    duration {
+        vwait test_utils::simpleMsg
+    } elapsed
+    assert {$elapsed < 300}
+    $conn disconnect
+    $conn reset -send_asap
+    set test_utils::simpleMsg
+} -result "hello3"
+
+test extra_opts-2 "Check the echo=false option" -body {
+    set test_utils::simpleMsg ""
+    $conn configure -echo false
+    $conn connect -async
+    set obs [test_utils::chanObserver new $conn w]
+    while {[set ${conn}::status] ne $nats::status_connected} {
+        vwait ${conn}::status
+    }
+    set chanData [$obs getChanData]
+    $obs destroy
+    
+    set pos [string first " " $chanData] ;# skip CONNECT straight to the beginning of JSON
+    set connectDict [json::json2dict [string range $chanData [expr {$pos + 1}] end]]
+    assert {[dict get $connectDict echo] eq "false"}
+        
+    $conn subscribe no_echo -callback test_utils::simpleCallback
+    $conn publish no_echo "cold is the void" ;# we will not get this message back
+    wait_flush $conn
+    after 300 [list set test_utils::simpleMsg "timeout"]
+    duration {
+        vwait test_utils::simpleMsg
+    } elapsed
+    assert {$elapsed < 350}
+    assert {$test_utils::simpleMsg eq "timeout"}
+    # but a request to another subscriber still works fine
+    startResponder no_echo
+    set result [$conn request no_echo "0 hello"]
+    assert {$result eq "hello"}
+    stopResponder $conn no_echo
+    $conn disconnect
+    $conn reset -echo
+}
+
+test extra_opts-3 "PING/PONG protocol initiated by client" -body {
+    $conn configure -ping_interval 1000 ;# default is 2 minutes
+    $conn connect
+    set obs [test_utils::chanObserver new $conn b]
+    test_utils::sleep 1400 ;# Pinger triggers flush too, so no need to wait for +flush_interval ms
+    lassign [$obs getChanData 0 0] readData writtenData
+    $obs destroy
+    # check that the exchange occurred exactly once
+    assert {[lsearch -all $writtenData "PING"] == 0}
+    assert {[lsearch -all $readData "PONG"] == 0}
+    
+    $conn disconnect
+    $conn reset -ping_interval
+}
+
+stopNats NATS
+
+test extra_opts-4.1 "PING/PONG protocol initiated by server" -body {
+    # I can't pass ping_interval as a command line argument to the NATS server
+    set conf [tcltest::makeFile {
+        ping_interval: "2s"
+        ping_max: 1
+    } quick_ping.conf [pwd] ]
+    # the file will be cleaned up by cleanupTests
+    startNats quick_ping -c $conf
+    $conn connect
+    set obs [test_utils::chanObserver new $conn b]
+    test_utils::sleep 2400
+    lassign [$obs getChanData 0 0] readData writtenData
+    $obs destroy
+    # check that the exchange occurred exactly once
+    assert {[lsearch -all $writtenData "PONG"] == 0}
+    assert {[lsearch -all $readData "PING"] == 0}
+}
+
+test extra_opts-4.2 "PING/PONG - no response from the client" -body {
+    # access to a private variable only for test purposes!
+    trace add variable ${conn}::outBuffer write [lambda {var idx op } {
+        upvar $var buffer
+        set pos [lsearch $buffer "PONG"]
+        if {$pos == -1} {
+            return
+        }
+        set buffer [lsearch -inline -all -not -exact $buffer "PONG"] ;# do not send PONG to the server
+        puts "Deleted PONG"
+    }]
+    
+    duration {
+        vwait ${conn}::status
+    } elapsed
+    assert {[set ${conn}::status] == $nats::status_reconnecting}
+    assert {$elapsed < 2400} ;# wait ping_interval * ping_max in the config file + jitter
+    
+    $conn disconnect
+    $conn destroy
+    stopNats quick_ping
+    
+#    [18:54:22.025 Obj57_ExtraOptions error] 'Stale Connection'
+#Async error: code {NATS SERVER_ERR} message {'Stale Connection'}
+#[18:54:22.025 Obj57_ExtraOptions error] Failed to read data from localhost:4222
+#Async error: code {NATS BROKEN_SOCKET} message {Failed to read from socket}
+#New status: 3
+
+#assertion failed: 3656 < 2400
+}
 # actual effect of "pedantic" is difficult to test because of client-side checks, so I tested it manually
 
-test error_checks-1 "Connect in verbose+pedantic mode with echo off" -body {
-    set conn [nats::connection new]
-    $conn configure -servers nats://localhost:4222 -verbose true -pedantic true -echo false
-    $conn connect -async
-    set obs [test_utils::chanObserver new [set ${::conn}::sock] w]
-    test_utils::sleep 500
-    set chanData [$obs getChanData]
-    assert {$chanData eq {CONNECT {"verbose":true,"pedantic":true,"tls_required":false,"name":"","lang":"Tcl","version":"0.9","protocol":1,"echo":false}}}
-    assert {[set ${conn}::status] eq $nats::status_connected}
-    $conn destroy
-} -result {}
+#test error_checks-1 "Connect in verbose+pedantic mode with echo off" -body {
+#    set conn [nats::connection new]
+#    $conn configure -servers nats://localhost:4222 -verbose true -pedantic true -echo false
+#    $conn connect -async
+#    set obs [test_utils::chanObserver new [set ${::conn}::sock] w]
+#    test_utils::sleep 500
+#    set chanData [$obs getChanData]
+#    assert {$chanData eq {CONNECT {"verbose":true,"pedantic":true,"tls_required":false,"name":"","lang":"Tcl","version":"0.9","protocol":1,"echo":false}}}
+#    assert {[set ${conn}::status] eq $nats::status_connected}
+#    $conn destroy
+#} -result {}
 
 # connect fails with empty server pool
-
-test_utils::stopNats NATS
+#$conn destroy
+#stopNats NATS
 
 tcltest::cleanupTests

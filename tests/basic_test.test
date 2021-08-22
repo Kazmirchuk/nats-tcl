@@ -287,7 +287,7 @@ test basic-14 "Synchronous request with multiple responders" -body {
     assert {$elapsed < 400}
     sleep 500 ;# ensure we receive the other 4 replies
     set rdata [$obs getChanData 0]
-    assert { [llength [lsearch -all $rdata "foobar"]] == 5}
+    assert { [llength [lsearch -exact -all $rdata "foobar"]] == 5}
     $obs destroy
     set result
 } -result "foobar"
@@ -328,7 +328,7 @@ test basic-16 "Queue groups and publish with replyTo" -body {
     $conn ping ;# flush
     sleep 500
     assert {$msg_count == 2}
-    $conn unsubscribe $sub_id
+    # $conn unsubscribe $sub_id - deliberately don't unsubscribe - $conn disconnect should delete all subscriptions
     # because of queue groups I need to send as many "exit" messages as number of responders in the biggest queue group
     for {set i 0} { $i < 3} {incr i} {
         stopResponder $conn test_qg
@@ -340,7 +340,7 @@ test basic-17 "Check internal state after disconnection" -body {
     $conn disconnect
     assert {[set ${conn}::sock] eq ""}
     assert {[set ${conn}::status] == $nats::status_closed}
-    assert {[array size ${conn}::subscriptions] == 1} ;# one remaining subscription is the wildcard for requests
+    assert {[array size ${conn}::subscriptions] == 0}
     assert {[array size ${conn}::requests] == 0}
     assert {[llength [set ${conn}::outBuffer]] == 0}
 }

@@ -137,7 +137,7 @@ oo::class create ::nats::connection {
         }
         foreach {opt val} [array get options] {
             # workaround for a bug in cmdline::typedGetoptions as explained above
-            if {[lsearch -index 0 $nats::option_syntax "$opt.list"] != -1} {
+            if {[lsearch -exact -index 0 $nats::option_syntax "$opt.list"] != -1} {
                 set config($opt) [lindex $val 0]
             } else {
                 set config($opt) $val
@@ -153,6 +153,19 @@ oo::class create ::nats::connection {
         return
     }
 
+    method reset {opt} {
+        set opt [string trimleft $opt -]
+        set pos [lsearch -glob -index 0 $nats::option_syntax "$opt.*"]
+        if {$pos != -1} {
+            set config($opt) [lindex $nats::option_syntax $pos 1]
+            if {$opt eq "servers"} {
+                $serverPool clear
+            }
+        } else {
+            throw {NATS INVALID_ARG} "Invalid option $opt"
+        }
+    }
+    
     method logger {} {
         return $logger
     }
@@ -207,6 +220,9 @@ oo::class create ::nats::connection {
         # my Flusher 0 - Flusher has reconnecting logic that can get in our way in case flushing fails
         # it's easier to duplicate flushing code in CloseSocket
         my CloseSocket
+        array unset subscriptions ;# make sure we don't try to "restore" subscriptions when we connect next time
+        array unset requests
+        set requestsInboxPrefix ""
         #CoroMain will set status to "closed"
         return
     }
@@ -225,6 +241,9 @@ oo::class create ::nats::connection {
         set data "PUB $subject $replySubj $msgLen"
         lappend outBuffer $data
         lappend outBuffer $msg
+        if {$config(send_asap)} {
+            my Flusher 0
+        }
         return
     }
     
@@ -378,15 +397,18 @@ oo::class create ::nats::connection {
         return
     }
     
-    method ping { {timeout -1} } {
+    #this function is called "flush" in all other NATS clients, but I find it confusing
+    # default timeout in nats.go is 10s
+    method ping { {timeout 10000} } {
+        my CheckTimeout $timeout
+        
         if {$status != $nats::status_connected} {
-            return false
+            # unlike CheckConnection, here we want to raise the error also if the client is reconnecting, in line with cnats
+            throw {NATS NO_CONNECTION} "No connection to NATS server"
         }
-        set timerID ""
-        if {$timeout != -1} {
-            my CheckTimeout $timeout
-            set timerID [after $timeout [list set [self object]::pong 0]]
-        }
+
+        set timerID [after $timeout [list set [self object]::pong 0]]
+
         lappend outBuffer "PING"
         my Flusher 0
         my CoroVwait [self object]::pong
@@ -394,7 +416,7 @@ oo::class create ::nats::connection {
             after cancel $timerID
             return true
         }
-        return false
+        throw {NATS TIMEOUT} "PING timeout"
     }
     
     method inbox {} {
@@ -465,7 +487,10 @@ oo::class create ::nats::connection {
     method Pinger {} {
         set timers(ping) [after $config(ping_interval) [mymethod Pinger]]
         lappend outBuffer "PING"
+        #TODO MaxPingsOut - ErrStaleConnection
         ${logger}::debug "Sending PING"
+        # Pinger should flush too, see def _send_ping in nats.py
+        my Flusher 0
     }
     
     method Flusher { {scheduleNext 1} } {
@@ -676,10 +701,13 @@ oo::class create ::nats::connection {
     
     method PING {cmd} {
         lappend outBuffer "PONG"
+        ${logger}::debug "sending PONG"
+        my Flusher 0
     }
     
     method PONG {cmd} {
         set pong 1
+        ${logger}::debug "received PONG"
     }
     
     method OK {cmd} {

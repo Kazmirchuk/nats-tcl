@@ -5,7 +5,7 @@
 
 namespace import ::tcltest::test
 
-cd tests/cert
+cd cert
 test_utils::startNats NATS --tls --tlscert=server-cert.pem --tlskey=server-key.pem --tlscacert=rootCA.pem
 
 
@@ -28,7 +28,7 @@ test tls-2 "Connect to NATS using CA" -body {
 } -result {}
 
 # auth with client certificate
-cd ../..
+cd ..
 $conn destroy
 test_utils::stopNats NATS
 tcltest::cleanupTests

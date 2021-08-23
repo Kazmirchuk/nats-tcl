@@ -17,7 +17,9 @@ trace add variable ${conn}::status write [lambda {var idx op } {
 }]
 trace add variable ${conn}::last_error write [lambda {var idx op } {
     upvar $var e
-    puts "Async error: $e"
+    if {$e ne ""} {
+        puts "Async error: $e"
+    }
 }]
 
 [$conn logger]::setlevel debug

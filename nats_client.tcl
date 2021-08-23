@@ -11,7 +11,6 @@ package require tcl::chan::random
 package require tcl::randomseed
 package require coroutine
 package require logger
-package require control
 
 namespace eval ::nats {
     # improvised enum
@@ -33,16 +32,15 @@ set ::nats::option_syntax {
     { connect_timeout.integer 2000      "Connection timeout (ms)"}
     { reconnect_time_wait.integer 2000  "How long to wait between two reconnect attempts to the same server (ms)"}
     { max_reconnect_attempts.integer 60 "Maximum number of reconnect attempts per server"}
-    { ping_interval.integer 120000      "Interval (ms) to send PING messages to NATS server"}
-    { max_outstanding_pings.integer 2   "Max number of PINGs without a reply from NATS before closing the connection"}
+    { ping_interval.integer 120000      "Interval (ms) to send PING messages to a NATS server"}
+    { max_outstanding_pings.integer 2   "Max number of PINGs without a reply from a NATS server before closing the connection"}
     { flush_interval.integer 500        "Interval (ms) to flush sent messages"}
-    { echo.boolean true                 "If true, messages from this connection will be sent by the server back if the connection has matching subscriptions"}
+    { echo.boolean true                 "If true, messages from this connection will be echoed back by the server if the connection has matching subscriptions"}
     { tls_opts.list ""                  "Options for tls::import"}
     { user.list ""                      "Default username"}
     { password.list ""                  "Default password"}
     { token.arg ""                      "Default authentication token"}
     { secure.boolean false              "Indicate to the server if the client wants a TLS connection"}
-    { send_asap.boolean false           "Make publish calls send the data immediately, reducing latency, but also throughput"}
 }
 
 oo::class create ::nats::connection {
@@ -217,9 +215,15 @@ oo::class create ::nats::connection {
         if {$status == $nats::status_closed} {
             return
         }
-        # my Flusher 0 - Flusher has reconnecting logic that can get in our way in case flushing fails
-        # it's easier to duplicate flushing code in CloseSocket
-        my CloseSocket
+        
+        if {$sock eq ""} {
+            # if a user calls disconnect while we are waiting for reconnect_time_wait, we only need to stop the coroutine
+            $coro stop
+        } else {
+            # my Flusher 0 - Flusher has reconnecting logic that can get in our way in case flushing fails
+            # it's easier to duplicate flushing code in CloseSocket
+            my CloseSocket
+        }
         array unset subscriptions ;# make sure we don't try to "restore" subscriptions when we connect next time
         array unset requests
         set requestsInboxPrefix ""
@@ -241,7 +245,7 @@ oo::class create ::nats::connection {
         set data "PUB $subject $replySubj $msgLen"
         lappend outBuffer $data
         lappend outBuffer $msg
-        if {$config(send_asap)} {
+        if {$config(flush_interval) == 0} {
             my Flusher 0
         }
         return
@@ -399,7 +403,20 @@ oo::class create ::nats::connection {
     
     #this function is called "flush" in all other NATS clients, but I find it confusing
     # default timeout in nats.go is 10s
-    method ping { {timeout 10000} } {
+    method ping { args } {
+        set timeout 10000
+        foreach {opt val} $args {
+            switch -- $opt {
+                -timeout {
+                    my CheckTimeout $val
+                    set timeout $val
+                }
+                default {
+                    throw {NATS INVALID_ARG} "Unknown option $opt"
+                }
+            }
+        }
+        
         my CheckTimeout $timeout
         
         if {$status != $nats::status_connected} {
@@ -410,6 +427,7 @@ oo::class create ::nats::connection {
         set timerID [after $timeout [list set [self object]::pong 0]]
 
         lappend outBuffer "PING"
+        ${logger}::debug "sending PING"
         my Flusher 0
         my CoroVwait [self object]::pong
         if {$pong} {
@@ -451,11 +469,11 @@ oo::class create ::nats::connection {
     }
     
     method CloseSocket { {broken 0} } {
-        chan event $sock readable {}
         # this method is only for closing an established connection
         # it is not convenient to re-use it for all cases of close $sock
         # because it does a lot of other work
-        control::assert {$status == $nats::status_connected}
+        
+        chan event $sock readable {}
         if {$broken} {
             $serverPool current_server_connected false
             set status $nats::status_reconnecting
@@ -496,7 +514,9 @@ oo::class create ::nats::connection {
     method Flusher { {scheduleNext 1} } {
         if {$scheduleNext} {
             # when this method is called manually, scheduleNext == 0
-            set timers(flush) [after $config(flush_interval) [mymethod Flusher]]
+            if {$config(flush_interval) != 0} {
+                set timers(flush) [after $config(flush_interval) [mymethod Flusher]]
+            }
         }
         try {
             foreach msg $outBuffer {
@@ -528,7 +548,7 @@ oo::class create ::nats::connection {
     method ConnectNextServer {} {
         # if it throws NO_SERVERS, we have exhausted all servers in the pool
         # we must stop the coroutine, so let the error propagate
-        lassign [$serverPool next_server] host port
+        lassign [$serverPool next_server] host port ;# it may wait for reconnect_time_wait ms!
         ${logger}::info "Connecting to the server at $host:$port"
         set sock [socket -async $host $port]
         chan event $sock writable [list $coro connected]
@@ -566,7 +586,8 @@ oo::class create ::nats::connection {
         # exit from vwait in "connect"
         set status $nats::status_connected
         my RestoreSubs
-        my Flusher ;# flush the buffer now if it has any data
+        set timers(flush) "" ;# mostly for the test extra_opts-1.3 to ensure that the timer is not running when flush_interval=0
+        my Flusher ;# flush the buffer now if it has any data and start the timer
         set timers(ping) [after $config(ping_interval) [mymethod Pinger]]
     }
     
@@ -701,7 +722,7 @@ oo::class create ::nats::connection {
     
     method PING {cmd} {
         lappend outBuffer "PONG"
-        ${logger}::debug "sending PONG"
+        ${logger}::debug "received PING, sending PONG"
         my Flusher 0
     }
     
@@ -716,7 +737,15 @@ oo::class create ::nats::connection {
     
     method ERR {cmd} {
         ${logger}::error $cmd
-        my AsyncError SERVER_ERR $cmd
+        # all error messages from NATS are wrapped in single quotes
+        if {$cmd eq "'Stale Connection'"} {
+            my AsyncError STALE_CONNECTION $cmd
+            # the server has already closed the socket, so we can do the same now without checking for eof
+            my CloseSocket 1
+            my ConnectNextServer
+        } else {
+            my AsyncError SERVER_ERR $cmd
+        }
     }
     
     method CoroMain {} {
@@ -728,13 +757,14 @@ oo::class create ::nats::connection {
                 if {$reason eq "stop"} {
                     break
                 }
-                if {$reason ni [list connect connected connect_timeout readable]} {
+                if {$reason in [list connect connected connect_timeout readable]} {
+                    my ProcessEvent $reason
+                } else {
                     ${logger}::error "CoroMain: unknown reason $reason"
                 }
-                my ProcessEvent $reason
             }
         } trap {NATS STOP_CORO} {msg opts} {
-            # we get here after call to "disconnect" during MSG; the socket has been already closed,
+            # we get here after call to "disconnect" during MSG or next_server; the socket has been already closed,
             # so we only need to update the status
         } trap {NATS} {msg opts} {
             #todo: try yieldto? 
@@ -797,7 +827,7 @@ oo::class create ::nats::connection {
                     # max length of control line in the NATS protocol is 1024 (see MAX_CONTROL_LINE_SIZE in nats.py)
                     # this should not happen unless the NATS server is malfunctioning
                     ${logger}::error "Maximum control line exceeded"
-                    my AsyncError SERVER_ERR "Maximum control line exceeded"
+                    my AsyncError PROTOCOL_ERR "Maximum control line exceeded"
                     my CloseSocket 1
                     my ConnectNextServer
                     return
@@ -873,17 +903,14 @@ oo::class create ::nats::connection {
     }
 }
 
-namespace eval ::nats {
-    proc timestamp {} {
-        # workaround for not being able to format current time with millisecond precision
-        # should not be needed in Tcl 8.7, see https://core.tcl-lang.org/tips/doc/trunk/tip/423.md
-        set t [clock milliseconds]
-        set timeStamp [format "%s.%03d" \
-                          [clock format [expr {$t / 1000}] -format %T] \
-                          [expr {$t % 1000}] \
-                      ]
-        return $timeStamp
-    }
+proc ::nats::timestamp {} {
+    # workaround for not being able to format current time with millisecond precision
+    # should not be needed in Tcl 8.7, see https://core.tcl-lang.org/tips/doc/trunk/tip/423.md
+    set t [clock milliseconds]
+    set timeStamp [format "%s.%03d" \
+                      [clock format [expr {$t / 1000}] -format %T] \
+                      [expr {$t % 1000}] ]
+    return $timeStamp
 }
 
 package provide nats 0.9

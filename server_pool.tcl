@@ -80,7 +80,13 @@ oo::class create ::nats::server_pool {
             }
             set now [clock seconds]
             if {$now < [expr {[dict get $s last_attempt] + $config(reconnect_time_wait)}]} {
-                coroutine::util after $config(reconnect_time_wait)
+                [$conn logger]::debug "Waiting for $config(reconnect_time_wait) before connecting to the next server"
+                set timer [after $config(reconnect_time_wait) [info coroutine]]
+                set reason [yield] ;# may be interrupted by a user calling disconnect
+                if {$reason eq "stop" } {
+                    after cancel $timer
+                    throw {NATS STOP_CORO} "Stop coroutine" ;# break from the main loop
+                }
             }
             dict set s last_attempt [clock seconds]
             lappend servers $s

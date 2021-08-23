@@ -19,7 +19,9 @@ trace add variable ${conn}::status write [lambda {var idx op } {
 }]
 trace add variable ${conn}::last_error write [lambda {var idx op } {
     upvar $var e
-    puts "Async error: $e"
+    if {$e ne ""} {
+        puts "Async error: $e"
+    }
 }]
 
 $conn configure -servers nats://localhost:4222
@@ -58,18 +60,20 @@ test extra_opts-1.2 "Check that we can reduce the flush interval" -body {
     set test_utils::simpleMsg
 } -result "hello2"
 
-test extra_opts-1.3 "Check the send_asap=true option" -body {
+test extra_opts-1.3 "Check flush_interval=0" -body {
     set test_utils::simpleMsg ""
-    $conn configure -send_asap true
+    $conn configure -flush_interval 0 ;# flush immediately
     $conn connect
     $conn subscribe subject1 -callback test_utils::simpleCallback
     $conn publish subject1 hello3
+    assert {[set ${conn}::timers(flush)] eq ""} ;# check that the flushing timer is not created
+    assert {[llength [set ${conn}::outBuffer]] == 0} ;# check that the buffer is flushed immediately
     duration {
         vwait test_utils::simpleMsg
     } elapsed
     assert {$elapsed < 300}
     $conn disconnect
-    $conn reset -send_asap
+    $conn reset -flush_interval
     set test_utils::simpleMsg
 } -result "hello3"
 
@@ -152,25 +156,22 @@ test extra_opts-4.2 "PING/PONG - no response from the client" -body {
         set buffer [lsearch -inline -all -not -exact $buffer "PONG"] ;# do not send PONG to the server
         puts "Deleted PONG"
     }]
-    
+    # wait for the next PING/PONG exchange initiated by the server
+    # we do not respond to PING, so the server will report an error with -ERR and close the socket
+    # which will make the client go into the reconnecting mode
     duration {
         vwait ${conn}::status
     } elapsed
+    assert {[dict get [set ${conn}::last_error] code] eq "NATS STALE_CONNECTION"}
     assert {[set ${conn}::status] == $nats::status_reconnecting}
-    assert {$elapsed < 2400} ;# wait ping_interval * ping_max in the config file + jitter
-    
+    # after sending PING, the server will wait for 2s more before declaring 'Stale Connection'
+    assert {$elapsed < 5000}
     $conn disconnect
     $conn destroy
-    stopNats quick_ping
-    
-#    [18:54:22.025 Obj57_ExtraOptions error] 'Stale Connection'
-#Async error: code {NATS SERVER_ERR} message {'Stale Connection'}
-#[18:54:22.025 Obj57_ExtraOptions error] Failed to read data from localhost:4222
-#Async error: code {NATS BROKEN_SOCKET} message {Failed to read from socket}
-#New status: 3
-
-#assertion failed: 3656 < 2400
 }
+stopNats quick_ping
+#TODO: no PONG response from server
+
 # actual effect of "pedantic" is difficult to test because of client-side checks, so I tested it manually
 
 #test error_checks-1 "Connect in verbose+pedantic mode with echo off" -body {

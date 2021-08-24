@@ -17,12 +17,12 @@ set conn [nats::connection new "BasicNats"]
 
 trace add variable ${conn}::status write [lambda {var idx op } {
     upvar $var s
-    puts "New status: $s"
+    [$::conn logger]::info "New status: $s"
 }]
 trace add variable ${conn}::last_error write [lambda {var idx op } {
     upvar $var e
     if {$e ne ""} {
-        puts "Async error: $e"
+        [$::conn logger]::info "Async error: $e"
     }
 }]
 
@@ -231,7 +231,7 @@ test basic-10 "Asynchronous request with timeout - failure" -body {
         
         vwait test_utils::simpleMsg
     } elapsed
-    assert {$elapsed >= 600}
+    assert {[approx $elapsed 600]}
 }
 
 # wait until the delayed message arrives

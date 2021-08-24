@@ -170,7 +170,35 @@ test extra_opts-4.2 "PING/PONG - no response from the client" -body {
     $conn destroy
 }
 stopNats quick_ping
-#TODO: no PONG response from server
+
+# make a fake NATS server that does not respond to PING
+startFakeServer
+set handler {
+    proc handler {channel line} {
+        if {$line eq "PING"} {
+            puts $channel FAKE_PONG
+        }
+    }
+}
+comm::comm send 4223 $handler
+
+test extra_opts-5 "PING/PONG - no response from the server" -body {
+    set conn [nats::connection new]
+    [$conn logger]::setlevel debug
+    $conn configure -servers nats://localhost:4222 -ping_interval 1000
+    # default max_outstanding_pings=2
+    $conn connect
+    duration {
+        # the client will send 2 PINGs without reply; when Pinger runs for the 3rd time, it will raise the error
+        # and the client will go into reconnecting
+        vwait ${conn}::status
+    } elapsed
+    assert {[dict get [set ${conn}::last_error] code] eq "NATS STALE_CONNECTION"}
+    assert {[set ${conn}::status] == $nats::status_reconnecting}
+    assert {[approx $elapsed 3000]}
+    $conn destroy
+}
+stopFakeServer
 
 # actual effect of "pedantic" is difficult to test because of client-side checks, so I tested it manually
 

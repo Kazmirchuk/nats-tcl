@@ -8,6 +8,7 @@ package require tcl::chan::variable
 package require processman
 package require oo::util
 package require control
+package require comm
 
 namespace eval test_utils {
     variable sleepVar 0
@@ -125,15 +126,17 @@ namespace eval test_utils {
     }
     
     proc stopNats {id} {
-        # processman::kill on Linux relies on odielib or Tclx packages that might not be available
-        if {$::tcl_platform(platform) eq "unix"} {
-            foreach pid [dict get $processman::process_list $id] {
-                catch {exec kill $pid}
+        if {$::tcl_platform(platform) eq "windows"} {
+            processman::kill $id
+        } else {
+            # processman::kill on Linux relies on odielib or Tclx packages that might not be available
+            set pid [processman::running $id]
+            if {$pid == 0} {
+                return
             }
+            catch {exec kill $pid}
             after 500
-            return
         }
-        processman::kill $id
         puts stderr "[nats::timestamp] Stopped $id"
     }
     
@@ -147,6 +150,18 @@ namespace eval test_utils {
     proc stopResponder {conn {subj "service"}} {
         $conn publish $subj [list 0 exit]
         wait_flush $conn
+    }
+    
+    # comm ID (port) is hard-coded to 4223
+    proc startFakeServer {} {
+        set scriptPath [file join [file dirname [info script]] fake_server.tcl]
+        exec [info nameofexecutable] $scriptPath &
+        sleep 500
+    }
+    
+    proc stopFakeServer {} {
+        comm::comm send -async 4223 quit
+        sleep 500 ;# make sure it exits before starting a new fake or real NATS server
     }
     
     # control:assert is garbage and doesn't perform substitution on failed expressions, so I can't even know a value of offending variable etc
@@ -164,9 +179,15 @@ namespace eval test_utils {
             return -code error "invalid boolean expression: $expression"
         }
         if {$res} {return}
-        set msg "assertion failed: [uplevel 1 [list subst $expression]]"
+        # -nocommands is useful when using [approx]
+        set msg "assertion failed: [uplevel 1 [list subst -nocommands $expression]]"
         return -code error $msg
     }
     
-    namespace export sleep wait_flush chanObserver duration startNats stopNats startResponder stopResponder assert
+    #check that actual == ref within certain tolerance - useful for timers/duration
+    proc approx {actual ref {tolerance 50}} {
+        return [expr {$actual > ($ref - $tolerance) && $actual < ($ref + $tolerance)}]
+    }
+    
+    namespace export sleep wait_flush chanObserver duration startNats stopNats startResponder stopResponder startFakeServer stopFakeServer assert approx
 }

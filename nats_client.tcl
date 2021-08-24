@@ -83,7 +83,7 @@ oo::class create ::nats::connection {
         set sock "" ;# the TCP socket
         set coro "" ;# the coroutine handling readable and writeable events on the socket
         array set timers {ping {} flush {} connect {} }
-        array set counters {subscription 0 request 0}
+        array set counters {subscription 0 request 0 pendingPings 0}
         array set subscriptions {} ;# subID -> dict (subj, queue, cmd, maxMsgs, recMsgs)
         # async reqs: reqID -> {1 timer callback} ; sync requests: reqID -> {0 timedOut response}
         # RequestCallback needs to distinguish between sync and async, so we need 0/1 in front
@@ -504,9 +504,18 @@ oo::class create ::nats::connection {
     
     method Pinger {} {
         set timers(ping) [after $config(ping_interval) [mymethod Pinger]]
+        
+        if {$counters(pendingPings) >= $config(max_outstanding_pings)} {
+            my AsyncError STALE_CONNECTION "The server did not respond on $counters(pendingPings) PINGs"
+            my CloseSocket 1
+            set counters(pendingPings) 0
+            $coro connect
+            return
+        }
+        
         lappend outBuffer "PING"
-        #TODO MaxPingsOut - ErrStaleConnection
         ${logger}::debug "Sending PING"
+        incr counters(pendingPings)
         # Pinger should flush too, see def _send_ping in nats.py
         my Flusher 0
     }
@@ -728,6 +737,7 @@ oo::class create ::nats::connection {
     
     method PONG {cmd} {
         set pong 1
+        set counters(pendingPings) 0
         ${logger}::debug "received PONG"
     }
     
@@ -773,7 +783,7 @@ oo::class create ::nats::connection {
             ${logger}::error $msg
         } trap {} {msg opts} {
             ${logger}::error "Unexpected error: $msg $opts"
-        } finally {}
+        }
         set status $nats::status_closed
         ${logger}::debug "Finished coroutine $coro"
     }
@@ -823,6 +833,7 @@ oo::class create ::nats::connection {
                 # the coroutine will be invoked again as soon as a complete line is available
                 #TODO do i need catch around gets? if remote end aborts network connection
                 set readCount [chan gets $sock line]
+                # FIXME chan pending should be before chan gets  ?
                 if {[chan pending input $sock] > 1024} {
                     # max length of control line in the NATS protocol is 1024 (see MAX_CONTROL_LINE_SIZE in nats.py)
                     # this should not happen unless the NATS server is malfunctioning

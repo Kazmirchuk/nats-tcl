@@ -51,7 +51,6 @@ The **configure** method accepts the following options. Make sure to set them *b
 | max_reconnect_attempts | integer | 60 | Maximum number of reconnect attempts per server |
 | ping_interval | integer | 120000 | Interval (ms) to send PING messages to a NATS server|
 | max_outstanding_pings | integer | 2 | Max number of PINGs without a reply from a NATS server before closing the connection |
-| flush_interval | integer | 500 | Interval (ms) to flush sent messages. Synchronous requests are always flushed immediately. If the interval is set to 0, all messages will be flushed immediately, similar to `natsOptions_SetSendAsap(true)` in the NATS C client. |
 | echo | boolean | true | If true, messages from this connection will be echoed back by the server if the connection has matching subscriptions|
 | tls_opts | list | | Options for tls::import |
 | user | string | | Default username|
@@ -83,7 +82,6 @@ Flushes all outgoing data, closes the TCP connection and sets the `status` to "c
 ### objectName publish subject msg ?replySubj? 
 Publishes a message to the specified subject. See the NATS [documentation](https://docs.nats.io/nats-concepts/subjects) for more details about subjects and wildcards. The client will check subject's validity before sending. Allowed characters are Latin-1 characters, digits, dot, dash and underscore. <br/>
 `msg` is sent as is, it can be a binary string. If you specify `replySubj`, a responder will know where to send a reply. You can use the `inbox` method to generate a transient [subject name](https://docs.nats.io/developing-with-nats/sending/replyto) starting with _INBOX. However, using asynchronous requests might accomplish the same task in an easier manner - see below.<br/>
-Note that for higher throughput the message is only added to a buffer, and will be flushed to the TCP socket not later than after `flush_interval` ms.
 
 ### objectName subscribe subject ?-queue queueGroup? ?-callback cmdPrefix? ?-max_msgs maxMsgs?
 Subscribes to a subject (possibly with wildcards) and returns a subscription ID. Whenever a message arrives, the command prefix will be invoked from the event loop with 3 additional arguments: `subject`, `message` and `replyTo` (might be empty). If you use the [-queue option](https://docs.nats.io/developing-with-nats/receiving/queues), only one subscriber in a given queueGroup will receive each message (useful for load balancing). When given `-max_msgs`, the client will automatically unsubscribe after `maxMsgs` messages have been received.
@@ -93,11 +91,11 @@ Unsubscribes from a subscription with a given `subID` immediately. If `-max_msgs
 
 ### objectName request subject message ?-timeout ms? ?-callback cmdPrefix? 
 Sends a message to the specified subject using an automatically generated transient `replyTo` subject (inbox). 
-- If no callback is given, the request is synchronous, is flushed to the socket immediately, and blocks in (possibly, coroutine-aware) `vwait` until a reply is received. The reply is the return value. If no reply arrives within `timeout`, it raises an error "TIMEOUT".
+- If no callback is given, the request is synchronous and blocks in (possibly, coroutine-aware) `vwait` until a reply is received. The reply is the return value. If no reply arrives within `timeout`, it raises an error "TIMEOUT".
 - If a callback is given, the call returns immediately, and when a reply is received or a timeout fires, the command prefix will be invoked from the event loop with 2 additional arguments: `timedOut` (equal to 1, if the request timed out) and a `reply`.
 
 ### objectName ping ?-timeout ms?
-A blocking call that triggers a ping-pong exchange with the NATS server and returns true upon success. If the server does not reply within the specified timeout (ms), it raises `TIMEOUT` error. Default timeout is 10s. You can use this method to check if the server is alive or to force flush outgoing data.
+A blocking call that triggers a ping-pong exchange with the NATS server and returns true upon success. If the server does not reply within the specified timeout (ms), it raises `TIMEOUT` error. Default timeout is 10s. You can use this method to check if the server is alive.
 
 ### objectName inbox 
 Returns a new inbox - random subject starting with _INBOX.

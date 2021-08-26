@@ -41,7 +41,9 @@ test basic-1 "Connect NATS" -body {
 test basic-2.1 "Subscribe to a message" -body {
     set obs [test_utils::chanObserver new $conn w]
     set sub_id [$conn subscribe subject1 -callback test_utils::simpleCallback]
+    assert {[set ${conn}::timers(flush)] ne ""} ;# check that flush has been scheduled
     wait_flush $conn
+    assert {[set ${conn}::timers(flush)] eq ""} ;# no more pending flushes
     set chanData [$obs getChanData]
     # double space is not accidental
     assert {$chanData eq "SUB subject1  $sub_id"}
@@ -58,7 +60,7 @@ test basic-2.2 "Publish a message" -body {
     lassign [$obs getChanData] readData writtenData
     assert {$writtenData eq {PUB subject1  5}}
     assert {$readData eq "MSG subject1 $sub_id 5"}
-    assert {$elapsed < 1000} ;# time to flush and receive MSG from the server
+    assert {$elapsed < 100} ;# time to flush and receive MSG from the server
     $obs destroy
     set test_utils::simpleMsg
 } -result "hello"
@@ -74,7 +76,7 @@ test basic-2.3 "Unsubscribe and publish again" -body {
     lassign [$obs getChanData 0] readData writtenData
     assert {[lindex $writtenData 0] eq "UNSUB $sub_id"}
     assert {[lindex $writtenData 1] eq "PUB subject1  [string length {one more hello}]"}
-    assert {[approx $elapsed 500]} ;# time to flush
+    assert {$elapsed < 50}
     # check that the server did not send MSG back
     assert {[llength $readData] == 0}
     $obs destroy
@@ -145,7 +147,7 @@ test basic-5.1 "Synchronous request" -body {
     duration {
         set result [$conn request service "0 hello"]
     } elapsed
-    assert {$elapsed < 400}  ;# flush is immediate; actual roundtrip time on localhost ~40ms
+    assert {$elapsed < 200}  ;# actual roundtrip time on localhost ~40ms
     lassign [$obs getChanData 0] rdata wdata
     $obs destroy
     set result
@@ -173,7 +175,7 @@ test basic-6 "Synchronous request with timeout - success" -body {
     duration {
         set result [$conn request service "500 sync_req" -timeout 600]
     } elapsed
-    assert {[approx $elapsed 550]}
+    assert {[approx $elapsed 540]}
     set result
 } -result "sync_req"
 
@@ -198,7 +200,7 @@ test basic-8 "Asynchronous request" -body {
     duration {
         vwait test_utils::simpleMsg
     } elapsed
-    assert {$elapsed >= 100 && $elapsed < 700} ;# async requests don't auto-flush! confirmed against the reference nats.go
+    assert {[approx $elapsed 140 ]}
     
     set test_utils::simpleMsg
 } -result "async_req"
@@ -214,7 +216,7 @@ test basic-9 "Asynchronous request with timeout - success" -body {
         
         vwait test_utils::simpleMsg
     } elapsed
-    assert {$elapsed < 600}
+    assert {$elapsed < 300}
 } 
 
 test basic-10 "Asynchronous request with timeout - failure" -body {
@@ -244,7 +246,7 @@ test basic-11 "2 asynchronous requests" -body {
         vwait test_utils::simpleMsg
         assert {$test_utils::simpleMsg eq "async_req4"}
     } elapsed
-    assert {$elapsed >=500 && $elapsed < 1100} 
+    assert {[approx $elapsed 540 ]} 
 }
 
 # testing confirmed that
@@ -300,7 +302,7 @@ test basic-15 "Asynchronous request with multiple responders" -body {
     duration {
         vwait ::msg_count
     } elapsed
-    assert {$elapsed < 550} ;# including flush_interval
+    assert {$elapsed < 300}
     sleep 500 ;# ensure we receive the other 4 replies - you will see them in the debug log
     set msg_count ;# check the lambda was called only once
 } -result 1

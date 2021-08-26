@@ -31,7 +31,6 @@ set ::nats::option_syntax {
     { max_reconnect_attempts.integer 60 "Maximum number of reconnect attempts per server"}
     { ping_interval.integer 120000      "Interval (ms) to send PING messages to a NATS server"}
     { max_outstanding_pings.integer 2   "Max number of PINGs without a reply from a NATS server before closing the connection"}
-    { flush_interval.integer 500        "Interval (ms) to flush sent messages"}
     { echo.boolean true                 "If true, messages from this connection will be echoed back by the server if the connection has matching subscriptions"}
     { tls_opts.list ""                  "Options for tls::import"}
     { user.list ""                      "Default username"}
@@ -219,8 +218,6 @@ oo::class create ::nats::connection {
             # if a user calls disconnect while we are waiting for reconnect_time_wait, we only need to stop the coroutine
             $coro stop
         } else {
-            # my Flusher 0 - Flusher has reconnecting logic that can get in our way in case flushing fails
-            # it's easier to duplicate flushing code in CloseSocket
             my CloseSocket
         }
         array unset subscriptions ;# make sure we don't try to "restore" subscriptions when we connect next time
@@ -242,11 +239,8 @@ oo::class create ::nats::connection {
         }
         
         set data "PUB $subject $replySubj $msgLen"
-        lappend outBuffer $data
-        lappend outBuffer $msg
-        if {$config(flush_interval) == 0} {
-            my Flusher 0
-        }
+        lappend outBuffer $data $msg
+        my ScheduleFlush
         return
     }
     
@@ -299,6 +293,7 @@ oo::class create ::nats::connection {
             if {$maxMsgs > 0} {
                 lappend outBuffer "UNSUB $subID $maxMsgs"
             }
+            my ScheduleFlush
         }
         return $subID
     }
@@ -336,6 +331,7 @@ oo::class create ::nats::connection {
         if {$status != $nats::status_reconnecting} {
             # it will be sent anyway when we reconnect
             lappend outBuffer $data
+            my ScheduleFlush
         }
         return
     }
@@ -359,13 +355,6 @@ oo::class create ::nats::connection {
             }
         }
         
-        # it's easy to forget that only sync requests do auto-flush
-        if {$callback ne "" && $timeout != -1} {
-            if {$config(flush_interval) >= $timeout} {
-                throw {NATS INVALID_ARG} "Wrong timeout: async requests need at least flush_interval ms to complete"
-            }
-        }
-        
         if {$requestsInboxPrefix eq ""} {
             set requestsInboxPrefix [my inbox]
             my subscribe "$requestsInboxPrefix.*" -callback [mymethod RequestCallback]
@@ -380,8 +369,6 @@ oo::class create ::nats::connection {
             if {$timeout != -1} {
                  set timerID [after $timeout [list set [self object]::requests($reqID) [list 0 1 ""]]]
             }
-            # we don't want to wait for the flusher here, call it now, but don't schedule one more
-            my Flusher 0
             set requests($reqID) [list 0]
             my CoroVwait [self object]::requests($reqID)
             lassign $requests($reqID) ignored timedOut response
@@ -427,7 +414,7 @@ oo::class create ::nats::connection {
 
         lappend outBuffer "PING"
         ${logger}::debug "sending PING"
-        my Flusher 0
+        my ScheduleFlush
         my CoroVwait [self object]::pong
         if {$pong} {
             after cancel $timerID
@@ -493,6 +480,7 @@ oo::class create ::nats::connection {
         array unset serverInfo
         after cancel $timers(ping)
         after cancel $timers(flush)
+        set timers(flush) ""
         
         if {[info coroutine] eq ""} {
             if {!$broken} {
@@ -515,17 +503,17 @@ oo::class create ::nats::connection {
         lappend outBuffer "PING"
         ${logger}::debug "Sending PING"
         incr counters(pendingPings)
-        # Pinger should flush too, see def _send_ping in nats.py
-        my Flusher 0
+        my ScheduleFlush
     }
     
-    method Flusher { {scheduleNext 1} } {
-        if {$scheduleNext} {
-            # when this method is called manually, scheduleNext == 0
-            if {$config(flush_interval) != 0} {
-                set timers(flush) [after $config(flush_interval) [mymethod Flusher]]
-            }
+    method ScheduleFlush {} {
+        if {$timers(flush) eq "" && $status == $nats::status_connected} {
+            set timers(flush) [after 0 [mymethod Flusher]]
         }
+    }
+    
+    method Flusher { } {
+        set timers(flush) ""
         try {
             foreach msg $outBuffer {
                 append msg "\r\n"
@@ -538,6 +526,7 @@ oo::class create ::nats::connection {
             my AsyncError BROKEN_SOCKET $err
             my CloseSocket 1
             $coro connect
+            return
         }
         # do NOT clear the buffer unless we had a successful flush!
         set outBuffer [list]
@@ -594,8 +583,7 @@ oo::class create ::nats::connection {
         # exit from vwait in "connect"
         set status $nats::status_connected
         my RestoreSubs
-        set timers(flush) "" ;# mostly for the test extra_opts-1.3 to ensure that the timer is not running when flush_interval=0
-        my Flusher ;# flush the buffer now if it has any data and start the timer
+        my Flusher ;# easier testing: vwait on the status and then we can get chan data with CONNECT
         set timers(ping) [after $config(ping_interval) [mymethod Pinger]]
     }
     
@@ -611,6 +599,7 @@ oo::class create ::nats::connection {
                 lappend outBuffer "UNSUB $subID $remainingMsgs"
             }
         }
+        # SendConnect will flush
     }
     
     method INFO {cmd} {
@@ -731,7 +720,7 @@ oo::class create ::nats::connection {
     method PING {cmd} {
         lappend outBuffer "PONG"
         ${logger}::debug "received PING, sending PONG"
-        my Flusher 0
+        my ScheduleFlush
     }
     
     method PONG {cmd} {

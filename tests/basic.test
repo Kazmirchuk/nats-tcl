@@ -3,11 +3,6 @@
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
-namespace import ::tcltest::test
-namespace import test_utils::*
-
-tcltest::configure {*}$argv
-
 startNats NATS
 
 set conn [nats::connection new "BasicNats"]
@@ -79,7 +74,7 @@ test basic-2.3 "Unsubscribe and publish again" -body {
     lassign [$obs getChanData 0] readData writtenData
     assert {[lindex $writtenData 0] eq "UNSUB $sub_id"}
     assert {[lindex $writtenData 1] eq "PUB subject1  [string length {one more hello}]"}
-    assert {$elapsed < 600} ;# time to flush
+    assert {[approx $elapsed 500]} ;# time to flush
     # check that the server did not send MSG back
     assert {[llength $readData] == 0}
     $obs destroy
@@ -178,16 +173,18 @@ test basic-6 "Synchronous request with timeout - success" -body {
     duration {
         set result [$conn request service "500 sync_req" -timeout 600]
     } elapsed
-    assert {$elapsed >= 500 && $elapsed < 600}
+    assert {[approx $elapsed 550]}
     set result
 } -result "sync_req"
 
 test basic-7 "Synchronous request with timeout - failure" -body {
     duration {
-        $conn request service "600 sync_req" -timeout 500
+        catch {$conn request service "600 sync_req" -timeout 500} err errOpts
     } elapsed
-    assert {$elapsed >= 500 && $elapsed < 590}
-} -returnCodes {error} -result {Request to service timed out}
+    assert {[approx $elapsed 500]}
+    assert {[dict get $errOpts -errorcode] eq {NATS TIMEOUT}}
+    set err
+} -result {Request to service timed out}
 
 # wait until the delayed message arrives - you will see it in the debug log
 sleep 500
@@ -201,7 +198,7 @@ test basic-8 "Asynchronous request" -body {
     duration {
         vwait test_utils::simpleMsg
     } elapsed
-    assert {$elapsed < 1000} ;# async requests don't auto-flush! confirmed against the reference nats.go
+    assert {$elapsed >= 100 && $elapsed < 700} ;# async requests don't auto-flush! confirmed against the reference nats.go
     
     set test_utils::simpleMsg
 } -result "async_req"
@@ -239,7 +236,6 @@ sleep 500
 
 test basic-11 "2 asynchronous requests" -body {
     #send two async requests, where the second request should complete faster than the first
-    # this will take at least 1 s
     duration {
         $conn request service "500 async_req4" -timeout 1500 -callback test_utils::asyncReqCallback
         $conn request service "100 async_req5" -timeout 1000 -callback test_utils::asyncReqCallback
@@ -248,7 +244,7 @@ test basic-11 "2 asynchronous requests" -body {
         vwait test_utils::simpleMsg
         assert {$test_utils::simpleMsg eq "async_req4"}
     } elapsed
-    assert {$elapsed >=500 && $elapsed < 1300} 
+    assert {$elapsed >=500 && $elapsed < 1100} 
 }
 
 # testing confirmed that
@@ -286,7 +282,7 @@ test basic-14 "Synchronous request with multiple responders" -body {
     duration {
         set result [$conn request multi_subj "0 foobar"] ;# will return the first reply
     } elapsed
-    assert {$elapsed < 400}
+    assert {$elapsed < 300}
     sleep 500 ;# ensure we receive the other 4 replies
     set rdata [$obs getChanData 0]
     assert { [llength [lsearch -exact -all $rdata "foobar"]] == 5}
@@ -300,9 +296,11 @@ test basic-15 "Asynchronous request with multiple responders" -body {
         incr ::msg_count
         assert {[string is false -strict $timedOut]}
         assert {$msg eq "foobar2"}
-        puts "in callback"
     }]
-    vwait ::msg_count
+    duration {
+        vwait ::msg_count
+    } elapsed
+    assert {$elapsed < 550} ;# including flush_interval
     sleep 500 ;# ensure we receive the other 4 replies - you will see them in the debug log
     set msg_count ;# check the lambda was called only once
 } -result 1

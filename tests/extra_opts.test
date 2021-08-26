@@ -3,26 +3,10 @@
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
-namespace import ::tcltest::test
-namespace import test_utils::*
-
-tcltest::configure {*}$argv
-
 startNats NATS
 
 set conn [nats::connection new "ExtraOptions"]
 [$conn logger]::setlevel debug
-
-trace add variable ${conn}::status write [lambda {var idx op } {
-    upvar $var s
-    puts "New status: $s"
-}]
-trace add variable ${conn}::last_error write [lambda {var idx op } {
-    upvar $var e
-    if {$e ne ""} {
-        puts "Async error: $e"
-    }
-}]
 
 $conn configure -servers nats://localhost:4222
 
@@ -39,7 +23,7 @@ test extra_opts-1.1 "Check that we can force flush with ping command" -body {
             vwait test_utils::simpleMsg
         }
     } elapsed
-    assert {$elapsed < 400} ;# actually will be <10ms with local NATS
+    assert {$elapsed < 200} ;# actually will be <10ms with local NATS
     $conn disconnect
     assert {[$conn cget -flush_interval] == 60000} ;# disconnect does not reset the configuration!
     set test_utils::simpleMsg
@@ -71,7 +55,7 @@ test extra_opts-1.3 "Check flush_interval=0" -body {
     duration {
         vwait test_utils::simpleMsg
     } elapsed
-    assert {$elapsed < 300}
+    assert {$elapsed < 200}
     $conn disconnect
     $conn reset -flush_interval
     set test_utils::simpleMsg
@@ -99,7 +83,7 @@ test extra_opts-2 "Check the echo=false option" -body {
     duration {
         vwait test_utils::simpleMsg
     } elapsed
-    assert {$elapsed < 350}
+    assert {[approx $elapsed 300]}
     assert {$test_utils::simpleMsg eq "timeout"}
     # but a request to another subscriber still works fine
     startResponder no_echo
@@ -114,7 +98,10 @@ test extra_opts-3 "PING/PONG protocol initiated by client" -body {
     $conn configure -ping_interval 1000 ;# default is 2 minutes
     $conn connect
     set obs [test_utils::chanObserver new $conn b]
-    test_utils::sleep 1400 ;# Pinger triggers flush too, so no need to wait for +flush_interval ms
+    duration {
+        vwait ${conn}::pong
+    } elapsed
+    assert {$elapsed >= 1000 && $elapsed < 1300} ;# Pinger triggers flush too, so no need to wait for +flush_interval ms
     lassign [$obs getChanData 0 0] readData writtenData
     $obs destroy
     # check that the exchange occurred exactly once
@@ -128,12 +115,11 @@ test extra_opts-3 "PING/PONG protocol initiated by client" -body {
 stopNats NATS
 
 test extra_opts-4.1 "PING/PONG protocol initiated by server" -body {
-    # I can't pass ping_interval as a command line argument to the NATS server
+    # I can't pass ping_interval as a command line argument to the NATS server, so have to create a config file
     set conf [tcltest::makeFile {
         ping_interval: "2s"
         ping_max: 1
-    } quick_ping.conf [pwd] ]
-    # the file will be cleaned up by cleanupTests
+    } quick_ping.conf ]
     startNats quick_ping -c $conf
     $conn connect
     set obs [test_utils::chanObserver new $conn b]
@@ -143,7 +129,7 @@ test extra_opts-4.1 "PING/PONG protocol initiated by server" -body {
     # check that the exchange occurred exactly once
     assert {[lsearch -all $writtenData "PONG"] == 0}
     assert {[lsearch -all $readData "PING"] == 0}
-}
+} -cleanup {tcltest::removeFile quick_ping.conf}
 
 test extra_opts-4.2 "PING/PONG - no response from the client" -body {
     # access to a private variable only for test purposes!
@@ -167,25 +153,25 @@ test extra_opts-4.2 "PING/PONG - no response from the client" -body {
     # after sending PING, the server will wait for 2s more before declaring 'Stale Connection'
     assert {$elapsed < 5000}
     $conn disconnect
-    $conn destroy
+    unset ${conn}::outBuffer ;# the easiest way to get rid of the trace on outBuffer
+    set ${conn}::outBuffer [list]
 }
+
 stopNats quick_ping
 
-# make a fake NATS server that does not respond to PING
-startFakeServer
-set handler {
-    proc handler {channel line} {
-        if {$line eq "PING"} {
-            puts $channel FAKE_PONG
+test extra_opts-5 "PING/PONG - no response from the server" -setup {
+    # make a fake NATS server that does not respond to PING
+    startFakeServer
+    set handler {
+        proc handler {channel line} {
+            if {$line eq "PING"} {
+                puts $channel FAKE_PONG
+            }
         }
     }
-}
-comm::comm send 4223 $handler
-
-test extra_opts-5 "PING/PONG - no response from the server" -body {
-    set conn [nats::connection new]
-    [$conn logger]::setlevel debug
-    $conn configure -servers nats://localhost:4222 -ping_interval 1000
+    comm::comm send 4223 $handler
+} -body {
+    $conn configure -ping_interval 1000
     # default max_outstanding_pings=2
     $conn connect
     duration {
@@ -196,23 +182,23 @@ test extra_opts-5 "PING/PONG - no response from the server" -body {
     assert {[dict get [set ${conn}::last_error] code] eq "NATS STALE_CONNECTION"}
     assert {[set ${conn}::status] == $nats::status_reconnecting}
     assert {[approx $elapsed 3000]}
+    $conn reset -ping_interval
+} -cleanup {
+    stopFakeServer
+}
+
+test extra_opts-6 "Check verbose and pedantic modes" -body {
+    $conn configure -verbose true -pedantic true
+    $conn connect -async
+    set obs [test_utils::chanObserver new [set ${::conn}::sock] b]
+    test_utils::sleep 500
+    $conn publish foo bar
+    test_utils::sleep 600
+    set chanData [$obs getChanData]
+    assert {$chanData eq {CONNECT {"verbose":true,"pedantic":true,"tls_required":false,"name":"","lang":"Tcl","version":"0.9","protocol":1,"echo":false}}}
+    assert {[set ${conn}::status] eq $nats::status_connected}
     $conn destroy
 }
-stopFakeServer
-
-# actual effect of "pedantic" is difficult to test because of client-side checks, so I tested it manually
-
-#test error_checks-1 "Connect in verbose+pedantic mode with echo off" -body {
-#    set conn [nats::connection new]
-#    $conn configure -servers nats://localhost:4222 -verbose true -pedantic true -echo false
-#    $conn connect -async
-#    set obs [test_utils::chanObserver new [set ${::conn}::sock] w]
-#    test_utils::sleep 500
-#    set chanData [$obs getChanData]
-#    assert {$chanData eq {CONNECT {"verbose":true,"pedantic":true,"tls_required":false,"name":"","lang":"Tcl","version":"0.9","protocol":1,"echo":false}}}
-#    assert {[set ${conn}::status] eq $nats::status_connected}
-#    $conn destroy
-#} -result {}
 
 # connect fails with empty server pool
 #$conn destroy

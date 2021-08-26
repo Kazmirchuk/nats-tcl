@@ -21,8 +21,9 @@ Simply clone the repository in some place where Tcl will be able to find it, e.g
 
 ## Supported features
 - Publish and subscribe to messages
-- Synchronous and asynchronous requests (optimized: under the hood a single wildcard subscription is used for all requests, like in cnats)
+- Synchronous and asynchronous requests (optimized: under the hood a single wildcard subscription is used for all requests)
 - Queue groups
+- Client-side validation of subjects
 - Standard `configure` interface with many options
 - Automatic reconnection in case of network or server failure
 - While the client is trying to reconnect, outgoing messages are buffered in memory and will be flushed as soon as the connection is restored
@@ -90,9 +91,11 @@ $conn destroy
 ## Missing features (in comparison to official NATS clients)
 - The new authentication mechanism using NKey & [JWT](https://docs.nats.io/developing-with-nats/security/creds). This one will be difficult to do, because it requires support for _ed25519_ cryptography that is missing in Tcl AFAIK. Please let me know if you need it.
 
-## Running tests locally
+## Running tests
 The tests are based on the standard Tcl unit testing framework, [tcltest](https://www.tcl.tk/man/tcl8.6/TclCmd/tcltest.htm). Simply run `tclsh tests/all.tcl` and the tests will be executed one after another. They assume that `nats-server` is available in your `$PATH`, but it should **not** be already running. 
 
-To run the TLS tests, you will need to provide certificates yourself. E.g. you can generate them using [mkcert](https://docs.nats.io/nats-server/configuration/securing_nats/tls#self-signed-certificates-for-testing).
+And this is how you can run just one test script: `tclsh tests/all.tcl -file basic.test`
+
+To run the TLS tests, you will need to provide certificates yourself in `cert` subfolder. E.g. you can generate them using [mkcert](https://docs.nats.io/nats-server/configuration/securing_nats/tls#self-signed-certificates-for-testing).
 
 Tests are numbered to reflect their dependency, i.e. tests from the same group (e.g. basic-2.1, basic-2.2 and basic-2.3) are dependent on each other. Tests from different groups should be independent, except basic assumptions about a NATS connection and e.g. a running Responder.

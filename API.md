@@ -38,7 +38,7 @@ You can set up traces on these variables to get notified e.g. when a connection 
 
 ## Options
 
-The **configure** method accepts the following options. Dash in front of an option name is optional. Make sure to set them *before* calling **connect**.
+The **configure** method accepts the following options. Make sure to set them *before* calling **connect**.
 
 | Option        | Type   | Default | Comment |
 | ------------- |--------|---------|---------|
@@ -66,7 +66,7 @@ The **configure** method accepts the following options. Dash in front of an opti
 Creates a new instance of `nats::connection` with default options and initialises a [logger](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/log/logger.md) instance with the severity level set to `warn`. If you pass in a connection name, it will be sent to NATS in a `CONNECT` message, and will be indicated in the logger name.
 
 ### objectName cget option
-Returns the current value of an option as described above. Dash in front of an option name is optional.
+Returns the current value of an option as described above. 
 
 ### objectName configure ?option? ?value option value...?
 When given no arguments, returns a dict of all options with their current values. When given one option, returns its current value (same as `cget`). When given more arguments, assigns each value to an option. The only mandatory option is `servers`, and others have reasonable defaults. Under the hood it is implemented using the [cmdline::getoptions](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/cmdline/cmdline.md#3) command, so it understands the special `-?` option for interactive help.

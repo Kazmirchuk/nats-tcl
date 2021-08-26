@@ -20,15 +20,12 @@ namespace eval ::nats {
     variable status_reconnecting 3
 }
 # all options for "configure"
-# due to a bug, when I pass a list to cmdline::typedGetoptions, it is returned wrapped in extra braces
-# so all options that may be lists or may contain spaces are marked with .list here
-# and then in "configure" I have special treatment to unpack them with [lindex $val 0]
-# note that this bug does not occur with cmdline::getoptions
 set ::nats::option_syntax {
     { servers.list ""                   "URLs of NATS servers"}
     { name.arg ""                       "Client name sent to NATS server when connecting"}
     { pedantic.boolean false            "Pedantic protocol mode. If true some extra checks will be performed by the server"}
     { verbose.boolean false             "If true, every protocol message is echoed by the server with +OK" }
+    { randomize.boolean true            "Shuffle server addresses passed to 'configure'" }
     { connect_timeout.integer 2000      "Connection timeout (ms)"}
     { reconnect_time_wait.integer 2000  "How long to wait between two reconnect attempts to the same server (ms)"}
     { max_reconnect_attempts.integer 60 "Maximum number of reconnect attempts per server"}
@@ -41,6 +38,7 @@ set ::nats::option_syntax {
     { password.list ""                  "Default password"}
     { token.arg ""                      "Default authentication token"}
     { secure.boolean false              "Indicate to the server if the client wants a TLS connection"}
+    { check_subjects.boolean true       "Enable client-side checking of subjects when publishing or subscribing"}
 }
 
 oo::class create ::nats::connection {
@@ -56,7 +54,6 @@ oo::class create ::nats::connection {
         set last_error ""
         
         # initialise default configuration
-        # we need it because untyped options with default value "" are not returned by cmdline::typedGetoptions at all
         foreach option $nats::option_syntax {
             lassign $option name defValue comment
             #drop everything after dot
@@ -71,10 +68,9 @@ oo::class create ::nats::connection {
         }
         set logger [logger::init $loggerName]
         # default timestamp of the logger looks like Tue Jul 13 15:16:58 CEST 2021, which is not very useful
-        # and there's no documented way to customize it
-        proc ${logger}::stdoutcmd {level text} {
-            variable service
-            puts "\[[nats::timestamp] $service $level\] $text"
+        foreach lvl [logger::levels] {
+            interp alias {} ::nats::log_stdout_$lvl {} ::nats::log_stdout $loggerName $lvl
+            ${logger}::logproc $lvl ::nats::log_stdout_$lvl
         }
         
         # default level in the logger is debug, it's too verbose
@@ -121,38 +117,37 @@ oo::class create ::nats::connection {
         } 
         if {[llength $args] == 1} {
             if {$args ni {-help -?}} {
-                # let cmdline handle -help
                 return [my cget $args]
             }
         } 
-            
+        set args_copy $args ;# typedGetoptions will remove all known options from $args
         set usage "Usage: configure ?-option value?...\nValid options:"
         try {
-            array set options [::cmdline::typedGetoptions args $nats::option_syntax $usage]
+            # basically I'm using cmdline only for argument validation and built-in help
+            cmdline::typedGetoptions args $nats::option_syntax $usage
         } trap {CMDLINE USAGE} msg {
             # -help also leads here
-            throw {NATS INVALID_ARG} $msg
+            puts $msg
+            return
         }
-        foreach {opt val} [array get options] {
-            # workaround for a bug in cmdline::typedGetoptions as explained above
-            if {[lsearch -exact -index 0 $nats::option_syntax "$opt.list"] != -1} {
-                set config($opt) [lindex $val 0]
-            } else {
-                set config($opt) $val
+        if {[dict exists $args_copy -servers]} {
+            if {$status != $nats::status_closed} {
+                # in principle, most other config options can be changed on the fly
+                # allowing this to be changed when connected is possible, but a bit tricky
+                throw {NATS INVALID_ARG} "Cannot configure servers when already connected"
             }
+            # if any URL is invalid, this function will throw an error - let it propagate
+            $serverPool set_servers [dict get $args_copy -servers]
         }
-        # avoid re-parsing servers if they were not in $args
-        if {[info exists options(servers)]} {
-            $serverPool clear
-            foreach url $config(servers) {
-                $serverPool add $url
-            }
+        foreach {opt val} $args_copy {
+            set opt [string trimleft $opt -]
+            set config($opt) $val
         }
         return
     }
 
-    method reset {opt} {
-        set opt [string trimleft $opt -]
+    method reset {option} {
+        set opt [string trimleft $option -]
         set pos [lsearch -glob -index 0 $nats::option_syntax "$opt.*"]
         if {$pos != -1} {
             set config($opt) [lindex $nats::option_syntax $pos 1]
@@ -160,7 +155,7 @@ oo::class create ::nats::connection {
                 $serverPool clear
             }
         } else {
-            throw {NATS INVALID_ARG} "Invalid option $opt"
+            throw {NATS INVALID_ARG} "Invalid option $option"
         }
     }
     
@@ -170,6 +165,10 @@ oo::class create ::nats::connection {
     
     method current_server {} {
         return [$serverPool current_server]
+    }
+    
+    method all_servers {} {
+        return [$serverPool all_servers]
     }
     
     method connect { args } {
@@ -861,7 +860,7 @@ oo::class create ::nats::connection {
                 set protocol_arg [lassign $line protocol_op]
                 # in case of -ERR or +OK
                 set protocol_op [string trimleft $protocol_op -+]
-                if {$protocol_op in [list MSG INFO ERR OK PING PONG]} {
+                if {$protocol_op in {MSG INFO ERR OK PING PONG}} {
                     my $protocol_op $protocol_arg
                 } else {
                     ${logger}::warn "Invalid protocol $protocol_op"
@@ -876,10 +875,14 @@ oo::class create ::nats::connection {
         if {[string length $subj] == 0} {
             return false
         }
+        if {!$config(check_subjects)} {
+            return true
+        }
         foreach token [split $subj .] {
-            if {![regexp -- $subjectRegex $token]} {
-                return false
+            if {[regexp -- $subjectRegex $token]} {
+                continue
             }
+            return false
         }
         return true
     }
@@ -887,6 +890,9 @@ oo::class create ::nats::connection {
     method CheckWildcard {subj} {            
         if {[string length $subj] == 0} {
             return false
+        }
+        if {!$config(check_subjects)} {
+            return true
         }
         foreach token [split $subj .] {
             if {[regexp -- $subjectRegex $token] || $token == "*" || $token == ">" } {
@@ -922,6 +928,9 @@ proc ::nats::timestamp {} {
                       [clock format [expr {$t / 1000}] -format %T] \
                       [expr {$t % 1000}] ]
     return $timeStamp
+}
+proc ::nats::log_stdout {service level text} {
+    puts "\[[nats::timestamp] $service $level\] $text"
 }
 
 package provide nats 0.9

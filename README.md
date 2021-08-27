@@ -22,6 +22,7 @@ Simply clone the repository in some place where Tcl will be able to find it, e.g
 ## Supported features
 - Publish and subscribe to messages
 - Synchronous and asynchronous requests (optimized: under the hood a single wildcard subscription is used for all requests, like in cnats)
+- Basic JetStream support
 - Queue groups
 - Standard `configure` interface with many options
 - Automatic reconnection in case of network or server failure
@@ -85,6 +86,27 @@ $conn request service "I need help" -timeout 1000 -callback asyncReqCallback
 # Finally don't forget to delete our object. Again, this is standard TclOO.
 # All pending outgoing messages will be flushed, and the TCP socket will be closed.
 $conn destroy
+
+###  JetStream support  ###
+# get jet_stream object to use jet stream api
+set jet_stream [$conn jet_stream]
+
+# to consume messages use "consume" method (pull consumer) in sync or async form
+# its arguments are stream name and consumer name, optional: -timeout, -callback as in original request method
+set result [$jet_stream consume my_stream my_consumer]
+
+# received result contains one additional variable "ackAddr" (so response is list in form {message ackAddr})
+# ackAddr is used to acknowlege consumed (received) message to server
+lassign $result msg ackAddr
+$jet_stream ack $ackAddr
+
+# consume can also be used in asynchronous manner
+proc consumeAsyncCallback {timedOut msg ackAddr} {
+    # do sth...
+    $jet_stream ack $ackAddr
+}
+
+$jet_stream consume my_stream my_consumer -callback consumeAsyncCallback -timeout 1000
 ```
 
 ## Missing features (in comparison to official NATS clients)

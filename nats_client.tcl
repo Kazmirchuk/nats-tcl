@@ -46,7 +46,7 @@ set ::nats::option_syntax {
 oo::class create ::nats::connection {
     # "private" variables
     variable config sock coro timers counters subscriptions requests serverInfo serverPool \
-             subjectRegex outBuffer randomChan requestsInboxPrefix pong logger
+             subjectRegex outBuffer randomChan requestsInboxPrefix jetStream pong logger
     
     # "public" variables, so that users can set up traces if needed
     variable status last_error
@@ -97,6 +97,7 @@ oo::class create ::nats::connection {
         set outBuffer [list]
         set randomChan [tcl::chan::random [tcl::randomseed]] ;# generate inboxes
         set requestsInboxPrefix ""
+        set jetStream ""
         set pong 1 ;# sync variable for vwait in "ping". Set to 1 to avoid a check for existing timer in "ping"
     }
     
@@ -105,6 +106,9 @@ oo::class create ::nats::connection {
         close $randomChan
         $serverPool destroy
         ${logger}::delete
+        if {$jetStream ne ""} {
+            $jetStream destroy
+        }
     }
     
     method cget {option} {
@@ -227,6 +231,9 @@ oo::class create ::nats::connection {
         array unset subscriptions ;# make sure we don't try to "restore" subscriptions when we connect next time
         array unset requests
         set requestsInboxPrefix ""
+        if {$jetStream ne ""} {
+            $jetStream disconnect
+        }
         #CoroMain will set status to "closed"
         return
     }
@@ -435,6 +442,14 @@ oo::class create ::nats::connection {
             return true
         }
         throw {NATS TIMEOUT} "PING timeout"
+    }
+
+    # get jet stream object
+    method jet_stream {} {
+        if {$jetStream eq ""} {
+            set jetStream [::nats::jet_stream new [self]]
+        }
+        return $jetStream
     }
     
     method inbox {} {
@@ -876,6 +891,12 @@ oo::class create ::nats::connection {
         if {[string length $subj] == 0} {
             return false
         }
+
+        # for API like '$JS.API.STREAM.NAMES'
+        if {[string index $subj 0] eq "\$"} {
+            set subj [string range $subj 1 end]
+        }
+
         foreach token [split $subj .] {
             if {![regexp -- $subjectRegex $token]} {
                 return false

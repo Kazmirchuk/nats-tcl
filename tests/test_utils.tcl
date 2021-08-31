@@ -118,6 +118,24 @@ namespace eval test_utils {
             set simpleMsg $msg
         }
     }
+
+    proc asyncConsumeCallback {timedOut msg ackAddr} {
+        variable simpleMsg
+        if {$timedOut} {
+            set simpleMsg "timeout"
+        } else {
+            set simpleMsg [dict create msg $msg ackAddr $ackAddr]
+        }
+    }
+
+    proc asyncJetStreamPublishCallback {timedOut result error} {
+        variable simpleMsg
+        if {$timedOut} {
+            set simpleMsg "timeout"
+        } else {
+            set simpleMsg [dict create result $result error $error]
+        }
+    }
     
     proc startNats {id args} {
         processman::spawn $id nats-server {*}$args
@@ -138,6 +156,12 @@ namespace eval test_utils {
             after 500
         }
         puts stderr "[nats::timestamp] Stopped $id"
+    }
+
+    proc executeNatsCmd {id options} {
+        processman::spawn $id nats {*}$options
+        sleep 500
+        puts stderr "[nats::timestamp] Executed: nats $options"
     }
     
     # processman::kill doesn't work reliably with tclsh, so instead we send a NATS message to stop the responder gracefully
@@ -189,5 +213,5 @@ namespace eval test_utils {
         return [expr {$actual > ($ref - $tolerance) && $actual < ($ref + $tolerance)}]
     }
     
-    namespace export sleep wait_flush chanObserver duration startNats stopNats startResponder stopResponder startFakeServer stopFakeServer assert approx
+    namespace export sleep wait_flush chanObserver duration startNats stopNats executeNatsCmd startResponder stopResponder startFakeServer stopFakeServer assert approx
 }

@@ -130,4 +130,6 @@ The tests are based on the standard Tcl unit testing framework, [tcltest](https:
 
 To run the TLS tests, you will need to provide certificates yourself. E.g. you can generate them using [mkcert](https://docs.nats.io/nats-server/configuration/securing_nats/tls#self-signed-certificates-for-testing).
 
+To run Jet Stream tests `nats` command from [nats-cli](https://github.com/nats-io/natscli) needs to be available in you `$PATH` (it is additional tool for NATS server configuration - creating streams, consumers etc. which is not supported by this library yet).
+
 Tests are numbered to reflect their dependency, i.e. tests from the same group (e.g. basic-2.1, basic-2.2 and basic-2.3) are dependent on each other. Tests from different groups should be independent, except basic assumptions about a NATS connection and e.g. a running Responder.

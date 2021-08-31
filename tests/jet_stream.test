@@ -1,0 +1,138 @@
+namespace import ::tcltest::test
+namespace import test_utils::*
+
+tcltest::configure {*}$argv
+
+startNats NATS_JS -js ;# start nats with Jet Stream
+
+set conn [nats::connection new]
+set stream_name MY_STR
+set consumer_name MY_CONS
+
+[$conn logger]::setlevel debug
+$conn configure -servers [list nats://localhost:4222]
+
+test reconn-1 "Connect NATS JS" -body {
+    $conn connect -async
+    assert {[set ${conn}::status] == $nats::status_connecting}
+    test_utils::sleep 500
+    assert {[set ${conn}::status] == $nats::status_connected}
+    lassign [$conn current_server] host port
+    assert {$host eq "localhost"}
+    assert {$port == 4222}
+} -result {}
+
+# if "nats" command is not available than skip tests
+if {[catch {
+    # create stream
+    executeNatsCmd NATS_CLI [list stream add --subjects=test.* --storage memory --retention limits --discard old --max-msgs=20 --max-msgs-per-subject=-1 --max-msg-size=-1 --max-bytes=-1 --dupe-window=2m --max-age=-1 --replicas=1 $stream_name]
+    
+    # create consumer
+    executeNatsCmd NATS_CLI [list consumer add --ack=explicit --deliver=all --max-pending=100 --max-deliver=-1 --replay=instant --filter= --pull --wait=1s $stream_name $consumer_name]
+} err]} {
+    puts stderr "[nats::timestamp] Cannot execute NATS command - probably nats cli is not available, skipping... : $err"
+    $conn destroy
+    stopNats NATS_JS
+    tcltest::cleanupTests
+    return 1
+}
+
+test sync-consume-1 "Publish and sync consume" -body {
+    $conn publish test.1 "msg 1"
+    set jet_stream [$conn jet_stream]
+    set result [$jet_stream consume $stream_name $consumer_name]
+    lassign $result msg ackAddr
+    #return only message
+    set msg
+} -result {msg 1}
+
+test sync-consume-2 "Sync consume redelivered message" -body {
+    # message has not been ACK, so it should be redelivered
+    set result [$jet_stream consume $stream_name $consumer_name]
+    lassign $result msg ackAddr
+    set msg
+} -result {msg 1}
+
+test sync-consume-3 "Sync consume redelivered message and ACK" -body {
+    # message has not been ACK, so it should be redelivered
+    set result [$jet_stream consume $stream_name $consumer_name]
+    lassign $result msg ackAddr
+    $jet_stream ack $ackAddr
+    set msg
+} -result {msg 1}
+
+test sync-consume-4 "No message left after ACK - timeout" -body {
+    $jet_stream consume $stream_name $consumer_name -timeout 2000
+} -match glob -result {Consume * timed out*} -returnCodes {error} -errorCode {NATS TIMEOUT}
+
+test async-consume-1 "Publish and async consume" -body {
+    $conn publish test.2 "msg 2"
+    duration {
+        $jet_stream consume $stream_name $consumer_name -callback test_utils::asyncConsumeCallback
+    } elapsed
+    assert {$elapsed < 50} ;# async request returns immediately
+    
+    vwait test_utils::simpleMsg
+    
+    dict get $test_utils::simpleMsg msg
+} -result {msg 2}
+
+test async-consume-2 "Async consume and ACK" -body {
+    duration {
+        $jet_stream consume $stream_name $consumer_name -callback test_utils::asyncConsumeCallback
+    } elapsed
+    assert {$elapsed < 50} ;# async request returns immediately
+    
+    vwait test_utils::simpleMsg
+    $jet_stream ack [dict get $test_utils::simpleMsg ackAddr]
+    
+    dict get $test_utils::simpleMsg msg
+} -result {msg 2}
+
+test async-consume-3 "Async consume timeout" -body {
+    duration {
+        $jet_stream consume $stream_name $consumer_name -callback test_utils::asyncConsumeCallback -timeout 1500
+    } elapsed
+    assert {$elapsed < 50} ;# async request returns immediately
+    
+    duration {
+        vwait test_utils::simpleMsg
+    } elapsed
+    assert {$elapsed > 1400}
+
+    set test_utils::simpleMsg
+} -result {timeout}
+
+test jetstream-publish-1 "Publish message to jet-stream sync" -body {
+    $jet_stream publish test.3 "msg 3"
+} -result [dict create stream $stream_name seq 3]
+
+test jetstream-publish-2 "Publish message to jet-stream async" -body {
+    duration {
+        $jet_stream publish test.4 "msg 4" -callback ::test_utils::asyncJetStreamPublishCallback
+    } elapsed
+    assert {$elapsed < 50} ;# async request returns immediately
+    
+    vwait test_utils::simpleMsg
+
+    dict get $test_utils::simpleMsg result
+} -result [dict create stream $stream_name seq 4]
+
+test jetstream-publish-3 "Publish message to jet-stream sync timeout" -body {
+    $jet_stream publish not.exists "not.exists" -timeout 1000
+} -match glob -result {Request to * timed out*} -returnCodes {error} -errorCode {NATS TIMEOUT}
+
+test jetstream-publish-4 "Publish message to jet-stream async timeout" -body {
+    duration {
+        $jet_stream publish not.exists "not.exists" -callback ::test_utils::asyncJetStreamPublishCallback -timeout 1000
+    } elapsed
+    assert {$elapsed < 50} ;# async request returns immediately
+    
+    vwait test_utils::simpleMsg
+    set test_utils::simpleMsg
+} -result {timeout}
+
+$conn destroy
+
+stopNats NATS_JS
+tcltest::cleanupTests

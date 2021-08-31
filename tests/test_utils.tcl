@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2020-2021 Petro Kazmirchuk https://github.com/Kazmirchuk
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
@@ -9,6 +9,7 @@ package require processman
 package require oo::util
 package require control
 package require comm
+package require lambda
 
 namespace eval test_utils {
     variable sleepVar 0
@@ -40,69 +41,137 @@ namespace eval test_utils {
     }
     
     oo::class create chanObserver {
-        variable writingObs readingObs obsMode readChan writeChan observedSock
+        variable writeChan readChan ;# channels for sniffed data
+        variable writingObs readingObs ;# variables backing the channels - reset when a socket is re-created
+        variable writtenData readData ;# all data is accumulated here
+        variable obsMode conn sock
         # $mode can be r (read), w (write), b (both)
         constructor {nats_conn mode} {
-            set writingObs ""
-            set readingObs ""
+            set conn $nats_conn
             set obsMode $mode
             set readChan ""
             set writeChan ""
-            set observedSock [set ${nats_conn}::sock]
-            
-            switch -- $obsMode {
-                r {
-                    set readChan [tcl::chan::variable [self object]::readingObs]
-                    tcl::transform::observe $observedSock {} $readChan
+            set sock [set ${conn}::sock]
+            if { $sock ne ""} {
+                # the socket already exists - start monitoring it now
+                my TraceCmd ${conn}::sock ignored ignored
+            }
+            trace add variable ${conn}::sock write [mymethod TraceCmd]
+        }
+        
+        destructor {
+            trace remove variable ${conn}::sock write [mymethod TraceCmd]
+        }
+        
+        method TraceCmd  {var idx op } {
+            upvar $var s
+            if {$s ne ""} {
+                # new socket was created - start monitoring it
+                set sock $s
+                set readingObs ""
+                set writingObs ""
+                switch -- $obsMode {
+                    r {
+                        set readChan [tcl::chan::variable [self object]::readingObs]
+                        tcl::transform::observe $s {} $readChan
+                    }
+                    w {
+                        set writeChan [tcl::chan::variable [self object]::writingObs]
+                        tcl::transform::observe $s $writeChan {}
+                    }
+                    b {
+                        set readChan [tcl::chan::variable [self object]::readingObs]
+                        set writeChan [tcl::chan::variable [self object]::writingObs]
+                        tcl::transform::observe $s $writeChan $readChan
+                    }
                 }
-                w {
-                    set writeChan [tcl::chan::variable [self object]::writingObs]
-                    tcl::transform::observe $observedSock $writeChan {}
-                }
-                b {
-                    set readChan [tcl::chan::variable [self object]::readingObs]
-                    set writeChan [tcl::chan::variable [self object]::writingObs]
-                    tcl::transform::observe $observedSock $writeChan $readChan
-                }
+            } else {
+                # the socket was closed - copy the sniffed data
+                my Finalize
             }
         }
-        method getChanData { {firstLine 1} {filterPing 1}} {
-            # remove the transformation
-            chan pop $observedSock
-            
+
+        method Finalize {} {
+            # really important! remove the transformation
+            if {$sock ne ""} {
+                chan pop $sock
+                set sock ""
+            }
             if {$readChan ne ""} {
                 close $readChan
+                set readChan ""
+                append readData $readingObs
+                set readingObs ""
             }
             if {$writeChan ne ""} {
                 close $writeChan
+                set writeChan ""
+                append writtenData $writingObs
+                set writingObs ""
             }
-            # these variables contain \r\r\n in each line, and I couldn't get rid of them with chan configure -translation
-            # so just remove \r here
-            # also we are not interested in PING/PONG, but we need a separate call to "string map" to clean them up *after* removing \r
-            set writingObs [string map {\r {} } $writingObs]
-            set readingObs [string map {\r {} } $readingObs]
-            if {$filterPing} {
-                set writingObs [string map {PING\n {} PONG\n {} } $writingObs]
-                set readingObs [string map {PING\n {} PONG\n {}} $readingObs]
+        }
+        
+        method getChanData { {firstLine 1} {filterPing 1}} {
+            # in case the socket is still open
+            my Finalize
+            switch -- $obsMode {
+                r {
+                    set varList "readData"
+                }
+                w {
+                    set varList "writtenData"
+                }
+                b {
+                    set varList [list readData writtenData]
+                }
             }
-            set writingObs [split $writingObs \n]
-            set readingObs [split $readingObs \n]
-            if {$firstLine} {
-                set writingObs [lindex $writingObs 0]
-                set readingObs [lindex $readingObs 0]
+            foreach v $varList {
+                upvar 0 $v chanData
+                # these variables contain \r\r\n in each line, and I couldn't get rid of them with chan configure -translation
+                set chanData [string map {\r {} } $chanData]
+                if {$filterPing} {
+                    # usually we are not interested in PING/PONG
+                    set chanData [string map {PING\n {} PONG\n {} } $chanData]
+                }
+                set chanData [split $chanData \n]
+                if {$firstLine} {
+                    # we are interested only in the first line of sniffed data
+                    set chanData [lindex $chanData 0]
+                }
             }
             switch -- $obsMode {
                 r {
-                    return $readingObs
+                    return $readData
                 }
                 w {
-                    return $writingObs
+                    return $writtenData
                 }
                 b {
-                    return [list $readingObs $writingObs]
+                    return [list $readData $writtenData]
                 }
             }
         }
+    }
+    
+    proc getConnectOpts {data} {
+        set pos [string first " " $data] ;# skip CONNECT straight to the beginning of JSON
+        return [json::json2dict [string range $data $pos+1 end]]
+    }
+    
+    proc debugLogging {conn} {
+        # available logger severity levels: debug info notice warn error critical alert emergency
+        # default is "warn"
+        [$conn logger]::setlevel debug
+        trace add variable ${conn}::status write [lambda {var idx op } {
+            upvar $var s
+            puts "[nats::timestamp] New status: $s"
+        }]
+        trace add variable ${conn}::last_error write [lambda {var idx op } {
+            upvar $var e
+            if {$e ne ""} {
+                puts "[nats::timestamp] Async error: $e"
+            }
+        }]
     }
     
     proc simpleCallback {subj msg reply} {
@@ -122,7 +191,7 @@ namespace eval test_utils {
     proc startNats {id args} {
         processman::spawn $id nats-server {*}$args
         sleep 500
-        puts stderr "[nats::timestamp] Started $id"
+        puts "[nats::timestamp] Started $id"
     }
     
     proc stopNats {id} {
@@ -137,7 +206,7 @@ namespace eval test_utils {
             catch {exec kill $pid}
             after 500
         }
-        puts stderr "[nats::timestamp] Stopped $id"
+        puts "[nats::timestamp] Stopped $id"
     }
     
     # processman::kill doesn't work reliably with tclsh, so instead we send a NATS message to stop the responder gracefully
@@ -165,12 +234,7 @@ namespace eval test_utils {
     }
     
     # control:assert is garbage and doesn't perform substitution on failed expressions, so I can't even know a value of offending variable etc
-    # also tried to do this
-    #control::control assert callback [lambda {msg} {
-    #    return -code error [uplevel 1 [list subst $msg]]
-    #}]
-    # but it doesn't work when assert is in a proc
-    proc assert {expression} {
+    proc assert {expression { subst_commands 0} } {
         set code [catch {uplevel 1 [list expr $expression]} res]
         if {$code} {
             return -code $code $res
@@ -179,8 +243,13 @@ namespace eval test_utils {
             return -code error "invalid boolean expression: $expression"
         }
         if {$res} {return}
-        # -nocommands is useful when using [approx]
-        set msg "assertion failed: [uplevel 1 [list subst -nocommands $expression]]"
+        if {$subst_commands} {
+            # useful for [binary encode hex] or [string length] etc
+            set msg "assertion failed: [uplevel 1 [list subst $expression]]"
+        } else {
+            # -nocommands is useful when using [approx]
+            set msg "assertion failed: [uplevel 1 [list subst -nocommands $expression]]"
+        }
         return -code error $msg
     }
     
@@ -189,5 +258,6 @@ namespace eval test_utils {
         return [expr {$actual > ($ref - $tolerance) && $actual < ($ref + $tolerance)}]
     }
     
-    namespace export sleep wait_flush chanObserver duration startNats stopNats startResponder stopResponder startFakeServer stopFakeServer assert approx
+    namespace export sleep wait_flush chanObserver duration startNats stopNats startResponder stopResponder startFakeServer stopFakeServer \
+                     assert approx getConnectOpts debugLogging
 }

@@ -3,32 +3,26 @@
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
+# Test summary:
+# - Connecting, publishing, subscribing to messages
+# - Sync and async requests with timeouts
+# - Subscribing using queue groups
+# - Multiple responders
+# - Binary messages
+# - Checking data on the wire and timings
+
 startNats NATS
 
 set conn [nats::connection new "BasicNats"]
-# available logger severity levels: debug info notice warn error critical alert emergency
-# default is "warn"
-[$conn logger]::setlevel debug
-
-trace add variable ${conn}::status write [lambda {var idx op } {
-    upvar $var s
-    [$::conn logger]::info "New status: $s"
-}]
-trace add variable ${conn}::last_error write [lambda {var idx op } {
-    upvar $var e
-    if {$e ne ""} {
-        [$::conn logger]::info "Async error: $e"
-    }
-}]
+debugLogging $conn
 
 $conn configure -servers nats://localhost:4222
 
 startResponder
 
 test basic-1 "Connect NATS" -body {
-    # we need to connect asynchronously to be able to catch the CONNECT message
-    $conn connect -async
     set obs [test_utils::chanObserver new $conn w]
+    $conn connect
     while {[set ${conn}::status] ne $nats::status_connected} {
         vwait ${conn}::status
     }
@@ -101,7 +95,7 @@ test basic-3.1 "Subscribe to a limited number of messages" -body {
     assert {[lindex $wdata 1] eq "UNSUB $sub_id 10"}
     assert {[lindex $wdata end-1] == 20} ;# payload of the last sent message
     # each MSG will create 2 rows in rdata, so check that UNSUB was effective, and we've received 10 messages back +/- one or PING
-    assert {[llength $rdata] < 25}
+    assert {[llength $rdata] < 25} 1
         
     $obs destroy
     set msg_count
@@ -109,7 +103,7 @@ test basic-3.1 "Subscribe to a limited number of messages" -body {
 
 test basic-3.2 "SubID has expired after -max_msgs" -body {
     $conn unsubscribe $sub_id
-} -match glob -result {Invalid subscription ID*} -returnCodes {error} -errorCode {NATS INVALID_ARG}
+} -match glob -result {Invalid subscription ID*} -returnCodes {error} -errorCode {NATS ErrBadSubscription}
 
 test basic-4.1 "Subscribe and unsubscribe with -max_msgs" -body {
     set msg_count 0
@@ -184,7 +178,7 @@ test basic-7 "Synchronous request with timeout - failure" -body {
         catch {$conn request service "600 sync_req" -timeout 500} err errOpts
     } elapsed
     assert {[approx $elapsed 500]}
-    assert {[dict get $errOpts -errorcode] eq {NATS TIMEOUT}}
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrTimeout}}
     set err
 } -result {Request to service timed out}
 
@@ -263,16 +257,16 @@ test basic-12 "Sending and receiving a binary message" -body {
     set sub_id [$conn subscribe bin_subj -callback test_utils::simpleCallback]
     $conn publish bin_subj $binString
     vwait test_utils::simpleMsg
-    assert { [binary encode hex $test_utils::simpleMsg] eq [binary encode hex $binString] }
-    assert { [string length $test_utils::simpleMsg] == 14}
     $conn unsubscribe $sub_id
     wait_flush $conn
+    assert { [binary encode hex $test_utils::simpleMsg] eq [binary encode hex $binString] } 1
+    assert { [string length $test_utils::simpleMsg] == 14} 1
 }
 
 test basic-13 "Binary message request" -body {
     set reply [$conn request service "0 $binString"]
-    assert { [binary encode hex $reply] eq [binary encode hex $binString] }
-    assert { [string length $reply] == 14}
+    assert { [binary encode hex $reply] eq [binary encode hex $binString] } 1
+    assert { [string length $reply] == 14} 1
 }
 
 for {set i 0} { $i < 5} {incr i} {
@@ -331,32 +325,25 @@ test basic-16 "Queue groups and publish with replyTo" -body {
     sleep 500
     assert {$msg_count == 2}
     # $conn unsubscribe $sub_id - deliberately don't unsubscribe - $conn disconnect should delete all subscriptions
-    # because of queue groups I need to send as many "exit" messages as number of responders in the biggest queue group
-    for {set i 0} { $i < 3} {incr i} {
-        stopResponder $conn test_qg
-        sleep 1000
-    }
 } 
+
+# because of queue groups I need to send as many "exit" messages as number of responders in the biggest queue group
+for {set i 0} { $i < 3} {incr i} {
+    stopResponder $conn test_qg
+    sleep 1000
+}
+
+stopResponder $conn
 
 test basic-17 "Check internal state after disconnection" -body {
     $conn disconnect
-    assert {[set ${conn}::sock] eq ""}
-    assert {[set ${conn}::status] == $nats::status_closed}
-    assert {[array size ${conn}::subscriptions] == 0}
-    assert {[array size ${conn}::requests] == 0}
-    assert {[llength [set ${conn}::outBuffer]] == 0}
+    assert {[set ${conn}::sock] eq ""} 1
+    assert {[set ${conn}::status] == $nats::status_closed} 1
+    assert {[array size ${conn}::subscriptions] == 0} 1
+    assert {[array size ${conn}::requests] == 0} 1
+    assert {[llength [set ${conn}::outBuffer]] == 0} 1
 }
 
-test basic-18 "Check the wildcard subscription after reconnection" -body {
-    # the server pool is not cleared until you call $conn configure -servers again
-    lassign [$conn current_server] host port
-    assert {$host eq "localhost"}
-    assert {$port == 4222}
-    $conn connect
-    $conn request service "0 one last request" -timeout 400
-} -result "one last request"
-
-stopResponder $conn
 $conn destroy
 stopNats NATS
 tcltest::cleanupTests

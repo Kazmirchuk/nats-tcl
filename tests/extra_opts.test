@@ -3,25 +3,51 @@
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
+# Test summary:
+# 
+
+
 startNats NATS
 
 set conn [nats::connection new "ExtraOptions"]
-[$conn logger]::setlevel debug
+debugLogging $conn
 
 $conn configure -servers nats://localhost:4222
 
-#test extra_opts-6 "Check verbose and pedantic modes" -body {
-#    $conn configure -verbose true -pedantic true
-#    $conn connect -async
-#    set obs [test_utils::chanObserver new [set ${::conn}::sock] b]
-#    test_utils::sleep 500
-#    $conn publish foo bar
-#    test_utils::sleep 600
-#    set chanData [$obs getChanData]
-#    assert {$chanData eq {CONNECT {"verbose":true,"pedantic":true,"tls_required":false,"name":"","lang":"Tcl","version":"0.9","protocol":1,"echo":false}}}
-#    assert {[set ${conn}::status] eq $nats::status_connected}
-#    
-#}
+test extra_opts-1 "Check verbose and pedantic modes" -body {
+    # in the verbose mode NATS server acks each message with +OK - we simply check that the client doesn't break because of it
+    # in the pedantic mode NATS server reports -ERR for invalid subjects, but doesn't close the connection
+    # in order to get this -ERR I need to disable subject checking on client side
+    $conn configure -verbose true -pedantic true -check_subjects false
+    $conn connect -async ;# NATS sends back INFO, then replies +OK to our CONNECT
+    set obs [test_utils::chanObserver new $conn b]
+    while {[set ${conn}::status] ne $nats::status_connected} {
+        vwait ${conn}::status
+    }
+    
+    $conn publish dummy_subj "Hello NATS" ;# NATS sends back +OK
+    $conn publish invalid_subj.* "Hello NATS 2" ;# NATS sends back -ERR and +OK (?!)
+    sleep 300
+    lassign [$obs getChanData 0] readData writtenData
+    $obs destroy
+    
+    assert {[set ${conn}::status] == $nats::status_connected} ;# the connection should be still alive
+
+    set connectDict [getConnectOpts [lindex $writtenData 0]] 
+    assert {[dict get $connectDict verbose] eq "true"}
+    assert {[dict get $connectDict pedantic] eq "true"}
+    
+    assert {[lindex $readData 1] eq "+OK"}
+    assert {[lindex $readData 2] eq "+OK"}
+    
+    set err [set ${conn}::last_error]
+    assert {[dict get $err code] eq [list NATS ErrBadSubject]}
+} -cleanup {
+    $conn disconnect
+    $conn reset -verbose
+    $conn reset -pedantic
+    $conn reset -check_subjects
+}
 
 test extra_opts-2 "Check the echo=false option" -body {
     set test_utils::simpleMsg ""
@@ -31,11 +57,9 @@ test extra_opts-2 "Check the echo=false option" -body {
     while {[set ${conn}::status] ne $nats::status_connected} {
         vwait ${conn}::status
     }
-    set chanData [$obs getChanData]
+    set connectDict [getConnectOpts [$obs getChanData]]
     $obs destroy
     
-    set pos [string first " " $chanData] ;# skip CONNECT straight to the beginning of JSON
-    set connectDict [json::json2dict [string range $chanData [expr {$pos + 1}] end]]
     assert {[dict get $connectDict echo] eq "false"}
         
     $conn subscribe no_echo -callback test_utils::simpleCallback
@@ -50,6 +74,7 @@ test extra_opts-2 "Check the echo=false option" -body {
     startResponder no_echo
     set result [$conn request no_echo "0 hello"]
     assert {$result eq "hello"}
+} -cleanup {
     stopResponder $conn no_echo
     $conn disconnect
     $conn reset -echo
@@ -68,7 +93,7 @@ test extra_opts-3 "PING/PONG protocol initiated by client" -body {
     # check that the exchange occurred exactly once
     assert {[lsearch -all $writtenData "PING"] == 0}
     assert {[lsearch -all $readData "PONG"] == 0}
-    
+} -cleanup {
     $conn disconnect
     $conn reset -ping_interval
 }
@@ -90,11 +115,12 @@ test extra_opts-4.1 "PING/PONG protocol initiated by server" -body {
     # check that the exchange occurred exactly once
     assert {[lsearch -all $writtenData "PONG"] == 0}
     assert {[lsearch -all $readData "PING"] == 0}
-} -cleanup {tcltest::removeFile quick_ping.conf}
+} -cleanup {
+    tcltest::removeFile quick_ping.conf
+}
 
 test extra_opts-4.2 "PING/PONG - no response from the client" -body {
-    # access to a private variable only for test purposes!
-    trace add variable ${conn}::outBuffer write [lambda {var idx op } {
+    set bufferTrace [lambda {var idx op } {
         upvar $var buffer
         set pos [lsearch $buffer "PONG"]
         if {$pos == -1} {
@@ -103,30 +129,38 @@ test extra_opts-4.2 "PING/PONG - no response from the client" -body {
         set buffer [lsearch -inline -all -not -exact $buffer "PONG"] ;# do not send PONG to the server
         puts "Deleted PONG"
     }]
+    # access to a private variable only for test purposes!
+    trace add variable ${conn}::outBuffer write $bufferTrace
     # wait for the next PING/PONG exchange initiated by the server
     # we do not respond to PING, so the server will report an error with -ERR and close the socket
     # which will make the client go into the reconnecting mode
     duration {
         vwait ${conn}::status
     } elapsed
-    assert {[dict get [set ${conn}::last_error] code] eq "NATS STALE_CONNECTION"}
+    assert {[dict get [set ${conn}::last_error] code] eq [list NATS ErrStaleConnection]}
     assert {[set ${conn}::status] == $nats::status_reconnecting}
     # after sending PING, the server will wait for 2s more before declaring 'Stale Connection'
     assert {$elapsed < 5000}
+} -cleanup {
     $conn disconnect
-    unset ${conn}::outBuffer ;# the easiest way to get rid of the trace on outBuffer
-    set ${conn}::outBuffer [list]
+    trace remove variable ${conn}::outBuffer write $bufferTrace
 }
 
 stopNats quick_ping
 
 test extra_opts-5 "PING/PONG - no response from the server" -setup {
     # make a fake NATS server that does not respond to PING
+    # but ensure the first round goes ok for "connect" to succeed
     startFakeServer
     set handler {
         proc handler {channel line} {
             if {$line eq "PING"} {
-                puts $channel FAKE_PONG
+                incr ::ping_count
+                if {$::ping_count == 1} {
+                    puts $channel PONG
+                } else {
+                    puts $channel FAKE_PONG
+                }
             }
         }
     }
@@ -140,11 +174,12 @@ test extra_opts-5 "PING/PONG - no response from the server" -setup {
         # and the client will go into reconnecting
         vwait ${conn}::status
     } elapsed
-    assert {[dict get [set ${conn}::last_error] code] eq "NATS STALE_CONNECTION"}
+    assert {[dict get [set ${conn}::last_error] code] eq [list NATS ErrStaleConnection]}
     assert {[set ${conn}::status] == $nats::status_reconnecting}
     assert {[approx $elapsed 3000]}
-    $conn reset -ping_interval
 } -cleanup {
+    $conn disconnect
+    $conn reset -ping_interval
     stopFakeServer
 }
 

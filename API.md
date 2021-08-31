@@ -110,23 +110,48 @@ Returns a logger instance.
 TclOO destructor. Flushes pending data and closes the TCP socket.
 
 ## Error handling
-All synchronous errors are raised using `throw {NATS <error_type>} human-readable message`. 
+Error codes are similar to those from the nats.go client as much as possible. A few additional error codes provide more information about failed connection attempts to the NATS server: ErrBrokenSocket, ErrTLS, ErrConnectionRefused.
 
-| Error type        | Reason   | 
+All synchronous errors are raised using `throw {NATS <error_code>} human-readable message`, so you can handle them using try&trap, for example: 
+```Tcl
+try {
+  ...
+} trap {NATS ErrTimeout} {msg opts} {
+ # handle a request timeout  
+} trap {NATS} {msg opts} {
+  # handle other NATS errors
+}
+```
+| Error code        | Reason   | 
 | ------------- |--------|
-| NO_CONNECTION | Attempt to subscribe or send a message before calling `connect` |
-| NO_SERVERS | No NATS servers available|
+| ErrConnectionClosed | Attempt to subscribe or send a message before calling `connect` |
+| ErrNoServers | No NATS servers available|
 | NO_CREDS | NATS server requires authentication, but no credentials are known for it |
-| INVALID_ARG | Invalid argument |
-| CONNECT_FAILED | Raised by `connect` if it failed to connect to all servers |
-| TIMEOUT | Timeout of a synchronous request or ping |
+| ErrInvalidArg | Invalid argument |
+| ErrBadSubject | Invalid subject for publishing or subscribing |
+| ErrBadTimeout | Invalid timeout argument |
+| ErrMaxPayload | Message size is more than allowed by the server |
+| ErrBadSubscription | Invalid subscription ID |
+| ErrTimeout | Timeout of a synchronous request or ping |
 
 Asynchronous errors are sent to the logger and can also be queried/traced using 
-`set ${obj}::last_error`.
+`$last_error`, for example:
+```Tcl
+set err [set ${conn}::last_error]
+puts "Error code: [dict get $err code]"
+puts "Error text: [dict get $err message]"
+```
 | Error type        | Reason   | 
 | ------------- |--------|
-| BROKEN_SOCKET | TCP socket failed |
-| TLS_FAILED | TLS handshake failed |
+| ErrBrokenSocket | TCP socket failed |
+| ErrTLS | TLS handshake failed |
 | PROTOCOL_ERR | A protocol error from the server side, e.g. maximum control line exceeded |
-| STALE_CONNECTION | NATS server closed the connection, because the client did not respond to PING on time |
-| CONNECT_FAILED | Failed to connect to a NATS server; the client will try the next server from the pool |
+| ErrStaleConnection | The client or server closed the connection, because the other party did not respond to PING on time |
+| ErrConnectionRefused | TCP connection to a NATS server was refused, possibly due to wrong port, or the server was not running; the client will try the next server from the pool |
+| ErrConnectionTimeout | Connection to a server could not be established within connect_timeout ms |
+| ErrServer | Generic error reported by NATS server |
+| ErrPermissions | subject authorization has failed |
+| ErrAuthorization | user authorization has failed |
+| ErrAuthExpired | user authorization has expired |
+| ErrAuthRevoked | user authorization has been revoked |
+| ErrAccountAuthExpired | nats server account authorization has expired |

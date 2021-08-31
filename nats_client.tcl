@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2020-2021 Petro Kazmirchuk https://github.com/Kazmirchuk
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
@@ -107,7 +107,7 @@ oo::class create ::nats::connection {
         if {[info exists config($opt)]} {
             return $config($opt)
         }
-        throw {NATS INVALID_ARG} "Invalid option $option"
+        throw {NATS ErrInvalidArg} "Invalid option $option"
     }
     
     method configure {args} {
@@ -133,7 +133,7 @@ oo::class create ::nats::connection {
             if {$status != $nats::status_closed} {
                 # in principle, most other config options can be changed on the fly
                 # allowing this to be changed when connected is possible, but a bit tricky
-                throw {NATS INVALID_ARG} "Cannot configure servers when already connected"
+                throw {NATS ErrInvalidArg} "Cannot configure servers when already connected"
             }
             # if any URL is invalid, this function will throw an error - let it propagate
             $serverPool set_servers [dict get $args_copy -servers]
@@ -154,7 +154,7 @@ oo::class create ::nats::connection {
                 $serverPool clear
             }
         } else {
-            throw {NATS INVALID_ARG} "Invalid option $option"
+            throw {NATS ErrInvalidArg} "Invalid option $option"
         }
     }
     
@@ -179,7 +179,7 @@ oo::class create ::nats::connection {
                 set async 0
             }
             default {
-                throw {NATS INVALID_ARG} "Unknown option $args"
+                throw {NATS ErrInvalidArg} "Unknown option $args"
             }
         }
         if {$status != $nats::status_closed} {
@@ -187,7 +187,7 @@ oo::class create ::nats::connection {
         }
         
         if {[llength [$serverPool all_servers]] == 0} {
-            throw {NATS NO_SERVERS} "Server pool is empty"
+            throw {NATS ErrNoServers} "Server pool is empty"
         }
         $serverPool reset_counters
         set last_error ""
@@ -202,7 +202,7 @@ oo::class create ::nats::connection {
             my CoroVwait [self object]::status
             if {$status != $nats::status_connected} {
                 #NTH: report a more specific error like AUTH_FAILED,TLS_FAILED if server pool=1? check with other NATS clients
-                throw {NATS CONNECT_FAILED} "No NATS servers available"
+                throw {NATS ErrNoServers} "No NATS servers available"
             }
             ${logger}::debug "Finished waiting for connection"
         }
@@ -223,6 +223,9 @@ oo::class create ::nats::connection {
         array unset subscriptions ;# make sure we don't try to "restore" subscriptions when we connect next time
         array unset requests
         set requestsInboxPrefix ""
+        after cancel $timers(connect)
+        ${logger}::debug "Cancelled connection timer $timers(connect)"
+        set timers(connect) ""
         #CoroMain will set status to "closed"
         return
     }
@@ -231,11 +234,11 @@ oo::class create ::nats::connection {
         my CheckConnection
         set msgLen [string length $msg]
         if {$msgLen > $serverInfo(max_payload)} {
-            throw {NATS INVALID_ARG} "Maximum size of NATS message is $serverInfo(max_payload)"
+            throw {NATS ErrMaxPayload} "Maximum size of NATS message is $serverInfo(max_payload)"
         }
         
         if {![my CheckSubject $subject]} {
-            throw {NATS INVALID_ARG} "Invalid subject $subject"
+            throw {NATS ErrBadSubject} "Invalid subject $subject"
         }
         
         set data "PUB $subject $replySubj $msgLen"
@@ -261,26 +264,27 @@ oo::class create ::nats::connection {
                     set maxMsgs $val
                 }
                 default {
-                    throw {NATS INVALID_ARG} "Unknown option $opt"
+                    throw {NATS ErrInvalidArg} "Unknown option $opt"
                 }
             }
         }
         
         if {![my CheckWildcard $subject]} {
-            throw {NATS INVALID_ARG} "Invalid subject $subject"
+            throw {NATS ErrBadSubject} "Invalid subject $subject"
         }
         
         if {[string length $callback] == 0} {
-            throw {NATS INVALID_ARG} "Invalid callback"
+            throw {NATS ErrInvalidArg} "Invalid callback"
         }
         
         if {! ([string is integer -strict $maxMsgs] && $maxMsgs >= 0)} {
-            throw {NATS INVALID_ARG} "Invalid max_msgs $maxMsgs"
+            throw {NATS ErrInvalidArg} "Invalid max_msgs $maxMsgs"
         }
         
         #rules for queue names are more relaxed than for subjects
+        # badQueue in nats.go checks for whitespace
         if {$queue ne "" && ![string is graph $queue]} {
-            throw {NATS INVALID_ARG} "Invalid queue group $queue"
+            throw {NATS ErrInvalidArg} "Invalid queue group $queue"
         }
                                    
         set subID [incr counters(subscription)]
@@ -307,17 +311,17 @@ oo::class create ::nats::connection {
                     set maxMsgs $val
                 }
                 default {
-                    throw {NATS INVALID_ARG} "Unknown option $opt"
+                    throw {NATS ErrInvalidArg} "Unknown option $opt"
                 }
             }
         }
         
         if {! ([string is integer -strict $maxMsgs] && $maxMsgs >= 0)} {
-            throw {NATS INVALID_ARG} "Invalid max_msgs $maxMsgs"
+            throw {NATS ErrInvalidArg} "Invalid max_msgs $maxMsgs"
         }
         
         if {![info exists subscriptions($subID)]} {
-            throw {NATS INVALID_ARG} "Invalid subscription ID $subID"
+            throw {NATS ErrBadSubscription} "Invalid subscription ID $subID"
         }
         
         #the format is UNSUB <sid> [max_msgs]
@@ -350,7 +354,7 @@ oo::class create ::nats::connection {
                     set callback $val
                 }
                 default {
-                    throw {NATS INVALID_ARG} "Unknown option $opt"
+                    throw {NATS ErrInvalidArg} "Unknown option $opt"
                 }
             }
         }
@@ -374,7 +378,7 @@ oo::class create ::nats::connection {
             lassign $requests($reqID) ignored timedOut response
             unset requests($reqID)
             if {$timedOut} {
-                throw {NATS TIMEOUT} "Request to $subject timed out"
+                throw {NATS ErrTimeout} "Request to $subject timed out"
             }
             after cancel $timerID
             return $response
@@ -398,7 +402,7 @@ oo::class create ::nats::connection {
                     set timeout $val
                 }
                 default {
-                    throw {NATS INVALID_ARG} "Unknown option $opt"
+                    throw {NATS ErrInvalidArg} "Unknown option $opt"
                 }
             }
         }
@@ -407,7 +411,7 @@ oo::class create ::nats::connection {
         
         if {$status != $nats::status_connected} {
             # unlike CheckConnection, here we want to raise the error also if the client is reconnecting, in line with cnats
-            throw {NATS NO_CONNECTION} "No connection to NATS server"
+            throw {NATS ErrConnectionClosed} "No connection to NATS server"
         }
 
         set timerID [after $timeout [list set [self object]::pong 0]]
@@ -420,7 +424,7 @@ oo::class create ::nats::connection {
             after cancel $timerID
             return true
         }
-        throw {NATS TIMEOUT} "PING timeout"
+        throw {NATS ErrTimeout} "PING timeout"
     }
     
     method inbox {} {
@@ -462,7 +466,11 @@ oo::class create ::nats::connection {
         chan event $sock readable {}
         if {$broken} {
             $serverPool current_server_connected false
-            set status $nats::status_reconnecting
+            if {$status != $nats::status_connecting} {
+                # recall that during initial connection round we try all servers only once
+                # method next_server relies on this status to know that
+                set status $nats::status_reconnecting
+            }
         } else {
             # we get here only from method disconnect
             lassign [$serverPool current_server] host port
@@ -474,6 +482,7 @@ oo::class create ::nats::connection {
                 append msg "\r\n"
                 puts -nonewline $sock $msg
             }
+            set outBuffer [list]
         }
         close $sock ;# all buffered input is discarded, all buffered output is flushed
         set sock ""
@@ -493,7 +502,7 @@ oo::class create ::nats::connection {
         set timers(ping) [after $config(ping_interval) [mymethod Pinger]]
         
         if {$counters(pendingPings) >= $config(max_outstanding_pings)} {
-            my AsyncError STALE_CONNECTION "The server did not respond on $counters(pendingPings) PINGs"
+            my AsyncError ErrStaleConnection "The server did not respond on $counters(pendingPings) PINGs"
             my CloseSocket 1
             set counters(pendingPings) 0
             $coro connect
@@ -522,8 +531,7 @@ oo::class create ::nats::connection {
             chan flush $sock
         } on error err {
             lassign [$serverPool current_server] host port
-            ${logger}::error "Failed to send data to $host:$port: $err"
-            my AsyncError BROKEN_SOCKET $err
+            my AsyncError ErrBrokenSocket "Failed to send data to $host:$port: $err"
             my CloseSocket 1
             $coro connect
             return
@@ -543,13 +551,12 @@ oo::class create ::nats::connection {
     # --------- these procs execute in the coroutine ---------------
     # connect to Nth server in the pool
     method ConnectNextServer {} {
-        # if it throws NO_SERVERS, we have exhausted all servers in the pool
+        # if it throws ErrNoServers, we have exhausted all servers in the pool
         # we must stop the coroutine, so let the error propagate
         lassign [$serverPool next_server] host port ;# it may wait for reconnect_time_wait ms!
         ${logger}::info "Connecting to the server at $host:$port"
         set sock [socket -async $host $port]
         chan event $sock writable [list $coro connected]
-        set timers(connect) [after $config(connect_timeout) [list $coro connect_timeout]]
     }
     
     method SendConnect {} {
@@ -576,15 +583,8 @@ oo::class create ::nats::connection {
         set jsonMsg [json::write::object {*}$connectParams]
         json::write::indented $ind
         lappend outBuffer "CONNECT $jsonMsg"
-        #TODO check for ok auth before declaring success
-        $serverPool current_server_connected true
-        lassign [$serverPool current_server] host port
-        ${logger}::info "Connected to the server at $host:$port"
-        # exit from vwait in "connect"
-        set status $nats::status_connected
-        my RestoreSubs
-        my Flusher ;# easier testing: vwait on the status and then we can get chan data with CONNECT
-        set timers(ping) [after $config(ping_interval) [mymethod Pinger]]
+        lappend outBuffer "PING"
+        my Flusher
     }
     
     method RestoreSubs {} {
@@ -634,8 +634,7 @@ oo::class create ::nats::connection {
             try {
                 tls::handshake $sock
             } on error err {
-                ${logger}::error "TLS handshake with server $host:$port failed: $err"
-                my AsyncError TLS_FAILED $err
+                my AsyncError ErrTLS "TLS handshake with server $host:$port failed: $err"
                 close $sock
                 # TODO no point in trying to reconnect to it, so remove it from the pool
                 # set serverPool [lreplace serverPool $counters(curServer) $counters(curServer)]
@@ -727,6 +726,16 @@ oo::class create ::nats::connection {
         set pong 1
         set counters(pendingPings) 0
         ${logger}::debug "received PONG"
+        if {$status != $nats::status_connected} {
+            # auth OK: finalise the connection process
+            $serverPool current_server_connected true
+            lassign [$serverPool current_server] host port
+            ${logger}::info "Connected to the server at $host:$port"
+            # exit from vwait in "connect"
+            set status $nats::status_connected
+            my RestoreSubs
+            set timers(ping) [after $config(ping_interval) [mymethod Pinger]]
+        }
     }
     
     method OK {cmd} {
@@ -734,16 +743,41 @@ oo::class create ::nats::connection {
     }
     
     method ERR {cmd} {
-        ${logger}::error $cmd
-        # all error messages from NATS are wrapped in single quotes
-        if {$cmd eq "'Stale Connection'"} {
-            my AsyncError STALE_CONNECTION $cmd
-            # the server has already closed the socket, so we can do the same now without checking for eof
-            my CloseSocket 1
-            my ConnectNextServer
-        } else {
-            my AsyncError SERVER_ERR $cmd
+        set errMsg [string tolower [string trim $cmd " '"]] ;# remove blanks and single quotes around the message
+        if [string match "stale connection*" $errMsg] {
+            my AsyncError ErrStaleConnection $errMsg 1
+            return
         }
+        if [string match "permissions violation*" $errMsg] {
+            # not fatal for the connection
+            my AsyncError ErrPermissions $errMsg
+            return
+        }
+        if [string match "authorization violation*" $errMsg] {
+            my AsyncError ErrAuthorization $errMsg 1
+            return
+        }
+        if [string match "user authentication expired*" $errMsg] {
+            my AsyncError ErrAuthExpired $errMsg 1
+            return
+        }
+        if [string match "user authentication revoked*" $errMsg] {
+            my AsyncError ErrAuthRevoked $errMsg 1
+            return
+        }
+        if [string match "account authentication expired*" $errMsg] {
+            #nats server account authorization has expired
+            my AsyncError ErrAccountAuthExpired $errMsg 1
+            return
+        }
+        if [string match "invalid *subject*" $errMsg] {
+            #only in the pedantic mode; even nats.go doesn't recognise properly this error
+            # server will respond "invalid subject" to SUB and "invalid publish subject"
+            my AsyncError ErrBadSubject $errMsg
+            return
+        }
+        
+        my AsyncError ErrServer $errMsg
     }
     
     method CoroMain {} {
@@ -765,9 +799,8 @@ oo::class create ::nats::connection {
             # we get here after call to "disconnect" during MSG or next_server; the socket has been already closed,
             # so we only need to update the status
         } trap {NATS} {msg opts} {
-            #todo: try yieldto? 
-            #my AsyncError [lindex [dict get $opts -errorcode] 1] $msg
-            #NO_SERVERS error from next_server leads here; don't overwrite the real last_error
+            # ErrNoServers error from next_server leads here; don't overwrite the real last_error
+            # need to log this in case user called "connect -async"
             ${logger}::error $msg
         } trap {} {msg opts} {
             ${logger}::error "Unexpected error: $msg $opts"
@@ -781,37 +814,35 @@ oo::class create ::nats::connection {
             connect {
                 my ConnectNextServer
             }
-            connected - connect_timeout {
+            connected {
                 # this event will arrive again and again if we don't disable it
                 chan event $sock writable {}
                 lassign [$serverPool current_server] host port
-                if { $reason eq "connected"} {
-                    after cancel $timers(connect)
-                    # the socket either connected or failed to connect
-                    set errorMsg [chan configure $sock -error]
-                    if { $errorMsg ne "" } {
-                        ${logger}::error "Failed to connect to server $host:$port: $errorMsg"
-                        my AsyncError CONNECT_FAILED $errorMsg
-                        close $sock
-                        $serverPool current_server_connected false
-                        my ConnectNextServer
-                        return
-                    }
-                    # connection succeeded
-                    # we want to call "flush" ourselves, so use -buffering full
-                    # NATS protocol uses crlf as a delimiter
-                    # when reading from socket, it's easier to let Tcl do EOL translation, unless we are in method MSG
-                    # when writing to socket, we need to turn off the translation when sending a message payload
-                    # but outBuffer doesn't know which element is a message, so it's easier to write CR+LF ourselves
-                    chan configure $sock -translation {crlf binary} -blocking 0 -buffering full -encoding binary
-                    chan event $sock readable [list $coro readable]
-                } else {
+                # the socket either connected or failed to connect
+                set errorMsg [chan configure $sock -error]
+                if { $errorMsg ne "" } {
+                    my AsyncError ErrConnectionRefused "Failed to connect to server $host:$port: $errorMsg"
                     close $sock
-                    ${logger}::error "Connection timeout for $host:$port"
-                    my AsyncError CONNECT_TIMEOUT "Connection timeout for $host:$port"
                     $serverPool current_server_connected false
                     my ConnectNextServer
+                    return
                 }
+                # connection succeeded
+                # we want to call "flush" ourselves, so use -buffering full
+                # NATS protocol uses crlf as a delimiter
+                # when reading from the socket, it's easier to let Tcl do EOL translation, unless we are in method MSG
+                # when writing to the socket, we need to turn off the translation when sending a message payload
+                # but outBuffer doesn't know which element is a message, so it's easier to write CR+LF ourselves
+                chan configure $sock -translation {crlf binary} -blocking 0 -buffering full -encoding binary
+                chan event $sock readable [list $coro readable]
+            }
+            connect_timeout {
+                # we get here both in case of TCP-level timeout and if the server does not reply to the initial PING/PONG on time
+                lassign [$serverPool current_server] host port
+                close $sock
+                my AsyncError ErrConnectionTimeout "Connection timeout for $host:$port"
+                $serverPool current_server_connected false
+                my ConnectNextServer
             }
             readable {
                 # confirmed by testing: apparently the Tcl TCP is implemented like:
@@ -825,7 +856,6 @@ oo::class create ::nats::connection {
                 if {[chan pending input $sock] > 1024} {
                     # max length of control line in the NATS protocol is 1024 (see MAX_CONTROL_LINE_SIZE in nats.py)
                     # this should not happen unless the NATS server is malfunctioning
-                    ${logger}::error "Maximum control line exceeded"
                     my AsyncError PROTOCOL_ERR "Maximum control line exceeded"
                     my CloseSocket 1
                     my ConnectNextServer
@@ -836,10 +866,7 @@ oo::class create ::nats::connection {
                         # server closed the socket
                         #set err [chan configure $sock -error] - no point in this, $err will be blank
                         lassign [$serverPool current_server] host port
-                        ${logger}::error "Failed to read data from $host:$port"
-                        my AsyncError BROKEN_SOCKET "Failed to read from socket"
-                        my CloseSocket 1
-                        my ConnectNextServer
+                        my AsyncError ErrBrokenSocket "Failed to read data from $host:$port" 1
                     }
                     # else - we don't have a full line yet - wait for next chan event
                     return
@@ -894,18 +921,23 @@ oo::class create ::nats::connection {
     
     method CheckConnection {} {
         if {$status == $nats::status_closed} {
-            throw {NATS NO_CONNECTION} "No connection to NATS server"
+            throw {NATS ErrConnectionClosed} "No connection to NATS server"
         }
     }
     
     method CheckTimeout {timeout} {
         if {! ([string is integer -strict $timeout] && $timeout > 0)} {
-            throw {NATS INVALID_ARG} "Invalid timeout $timeout"
+            throw {NATS ErrBadTimeout} "Invalid timeout $timeout"
         }
     }
     
-    method AsyncError {code msg} {
+    method AsyncError {code msg { doReconnect 0 }} {
+        ${logger}::error $msg
         set last_error [dict create code "NATS $code" message $msg]
+        if {$doReconnect} {
+            my CloseSocket 1
+            my ConnectNextServer
+        }
     }
 }
 

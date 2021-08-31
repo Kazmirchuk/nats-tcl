@@ -69,8 +69,10 @@ oo::class create ::nats::server_pool {
         #uri::split will return a dict with these keys: scheme, host, port, user, pwd (and others)
         # note that these keys will always be present even if empty
         array set parsed [uri::split "http://$dummy_url"]
-        if {$parsed(host) eq ""} {
-            throw {NATS INVALID_ARG} "Invalid URL $url"
+        # if the port is not a number, it will end up in "path", e.g. http://foo:202a => path=a
+        # so check that the path is empty 
+        if {$parsed(host) eq "" || $parsed(path) ne ""} {
+            throw {NATS ErrInvalidArg} "Invalid URL $url"
         }
         if {$parsed(port) eq ""} {
             set parsed(port) 4222
@@ -90,22 +92,24 @@ oo::class create ::nats::server_pool {
     method next_server {} {
         upvar #0 ${conn}::config config
         upvar #0 ${conn}::status status
+        upvar #0 ${conn}::timers timers
         
         while {1} {
             if { [llength $servers] == 0 } {
-                throw {NATS NO_SERVERS} "Server pool is empty"
+                throw {NATS ErrNoServers} "Server pool is empty"
             }
             
             #"pop" a server; using struct::queue seems like an overkill for such a small list
             set s [lindex $servers 0]
             # during initial connecting process we go through the pool only once
             if {$status == $nats::status_connecting && [dict get $s reconnects]}  {
-                throw {NATS NO_SERVERS} "No servers available for connection"
+                throw {NATS ErrNoServers} "No servers available for connection"
             }
             set servers [lreplace $servers 0 0]
             if {$config(max_reconnect_attempts) > 0 && [dict get $s reconnects] > $config(max_reconnect_attempts)} {
                 continue ;# remove the server from the pool
             }
+            
             set now [clock milliseconds]
             set last_attempt [dict get $s last_attempt]
             if {$now < $last_attempt + $config(reconnect_time_wait)} {
@@ -125,10 +129,20 @@ oo::class create ::nats::server_pool {
             lappend servers $s
             break
         }
+        
+        # connect_timeout applies to a connect attempt to one server and includes not only TCP handshake, but also NATS-level handshake
+        # and the first PING/PONG exchange to ensure successful authentication
+        set timers(connect) [after $config(connect_timeout) [list [info coroutine] connect_timeout]]
+        [$conn logger]::debug "Started connection timer $timers(connect)"
         return [my current_server]
     }
     
     method current_server_connected {ok} {
+        upvar #0 ${conn}::timers timers
+        after cancel $timers(connect)
+        [$conn logger]::debug "Cancelled connection timer $timers(connect)"
+        set timers(connect) ""
+        
         set s [lindex $servers end]
         dict set s last_attempt [clock seconds]
         if {$ok} {

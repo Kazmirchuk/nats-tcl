@@ -1,4 +1,5 @@
 namespace eval ::nats {}
+package require json
 
 oo::class create ::nats::jet_stream {
     variable conn consumerInboxPrefix logger consumes counters
@@ -90,6 +91,29 @@ oo::class create ::nats::jet_stream {
         $conn publish $ackAddr {}
     }
 
+    method publish {subject message args} {
+        set newOpts [dict create]
+        foreach {opt val} $args {
+            switch -- $opt {
+                -callback {
+                    dict set newOpts -callback [mymethod PublishCallback $val]
+                }
+                default {
+                    dict set newOpts $opt $val
+                }
+            }
+        }
+
+        set result [$conn request $subject $message {*}$newOpts]
+        if {[dict exists $newOpts -callback]} {
+            return
+        }
+        
+        # can throw nats server error
+        set dictResponse [my ParsePublishResponse $result]
+        return $dictResponse
+    }
+
     method ConsumeCallback {reqID subj msg reply {reqID_timeout 0}} {
         if {$reqID_timeout != 0} {
             #async request timed out
@@ -112,5 +136,34 @@ oo::class create ::nats::jet_stream {
         after cancel $timer
         after 0 [list {*}$callback 0 $msg $reply]
         unset consumes($reqID)
+    }
+
+    method PublishCallback {originalCallback timedOut result} {
+        if {$timedOut} {
+            after 0 [list {*}$originalCallback 1 {} {}]
+            return
+        }
+
+        try {
+            set dictResponse [my ParsePublishResponse $result]
+        } trap {NATS NATS_SERVER_ERROR} {msg opt} {
+            set errorCode [lindex [dict get $opt -errorcode] end]
+            after 0 [list {*}$originalCallback 0 {} [dict create type $errorCode error $msg]]
+            return
+        } on error {msg opt} {
+            ${logger}::error "Error while parsing jet stream publish callback: $msg"
+            return
+        }
+        after 0 [list {*}$originalCallback 0 $dictResponse {}]
+    }
+
+    method ParsePublishResponse {response} {
+        set responseDict [::json::json2dict $response]
+        if {[dict exists $responseDict error] && [dict exists $responseDict type]} {
+            throw [list NATS NATS_SERVER_ERROR [dict get $responseDict type]] [dict get $responseDict error]
+            return
+        }
+
+        return $responseDict
     }
 }

@@ -107,6 +107,19 @@ proc consumeAsyncCallback {timedOut msg ackAddr} {
 }
 
 $jet_stream consume my_stream my_consumer -callback consumeAsyncCallback -timeout 1000
+
+# publishing to jet stream can be done using publish on jet_stream object
+# synchronous varsion
+$jet_stream publish "test.1" "msg 1"
+
+# asynchronous version
+proc pubAsyncCallback {timedOut result error} {
+    # if error is not empty it is dict containing "type" and "error" keys sended from NATS server
+    # if error is empty, publish was successfull and result is dict containing "stream", "seq" and optionally "duplicate"
+    ...
+}
+
+$jet_stream publish "test.1" "msg 1" -callback pubAsyncCallback -timeout 1000
 ```
 
 ## Missing features (in comparison to official NATS clients)

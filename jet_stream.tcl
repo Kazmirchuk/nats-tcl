@@ -22,10 +22,10 @@ oo::class create ::nats::jet_stream {
     
     method consume {stream consumer args} {
         if {![${conn}::my CheckSubject $stream]} {
-            throw {NATS INVALID_ARG} "Invalid stream name $stream"
+            throw {NATS ErrInvalidArg} "Invalid stream name $stream"
         }
         if {![${conn}::my CheckSubject $consumer]} {
-            throw {NATS INVALID_ARG} "Invalid consumer name $consumer"
+            throw {NATS ErrInvalidArg} "Invalid consumer name $consumer"
         }
 
         set subject "\$JS.API.CONSUMER.MSG.NEXT.$stream.$consumer"
@@ -43,14 +43,8 @@ oo::class create ::nats::jet_stream {
                     set callback $val
                 }
                 default {
-                    throw {NATS INVALID_ARG} "Unknown option $opt"
+                    throw {NATS ErrInvalidArg} "Unknown option $opt"
                 }
-            }
-        }
-        
-        if {$callback ne "" && $timeout != -1} {
-            if {[$conn cget flush_interval] >= $timeout} {
-                throw {NATS INVALID_ARG} "Wrong timeout: async requests need at least flush_interval ms to complete"
             }
         }
         
@@ -68,13 +62,12 @@ oo::class create ::nats::jet_stream {
                  set timerID [after $timeout [list set [self object]::consumes($reqID) [list 0 1 ""]]]
             }
 
-            ${conn}::my Flusher 0
             set consumes($reqID) [list 0]
             ${conn}::my CoroVwait [self object]::consumes($reqID)
             lassign $consumes($reqID) ignored timedOut response
             unset consumes($reqID)
             if {$timedOut} {
-                throw {NATS TIMEOUT} "Consume $stream.$consumer timed out"
+                throw {NATS ErrTimeout} "Consume $stream.$consumer timed out"
             }
             after cancel $timerID
             return $response
@@ -146,7 +139,7 @@ oo::class create ::nats::jet_stream {
 
         try {
             set dictResponse [my ParsePublishResponse $result]
-        } trap {NATS NATS_SERVER_ERROR} {msg opt} {
+        } trap {NATS ErrResponse} {msg opt} {
             set errorCode [lindex [dict get $opt -errorcode] end]
             after 0 [list {*}$originalCallback 0 {} [dict create type $errorCode error $msg]]
             return
@@ -158,9 +151,14 @@ oo::class create ::nats::jet_stream {
     }
 
     method ParsePublishResponse {response} {
-        set responseDict [::json::json2dict $response]
+        if {[catch {
+            set responseDict [::json::json2dict $response]
+        } err]} {
+            throw [list NATS ErrResponse ErrParsing] "Cannot parse server response ($response): $err"
+            return
+        }
         if {[dict exists $responseDict error] && [dict exists $responseDict type]} {
-            throw [list NATS NATS_SERVER_ERROR [dict get $responseDict type]] [dict get $responseDict error]
+            throw [list NATS ErrResponse [dict get $responseDict type]] [dict get $responseDict error]
             return
         }
 

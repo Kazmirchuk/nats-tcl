@@ -3,9 +3,6 @@
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
-namespace import ::tcltest::test
-namespace import test_utils::*
-
 startNats NATS1
 startNats NATS2 -p 4223
 
@@ -23,11 +20,11 @@ trace add variable ${conn}::last_error write [lambda {var idx op } {
 }]
 
 [$conn logger]::setlevel debug
-$conn configure -servers [list nats://localhost:4222 nats://localhost:4223]
+$conn configure -servers [list nats://localhost:4222 nats://localhost:4223] -randomize false
 
 # TEST: do not retry servers in loop when initial connect
 
-test reconn-1 "Connect NATS" -body {
+test cluster-1 "Connect NATS" -body {
     $conn connect -async
     assert {[set ${conn}::status] == $nats::status_connecting}
     test_utils::sleep 500
@@ -39,7 +36,7 @@ test reconn-1 "Connect NATS" -body {
 
 stopNats NATS1
 
-test reconn-2 "Publish a message" -body {
+test cluster-2 "Publish a message" -body {
     $conn publish subject1 "hello"
     # wait until flush & reconnect
     test_utils::sleep 1000
@@ -49,7 +46,7 @@ test reconn-2 "Publish a message" -body {
     assert {$port == 4223}
 } -result {}
 
-test reconn-3 "Publish and receive a message" -body {
+test cluster-3 "Publish and receive a message" -body {
     $conn subscribe subject1 -callback test_utils::simpleCallback
     $conn publish subject1 "hello2"
     vwait test_utils::simpleMsg

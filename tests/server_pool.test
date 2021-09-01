@@ -3,53 +3,69 @@
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
-namespace import ::tcltest::test
-tcltest::configure {*}$argv
-
 set conn [nats::connection new]
+$conn configure -reconnect_time_wait 0
+
 set sp [set ${conn}::serverPool] ;# access to a private variable only for test purposes!
 
-test server_pool-1 "Parse URL 1" -body {
-    $sp add nats-server1.com
+test server_pool-1 "Parse URL with hostname" -body {
+    $sp parse nats-server1.com
 } -result {scheme nats host nats-server1.com port 4222 discovered false reconnects 0 last_attempt 0}
 
-test server_pool-2 "Parse URL 2" -body {
-    $sp add nats://some_token@nats-server2.com
+test server_pool-2 "Parse URL with an auth_token" -body {
+    $sp parse nats://some_token@nats-server2.com
 } -result {scheme nats host nats-server2.com port 4222 discovered false reconnects 0 last_attempt 0 auth_token some_token}
 
-test server_pool-3 "Parse URL 3" -body {
-    $sp add tls://user:pass@nats-server3.com
+test server_pool-3 "Parse URL with user/password" -body {
+    $sp parse tls://user:pass@nats-server3.com
 } -result {scheme tls host nats-server3.com port 4222 discovered false reconnects 0 last_attempt 0 user user password pass}
 
-test server_pool-4 "Parse URL 4" -body {
-    $sp add tls://user:pass2@nats-server4.com:2020 true
-} -result {scheme tls host nats-server4.com port 2020 discovered true reconnects 0 last_attempt 0 user user password pass2}
+test server_pool-4 "Parse URL with a port number" -body {
+    $sp parse tls://user:pass2@nats-server4.com:2020
+} -result {scheme tls host nats-server4.com port 2020 discovered false reconnects 0 last_attempt 0 user user password pass2}
 
-test server_pool-5 "Parse URL 5" -body {
-    $sp add nats://:2020
-} -result {Invalid URL nats://:2020} -errorCode {NATS INVALID_ARG}
+test server_pool-5.1 "Parse URL without a hostname" -body {
+    $sp parse nats://:2020
+} -result {Invalid URL nats://:2020} -errorCode {NATS ErrInvalidArg}
 
-test server_pool-6 "Check pool size" -body {
+test server_pool-5.2 "Parse URL with invalid port number" -body {
+    $sp parse nats://localhost:2a20
+} -result {Invalid URL nats://localhost:2a20} -errorCode {NATS ErrInvalidArg}
+
+test server_pool-6.1 "Configure multiple servers" -body {
+    $conn configure -servers [list nats-server1.com nats://some_token@nats-server2.com tls://user:pass2@nats-server4.com:2020]
     llength [$sp all_servers]
-} -result 4
+} -result 3
+
+test server_pool-6.2 "Trying to configure an invalid server does not clear the pool" -body {
+    catch {$conn configure -servers [list nats-server1.com nats://:2020]} err errOpts
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrInvalidArg}}
+    llength [$sp all_servers]
+} -result 3
 
 test server_pool-7 "Add duplicate URL" -body {
-    $sp add nats://nats-server3.com
+    $sp add nats://nats-server1.com
     llength [$sp all_servers]
-} -result 4
+} -result 3
 
 $conn configure -token dummy
-
+# the last server in the list is considered current: tls://user:pass2@nats-server4.com:2020
 test server_pool-8 "Format credentials from URL" -body {
     $sp format_credentials
 } -result {user {"user"} pass {"pass2"}}
 
-test server_pool-9 "Format credentials from config" -body {
-    $sp add nats-server9.com
+test server_pool-9 "Take auth token from config" -body {
+    $conn configure -servers 127.0.0.1
+    assert {[llength [$sp all_servers]] == 1}
     $sp format_credentials
 } -result {auth_token {"dummy"}}
 
-test server_pool-10 "Clear the pool" -body {
+test server_pool-10 "User and password take precedence over auth_token" -body {
+    $conn configure -user "def_user" -password "def_pass"
+    $sp format_credentials
+} -result {user {"def_user"} pass {"def_pass"}}
+
+test server_pool-11 "Clear the pool" -body {
     $sp clear
     llength [$sp all_servers]
 } -result 0

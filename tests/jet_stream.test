@@ -1,8 +1,3 @@
-namespace import ::tcltest::test
-namespace import test_utils::*
-
-tcltest::configure {*}$argv
-
 startNats NATS_JS -js ;# start nats with Jet Stream
 
 set conn [nats::connection new]
@@ -34,6 +29,7 @@ if {[catch {
     $conn destroy
     stopNats NATS_JS
     tcltest::cleanupTests
+    throw error "Cannot execute NATS command - probably nats cli is not available, skipping... : $err"
     return 1
 }
 
@@ -63,7 +59,7 @@ test sync-consume-3 "Sync consume redelivered message and ACK" -body {
 
 test sync-consume-4 "No message left after ACK - timeout" -body {
     $jet_stream consume $stream_name $consumer_name -timeout 2000
-} -match glob -result {Consume * timed out*} -returnCodes {error} -errorCode {NATS TIMEOUT}
+} -match glob -result {Consume * timed out*} -returnCodes {error} -errorCode {NATS ErrTimeout}
 
 test async-consume-1 "Publish and async consume" -body {
     $conn publish test.2 "msg 2"
@@ -120,7 +116,7 @@ test jetstream-publish-2 "Publish message to jet-stream async" -body {
 
 test jetstream-publish-3 "Publish message to jet-stream sync timeout" -body {
     $jet_stream publish not.exists "not.exists" -timeout 1000
-} -match glob -result {Request to * timed out*} -returnCodes {error} -errorCode {NATS TIMEOUT}
+} -match glob -result {Request to * timed out*} -returnCodes {error} -errorCode {NATS ErrTimeout}
 
 test jetstream-publish-4 "Publish message to jet-stream async timeout" -body {
     duration {

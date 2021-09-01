@@ -38,7 +38,7 @@ You can set up traces on these variables to get notified e.g. when a connection 
 
 ## Options
 
-The **configure** method accepts the following options. Dash in front of an option name is optional. Make sure to set them *before* calling **connect**.
+The **configure** method accepts the following options. Make sure to set them *before* calling **connect**.
 
 | Option        | Type   | Default | Comment |
 | ------------- |--------|---------|---------|
@@ -51,7 +51,6 @@ The **configure** method accepts the following options. Dash in front of an opti
 | max_reconnect_attempts | integer | 60 | Maximum number of reconnect attempts per server |
 | ping_interval | integer | 120000 | Interval (ms) to send PING messages to a NATS server|
 | max_outstanding_pings | integer | 2 | Max number of PINGs without a reply from a NATS server before closing the connection |
-| flush_interval | integer | 500 | Interval (ms) to flush sent messages. Synchronous requests are always flushed immediately. If the interval is set to 0, all messages will be flushed immediately, similar to `natsOptions_SetSendAsap(true)` in the NATS C client. |
 | echo | boolean | true | If true, messages from this connection will be echoed back by the server if the connection has matching subscriptions|
 | tls_opts | list | | Options for tls::import |
 | user | string | | Default username|
@@ -66,7 +65,7 @@ The **configure** method accepts the following options. Dash in front of an opti
 Creates a new instance of `nats::connection` with default options and initialises a [logger](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/log/logger.md) instance with the severity level set to `warn`. If you pass in a connection name, it will be sent to NATS in a `CONNECT` message, and will be indicated in the logger name.
 
 ### objectName cget option
-Returns the current value of an option as described above. Dash in front of an option name is optional.
+Returns the current value of an option as described above. 
 
 ### objectName configure ?option? ?value option value...?
 When given no arguments, returns a dict of all options with their current values. When given one option, returns its current value (same as `cget`). When given more arguments, assigns each value to an option. The only mandatory option is `servers`, and others have reasonable defaults. Under the hood it is implemented using the [cmdline::getoptions](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/cmdline/cmdline.md#3) command, so it understands the special `-?` option for interactive help.
@@ -83,7 +82,6 @@ Flushes all outgoing data, closes the TCP connection and sets the `status` to "c
 ### objectName publish subject msg ?replySubj? 
 Publishes a message to the specified subject. See the NATS [documentation](https://docs.nats.io/nats-concepts/subjects) for more details about subjects and wildcards. The client will check subject's validity before sending. Allowed characters are Latin-1 characters, digits, dot, dash and underscore. <br/>
 `msg` is sent as is, it can be a binary string. If you specify `replySubj`, a responder will know where to send a reply. You can use the `inbox` method to generate a transient [subject name](https://docs.nats.io/developing-with-nats/sending/replyto) starting with _INBOX. However, using asynchronous requests might accomplish the same task in an easier manner - see below.<br/>
-Note that for higher throughput the message is only added to a buffer, and will be flushed to the TCP socket not later than after `flush_interval` ms.
 
 ### objectName subscribe subject ?-queue queueGroup? ?-callback cmdPrefix? ?-max_msgs maxMsgs?
 Subscribes to a subject (possibly with wildcards) and returns a subscription ID. Whenever a message arrives, the command prefix will be invoked from the event loop with 3 additional arguments: `subject`, `message` and `replyTo` (might be empty). If you use the [-queue option](https://docs.nats.io/developing-with-nats/receiving/queues), only one subscriber in a given queueGroup will receive each message (useful for load balancing). When given `-max_msgs`, the client will automatically unsubscribe after `maxMsgs` messages have been received.
@@ -93,11 +91,11 @@ Unsubscribes from a subscription with a given `subID` immediately. If `-max_msgs
 
 ### objectName request subject message ?-timeout ms? ?-callback cmdPrefix? 
 Sends a message to the specified subject using an automatically generated transient `replyTo` subject (inbox). 
-- If no callback is given, the request is synchronous, is flushed to the socket immediately, and blocks in (possibly, coroutine-aware) `vwait` until a reply is received. The reply is the return value. If no reply arrives within `timeout`, it raises an error "TIMEOUT".
+- If no callback is given, the request is synchronous and blocks in (possibly, coroutine-aware) `vwait` until a reply is received. The reply is the return value. If no reply arrives within `timeout`, it raises an error "TIMEOUT".
 - If a callback is given, the call returns immediately, and when a reply is received or a timeout fires, the command prefix will be invoked from the event loop with 2 additional arguments: `timedOut` (equal to 1, if the request timed out) and a `reply`.
 
 ### objectName ping ?-timeout ms?
-A blocking call that triggers a ping-pong exchange with the NATS server and returns true upon success. If the server does not reply within the specified timeout (ms), it raises `TIMEOUT` error. Default timeout is 10s. You can use this method to check if the server is alive or to force flush outgoing data.
+A blocking call that triggers a ping-pong exchange with the NATS server and returns true upon success. If the server does not reply within the specified timeout (ms), it raises `TIMEOUT` error. Default timeout is 10s. You can use this method to check if the server is alive.
 
 ### objectName inbox 
 Returns a new inbox - random subject starting with _INBOX.
@@ -112,23 +110,48 @@ Returns a logger instance.
 TclOO destructor. Flushes pending data and closes the TCP socket.
 
 ## Error handling
-All synchronous errors are raised using `throw {NATS <error_type>} human-readable message`. 
+Error codes are similar to those from the nats.go client as much as possible. A few additional error codes provide more information about failed connection attempts to the NATS server: ErrBrokenSocket, ErrTLS, ErrConnectionRefused.
 
-| Error type        | Reason   | 
+All synchronous errors are raised using `throw {NATS <error_code>} human-readable message`, so you can handle them using try&trap, for example: 
+```Tcl
+try {
+  ...
+} trap {NATS ErrTimeout} {msg opts} {
+ # handle a request timeout  
+} trap {NATS} {msg opts} {
+  # handle other NATS errors
+}
+```
+| Error code        | Reason   | 
 | ------------- |--------|
-| NO_CONNECTION | Attempt to subscribe or send a message before calling `connect` |
-| NO_SERVERS | No NATS servers available|
+| ErrConnectionClosed | Attempt to subscribe or send a message before calling `connect` |
+| ErrNoServers | No NATS servers available|
 | NO_CREDS | NATS server requires authentication, but no credentials are known for it |
-| INVALID_ARG | Invalid argument |
-| CONNECT_FAILED | Raised by `connect` if it failed to connect to all servers |
-| TIMEOUT | Timeout of a synchronous request or ping |
+| ErrInvalidArg | Invalid argument |
+| ErrBadSubject | Invalid subject for publishing or subscribing |
+| ErrBadTimeout | Invalid timeout argument |
+| ErrMaxPayload | Message size is more than allowed by the server |
+| ErrBadSubscription | Invalid subscription ID |
+| ErrTimeout | Timeout of a synchronous request or ping |
 
 Asynchronous errors are sent to the logger and can also be queried/traced using 
-`set ${obj}::last_error`.
+`$last_error`, for example:
+```Tcl
+set err [set ${conn}::last_error]
+puts "Error code: [dict get $err code]"
+puts "Error text: [dict get $err message]"
+```
 | Error type        | Reason   | 
 | ------------- |--------|
-| BROKEN_SOCKET | TCP socket failed |
-| TLS_FAILED | TLS handshake failed |
+| ErrBrokenSocket | TCP socket failed |
+| ErrTLS | TLS handshake failed |
 | PROTOCOL_ERR | A protocol error from the server side, e.g. maximum control line exceeded |
-| STALE_CONNECTION | NATS server closed the connection, because the client did not respond to PING on time |
-| CONNECT_FAILED | Failed to connect to a NATS server; the client will try the next server from the pool |
+| ErrStaleConnection | The client or server closed the connection, because the other party did not respond to PING on time |
+| ErrConnectionRefused | TCP connection to a NATS server was refused, possibly due to wrong port, or the server was not running; the client will try the next server from the pool |
+| ErrConnectionTimeout | Connection to a server could not be established within connect_timeout ms |
+| ErrServer | Generic error reported by NATS server |
+| ErrPermissions | subject authorization has failed |
+| ErrAuthorization | user authorization has failed |
+| ErrAuthExpired | user authorization has expired |
+| ErrAuthRevoked | user authorization has been revoked |
+| ErrAccountAuthExpired | nats server account authorization has expired |

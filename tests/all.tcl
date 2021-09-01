@@ -18,8 +18,12 @@ proc tcltest::cleanupTestsHook {} {
     set ::exitCode [expr {$numTests(Failed) > 0}]
 }
 cd $thisDir
-tcltest::configure -testdir $thisDir -singleproc 1
-tcltest::configure {*}$argv
+# by default, -tmpdir is the same as -testdir
+tcltest::configure -testdir $thisDir -singleproc 1 {*}$argv
+
+# due to -singleproc 1, all *.test will be sourced by the current interpreter, so we can do [namespace import] only once here
+namespace import ::tcltest::test
+namespace import test_utils::*
 
 tcltest::runAllTests
 

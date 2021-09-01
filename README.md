@@ -114,9 +114,9 @@ $jet_stream consume my_stream my_consumer -callback consumeAsyncCallback -timeou
 $jet_stream publish "test.1" "msg 1"
 
 # asynchronous version
-proc pubAsyncCallback {timedOut result error} {
-    # if error is not empty it is dict containing "type" and "error" keys sended from NATS server
-    # if error is empty, publish was successfull and result is dict containing "stream", "seq" and optionally "duplicate"
+proc pubAsyncCallback {timedOut info error} {
+    # if "error" is not empty it is dict containing "type" and "error" keys sended from NATS server
+    # if "error" is empty, publish was successfull and "info" is dict containing "stream", "seq" and optionally "duplicate"
     ...
 }
 

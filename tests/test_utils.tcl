@@ -13,8 +13,8 @@ package require lambda
 
 namespace eval test_utils {
     variable sleepVar 0
-    
     variable simpleMsg ""
+    variable commPort 4221
     
     # sleep $delay ms in the event loop
     proc sleep {delay} {
@@ -157,7 +157,7 @@ namespace eval test_utils {
         set pos [string first " " $data] ;# skip CONNECT straight to the beginning of JSON
         return [json::json2dict [string range $data $pos+1 end]]
     }
-    
+    # WARNING: debug logging must be off when running under Tcl debugger, otherwise the debugger bugs out
     proc debugLogging {conn} {
         # available logger severity levels: debug info notice warn error critical alert emergency
         # default is "warn"
@@ -229,8 +229,14 @@ namespace eval test_utils {
     }
     
     proc stopFakeServer {} {
-        comm::comm send -async 4223 quit
+        variable commPort
+        comm::comm send -async $commPort quit
         sleep 500 ;# make sure it exits before starting a new fake or real NATS server
+    }
+    
+    proc sendFakeServer {data} {
+        variable commPort
+        comm::comm send $commPort $data
     }
     
     # control:assert is garbage and doesn't perform substitution on failed expressions, so I can't even know a value of offending variable etc
@@ -258,6 +264,6 @@ namespace eval test_utils {
         return [expr {$actual > ($ref - $tolerance) && $actual < ($ref + $tolerance)}]
     }
     
-    namespace export sleep wait_flush chanObserver duration startNats stopNats startResponder stopResponder startFakeServer stopFakeServer \
+    namespace export sleep wait_flush chanObserver duration startNats stopNats startResponder stopResponder startFakeServer stopFakeServer sendFakeServer \
                      assert approx getConnectOpts debugLogging
 }

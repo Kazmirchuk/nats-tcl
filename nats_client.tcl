@@ -129,6 +129,11 @@ oo::class create ::nats::connection {
             puts $msg
             return
         }
+        # -randomize may be one of the options, so process them *before* -servers
+        foreach {opt val} $args_copy {
+            set opt [string trimleft $opt -]
+            set config($opt) $val
+        }
         if {[dict exists $args_copy -servers]} {
             if {$status != $nats::status_closed} {
                 # in principle, most other config options can be changed on the fly
@@ -138,23 +143,21 @@ oo::class create ::nats::connection {
             # if any URL is invalid, this function will throw an error - let it propagate
             $serverPool set_servers [dict get $args_copy -servers]
         }
-        foreach {opt val} $args_copy {
-            set opt [string trimleft $opt -]
-            set config($opt) $val
-        }
         return
     }
 
-    method reset {option} {
-        set opt [string trimleft $option -]
-        set pos [lsearch -glob -index 0 $nats::option_syntax "$opt.*"]
-        if {$pos != -1} {
-            set config($opt) [lindex $nats::option_syntax $pos 1]
-            if {$opt eq "servers"} {
-                $serverPool clear
+    method reset {args} {
+        foreach option $args {
+            set opt [string trimleft $option -]
+            set pos [lsearch -glob -index 0 $nats::option_syntax "$opt.*"]
+            if {$pos != -1} {
+                set config($opt) [lindex $nats::option_syntax $pos 1]
+                if {$opt eq "servers"} {
+                    $serverPool clear
+                }
+            } else {
+                throw {NATS ErrInvalidArg} "Invalid option $option"
             }
-        } else {
-            throw {NATS ErrInvalidArg} "Invalid option $option"
         }
     }
     
@@ -189,7 +192,6 @@ oo::class create ::nats::connection {
         if {[llength [$serverPool all_servers]] == 0} {
             throw {NATS ErrNoServers} "Server pool is empty"
         }
-        $serverPool reset_counters
         set last_error ""
         
         # this coroutine will handle all work to connect and read from the socket
@@ -202,7 +204,7 @@ oo::class create ::nats::connection {
             my CoroVwait [self object]::status
             if {$status != $nats::status_connected} {
                 #NTH: report a more specific error like AUTH_FAILED,TLS_FAILED if server pool=1? check with other NATS clients
-                throw {NATS ErrNoServers} "No NATS servers available"
+                throw {NATS ErrNoServers} "No servers available for connection"
             }
             ${logger}::debug "Finished waiting for connection"
         }
@@ -444,7 +446,7 @@ oo::class create ::nats::connection {
         set reqID [lindex [split $subj .] 2]
         if {![info exists requests($reqID)]} {
             # ignore all further responses, if >1 arrives; or it could be an overdue message
-            ${logger}::debug "RequestCallback got [string range $msg 0 15] on reqID $reqID - discarded"
+            # ${logger}::debug "RequestCallback got [string range $msg 0 15] on reqID $reqID - discarded"
             return
         }
         lassign $requests($reqID) reqType timer callback
@@ -465,7 +467,6 @@ oo::class create ::nats::connection {
         
         chan event $sock readable {}
         if {$broken} {
-            $serverPool current_server_connected false
             if {$status != $nats::status_connecting} {
                 # recall that during initial connection round we try all servers only once
                 # method next_server relies on this status to know that
@@ -532,6 +533,10 @@ oo::class create ::nats::connection {
         } on error err {
             lassign [$serverPool current_server] host port
             my AsyncError ErrBrokenSocket "Failed to send data to $host:$port: $err"
+            if {$status != $nats::status_connected} {
+                # in the unlikely case that the connection fails right after receiving INFO
+                $serverPool current_server_connected false
+            }
             my CloseSocket 1
             $coro connect
             return
@@ -560,31 +565,36 @@ oo::class create ::nats::connection {
     }
     
     method SendConnect {} {
-        # I guess I should preserve this stupid global variable
-        set ind [json::write::indented]
-        json::write::indented false
-        set connectParams [list verbose $config(verbose) \
-                                pedantic $config(pedantic) \
-                                tls_required false \
-                                name [json::write::string $config(name)] \
-                                lang [json::write::string Tcl] \
-                                version [json::write::string 0.9] \
-                                protocol 1 \
-                                echo $config(echo)]
-        
-        if {[info exists serverInfo(auth_required)] && $serverInfo(auth_required)} {
-            try {
+        try {
+            # I guess I should preserve this stupid global variable
+            set ind [json::write::indented]
+            json::write::indented false
+            set connectParams [list verbose $config(verbose) \
+                                    pedantic $config(pedantic) \
+                                    tls_required false \
+                                    name [json::write::string $config(name)] \
+                                    lang [json::write::string Tcl] \
+                                    version [json::write::string 0.9] \
+                                    protocol 1 \
+                                    echo $config(echo)]
+            
+            if {[info exists serverInfo(auth_required)] && $serverInfo(auth_required)} {
                 lappend connectParams {*}[$serverPool format_credentials]
-            } trap {NATS NO_CREDS} err {
-                #TODO: try another server
-            }
-        } 
-
-        set jsonMsg [json::write::object {*}$connectParams]
-        json::write::indented $ind
+            } 
+            set jsonMsg [json::write::object {*}$connectParams]
+        } trap {NATS ErrAuthorization} err {
+            # no credentials could be found for this server, try next one
+            $serverPool current_server_connected false
+            my AsyncError ErrAuthorization $err 1
+            return
+        } finally {
+            json::write::indented $ind
+        }
+        #TODO what if I have other PUB messages pending in the buffer???
         lappend outBuffer "CONNECT $jsonMsg"
         lappend outBuffer "PING"
         my Flusher
+        # rest of handshake is done in method PONG 
     }
     
     method RestoreSubs {} {
@@ -599,18 +609,18 @@ oo::class create ::nats::connection {
                 lappend outBuffer "UNSUB $subID $remainingMsgs"
             }
         }
-        # SendConnect will flush
     }
     
     method INFO {cmd} {
         if {$status == $nats::status_connected} {
             # when we say "proto":1 in CONNECT, we may receive information about other servers in the cluster - add them to serverPool
-            #example info:
-            # server_id NDHBLLCIGK3PQKD5RUAUPCZAO6HCLQC4MNHQYRF22T32X2I2DHKEUGGQ server_name NDHBLLCIGK3PQKD5RUAUPCZAO6HCLQC4MNHQYRF22T32X2I2DHKEUGGQ version 2.1.7 proto 1 git_commit bf0930e
-            # go go1.13.10 host 0.0.0.0 port 4222 max_payload 1048576 client_id 1 client_ip ::1 connect_urls
-            # {192.168.2.5:4222 192.168.91.1:4222 192.168.157.1:4222 192.168.157.1:4223 192.168.2.5:4223 192.168.91.1:4223}
+            # and mark as discovered=true
+            # example connect_urls : ["192.168.2.5:4222", "192.168.91.1:4222", "192.168.157.1:4223", "192.168.2.5:4223"]
+            # by default each server will advertise IPs of all network interfaces, so the server pool may seem bigger than it really is
+            # --client_advertise NATS option can be used to make it clearer
             set infoDict [json::json2dict $cmd]
             if {[dict exists $infoDict connect_urls]} {
+                ${logger}::info "Got connect_urls: [dict get $infoDict connect_urls]"
                 foreach url [dict get $infoDict connect_urls] {
                     $serverPool add $url
                 }
@@ -711,7 +721,7 @@ oo::class create ::nats::connection {
             }
         } else {
             # if we unsubscribe while there are pending incoming messages, we may get here - nothing to do
-            ${logger}::debug "Got [string range $messageBody 0 15] on subID $subID - discarded"
+            #${logger}::debug "Got [string range $messageBody 0 15] on subID $subID - discarded"
         }
         # now we return back to CoroMain and enter "yield" there
     }
@@ -729,6 +739,7 @@ oo::class create ::nats::connection {
         if {$status != $nats::status_connected} {
             # auth OK: finalise the connection process
             $serverPool current_server_connected true
+            $serverPool reset_counters
             lassign [$serverPool current_server] host port
             ${logger}::info "Connected to the server at $host:$port"
             # exit from vwait in "connect"
@@ -744,30 +755,37 @@ oo::class create ::nats::connection {
     
     method ERR {cmd} {
         set errMsg [string tolower [string trim $cmd " '"]] ;# remove blanks and single quotes around the message
+        # I *guess* I should call "$serverPool current_server_connected false" only for those errors that can happen during handshake
         if [string match "stale connection*" $errMsg] {
             my AsyncError ErrStaleConnection $errMsg 1
             return
         }
-        if [string match "permissions violation*" $errMsg] {
-            # not fatal for the connection
-            my AsyncError ErrPermissions $errMsg
-            return
-        }
+        
         if [string match "authorization violation*" $errMsg] {
+            $serverPool current_server_connected false
             my AsyncError ErrAuthorization $errMsg 1
             return
         }
         if [string match "user authentication expired*" $errMsg] {
+            $serverPool current_server_connected false
             my AsyncError ErrAuthExpired $errMsg 1
             return
         }
         if [string match "user authentication revoked*" $errMsg] {
+            $serverPool current_server_connected false
             my AsyncError ErrAuthRevoked $errMsg 1
             return
         }
         if [string match "account authentication expired*" $errMsg] {
             #nats server account authorization has expired
+            $serverPool current_server_connected false
             my AsyncError ErrAccountAuthExpired $errMsg 1
+            return
+        }
+        # non-critical errors that do not close the connection
+        if [string match "permissions violation*" $errMsg] {
+            # not fatal for the connection
+            my AsyncError ErrPermissions $errMsg
             return
         }
         if [string match "invalid *subject*" $errMsg] {
@@ -776,8 +794,8 @@ oo::class create ::nats::connection {
             my AsyncError ErrBadSubject $errMsg
             return
         }
-        
-        my AsyncError ErrServer $errMsg
+        # some other errors that don't have an associated error code
+        my AsyncError ErrServer $errMsg 1
     }
     
     method CoroMain {} {
@@ -821,9 +839,9 @@ oo::class create ::nats::connection {
                 # the socket either connected or failed to connect
                 set errorMsg [chan configure $sock -error]
                 if { $errorMsg ne "" } {
-                    my AsyncError ErrConnectionRefused "Failed to connect to server $host:$port: $errorMsg"
                     close $sock
                     $serverPool current_server_connected false
+                    my AsyncError ErrConnectionRefused "Failed to connect to $host:$port: $errorMsg"
                     my ConnectNextServer
                     return
                 }
@@ -920,7 +938,8 @@ oo::class create ::nats::connection {
     }
     
     method CheckConnection {} {
-        if {$status == $nats::status_closed} {
+        # allow PUB & SUB when connected or reconnecting, throw an error otherwise
+        if {$status in [list $nats::status_closed $nats::status_connecting] } {
             throw {NATS ErrConnectionClosed} "No connection to NATS server"
         }
     }
@@ -936,7 +955,7 @@ oo::class create ::nats::connection {
         set last_error [dict create code "NATS $code" message $msg]
         if {$doReconnect} {
             my CloseSocket 1
-            my ConnectNextServer
+            my ConnectNextServer ;# can be done only in the coro
         }
     }
 }

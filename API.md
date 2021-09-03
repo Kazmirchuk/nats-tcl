@@ -48,7 +48,7 @@ The **configure** method accepts the following options. Make sure to set them *b
 | verbose       | boolean | false | If true, every protocol message is echoed by the server with +OK. Has no effect on functioning of the client itself |
 |connect_timeout | integer | 2000 | Connection timeout (ms) |
 | reconnect_time_wait | integer | 2000 | How long to wait between two reconnect attempts to the same server (ms)|
-| max_reconnect_attempts | integer | 60 | Maximum number of reconnect attempts per server |
+| max_reconnect_attempts | integer | 60 | Maximum number of reconnect attempts per server. Set it to -1 for infinite attempts. |
 | ping_interval | integer | 120000 | Interval (ms) to send PING messages to a NATS server|
 | max_outstanding_pings | integer | 2 | Max number of PINGs without a reply from a NATS server before closing the connection |
 | echo | boolean | true | If true, messages from this connection will be echoed back by the server if the connection has matching subscriptions|
@@ -57,6 +57,7 @@ The **configure** method accepts the following options. Make sure to set them *b
 | password | string |   | Default password|
 | token | string | | Default authentication token|
 | secure | boolean | false | Indicate to the server if the client wants a TLS connection or not|
+| check_subjects | boolean | true | Enable client-side checking of subjects when publishing or subscribing |
 | -? | | | Provides interactive help with all options|
 
 ## Description
@@ -70,8 +71,8 @@ Returns the current value of an option as described above.
 ### objectName configure ?option? ?value option value...?
 When given no arguments, returns a dict of all options with their current values. When given one option, returns its current value (same as `cget`). When given more arguments, assigns each value to an option. The only mandatory option is `servers`, and others have reasonable defaults. Under the hood it is implemented using the [cmdline::getoptions](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/cmdline/cmdline.md#3) command, so it understands the special `-?` option for interactive help.
 
-### objectName reset option
-Resets the option to a default value.
+### objectName reset ?option ... ?
+Resets the option(s) to the default value.
 
 ### objectName connect ?-async? 
 Opens a TCP connection to one of the NATS servers specified in the `servers` list. Unless the `-async` option is given, this call blocks in a `vwait` loop until the connection is completed, including a TLS handshake if needed.
@@ -126,7 +127,6 @@ try {
 | ------------- |--------|
 | ErrConnectionClosed | Attempt to subscribe or send a message before calling `connect` |
 | ErrNoServers | No NATS servers available|
-| NO_CREDS | NATS server requires authentication, but no credentials are known for it |
 | ErrInvalidArg | Invalid argument |
 | ErrBadSubject | Invalid subject for publishing or subscribing |
 | ErrBadTimeout | Invalid timeout argument |
@@ -151,7 +151,7 @@ puts "Error text: [dict get $err message]"
 | ErrConnectionTimeout | Connection to a server could not be established within connect_timeout ms |
 | ErrServer | Generic error reported by NATS server |
 | ErrPermissions | subject authorization has failed |
-| ErrAuthorization | user authorization has failed |
+| ErrAuthorization | user authorization has failed or no credentials are known for this server |
 | ErrAuthExpired | user authorization has expired |
 | ErrAuthRevoked | user authorization has been revoked |
 | ErrAccountAuthExpired | nats server account authorization has expired |

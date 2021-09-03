@@ -3,8 +3,14 @@
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
+# Test summary:
+# - parsing of server URLs
+# - formatting of credentials for the CONNECT message
+# - trying to connect when there are no NATS servers available
+
 set conn [nats::connection new]
-$conn configure -reconnect_time_wait 0
+#$conn configure -reconnect_time_wait 0
+$conn configure -randomize false
 
 set sp [set ${conn}::serverPool] ;# access to a private variable only for test purposes!
 
@@ -69,6 +75,27 @@ test server_pool-11 "Clear the pool" -body {
     $sp clear
     llength [$sp all_servers]
 } -result 0
+
+test server_pool-12 "Connection fails immediately with an empty pool" -body {
+    duration {
+        catch {$conn connect} err errOpts
+    } elapsed
+    assert {$elapsed < 20}
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrNoServers}}    
+    set err
+} -result "Server pool is empty"
+
+test server_pool-13 "Initial connection attempt goes through the server pool only once" -body {
+    # remember that by default max_reconnect_attempts=60, but it matters only for reconnecting
+    $conn configure -servers [list nats://localhost:4222 nats://localhost:4223]
+    duration {
+        catch {$conn connect} err errOpts
+    } elapsed
+    # connect_timeout=2000 for 2 servers
+    assert {[approx $elapsed 4000]}
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrNoServers}}    
+    set err
+} -result "No servers available for connection"
 
 $conn destroy
 tcltest::cleanupTests

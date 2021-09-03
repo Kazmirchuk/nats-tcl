@@ -15,7 +15,7 @@ oo::class create ::nats::server_pool {
     constructor {c} {
         set servers [list] ;# list of dicts working as FIFO queue
         # each dict contains: host port scheme discovered reconnects last_attempt (ms, mandatory), user password auth_token (optional)
-        set conn $c ;# need a reference to the config array
+        set conn $c
     }
     destructor {
     }
@@ -36,6 +36,7 @@ oo::class create ::nats::server_pool {
         }
         dict set result discovered true
         set servers [linsert $servers 0 $result] ;# recall that current server is always at the end of the list
+        [$conn logger]::debug "Added $result to the server pool"
     }
     
     # used by "configure". All or nothing: if at least one URL is invalid, the old configuration stays intact
@@ -106,7 +107,8 @@ oo::class create ::nats::server_pool {
                 throw {NATS ErrNoServers} "No servers available for connection"
             }
             set servers [lreplace $servers 0 0]
-            if {$config(max_reconnect_attempts) > 0 && [dict get $s reconnects] > $config(max_reconnect_attempts)} {
+            # max_reconnect_attempts == -1 means "unlimited"
+            if {$config(max_reconnect_attempts) >= 0 && [dict get $s reconnects] > $config(max_reconnect_attempts)} {
                 continue ;# remove the server from the pool
             }
             
@@ -170,7 +172,7 @@ oo::class create ::nats::server_pool {
         if {$config(token) ne ""} {
             return [list auth_token [json::write::string $config(token)]]
         }
-        throw {NATS NO_CREDS} "No credentials known for NATS server at [dict get $s host]:[dict get $s port]"
+        throw {NATS ErrAuthorization} "No credentials known for NATS server at [dict get $s host]:[dict get $s port]"
     }
     
     method current_server {} {

@@ -99,3 +99,5 @@ And this is how you can run just one test script: `tclsh tests/all.tcl -file bas
 To run the TLS tests, you will need to provide certificates yourself in `cert` subfolder. E.g. you can generate them using [mkcert](https://docs.nats.io/nats-server/configuration/securing_nats/tls#self-signed-certificates-for-testing).
 
 Tests are numbered to reflect their dependency, i.e. tests from the same group (e.g. basic-2.1, basic-2.2 and basic-2.3) are dependent on each other. Tests from different groups should be independent, except basic assumptions about a NATS connection and e.g. a running Responder.
+
+While most of the tests stick to the public API, some of them need to hack into package's internals to verify some behavioural aspects. This is *not* an invitation for users to do the same! If you are missing a function in API, please let me know.

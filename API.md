@@ -145,7 +145,6 @@ puts "Error text: [dict get $err message]"
 | ------------- |--------|
 | ErrBrokenSocket | TCP socket failed |
 | ErrTLS | TLS handshake failed |
-| PROTOCOL_ERR | A protocol error from the server side, e.g. maximum control line exceeded |
 | ErrStaleConnection | The client or server closed the connection, because the other party did not respond to PING on time |
 | ErrConnectionRefused | TCP connection to a NATS server was refused, possibly due to wrong port, or the server was not running; the client will try the next server from the pool |
 | ErrConnectionTimeout | Connection to a server could not be established within connect_timeout ms |

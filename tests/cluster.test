@@ -14,14 +14,12 @@
 startNats NATS1 --cluster nats://localhost:4248 --cluster_name "TCL_TEST" --client_advertise "localhost:4222"
   
 set conn [nats::connection new "Cluster"]
-# reduce these options for a faster test
-$conn configure -max_reconnect_attempts 1 -connect_timeout 1000
 debugLogging $conn
 
 # I don't know if there is a reliable way to trigger a NATS server to send out INFO with connect_urls
 # if I start with creating a cluster and then connect with the client, I often don't get it for a long time
 # but if I start with one server, connect with the client and then add a second server, I seem to get it reliably and quickly
-test cluster-1 "Dynamic expansion of the server pool with INFO message" -body {
+test cluster-1.1 "Dynamic expansion of the server pool with INFO message" -body {
     # start with only the seed server
     $conn configure -servers nats://localhost:4222 
     $conn connect -async
@@ -53,9 +51,7 @@ test cluster-1 "Dynamic expansion of the server pool with INFO message" -body {
     assert {[string is true -strict [dict get $discovered_server discovered]]}
 }
 
-
-
-test cluster-2 "Restore subscriptions after reconnecting to another server" -body {
+test cluster-1.2 "Restore subscriptions after reconnecting to another server" -body {
     $conn subscribe eupnea -callback test_utils::simpleCallback
     wait_flush $conn
     # exact behaviour and timings of reconnecting change from run to run, so only async checks are reliable 
@@ -96,9 +92,36 @@ test cluster-2 "Restore subscriptions after reconnecting to another server" -bod
 } -result "back online" -cleanup {
     trace remove variable ${conn}::status write $status_trace
     trace remove variable ${conn}::last_error write $error_trace
+    $conn disconnect
+    stopNats NATS2
+}
+
+test cluster-2 "Outgoing messages are buffered while reconnecting" -body {
+    set test_utils::simpleMsg ""
+    startNats NATS1 ;# no need to create a real cluster for this test case
+    startNats NATS2 -p 5222
+
+    $conn configure -servers [list nats://localhost:4222 nats://localhost:5222] -randomize false
+    $conn connect
+    set sock1 [set ${conn}::sock]
+    $conn subscribe subj -callback test_utils::simpleCallback
+    stopNats NATS1
+    after 500 ;# let the server quit, but do not process events yet
+    
+    $conn publish subj "Buffered message"
+    assert {[set ${conn}::sock] eq $sock1 } 1 ;# we still have the socket open to NATS1
+    sleep 500 ;# reconnect to NATS2, restore the subscription and publish the message
+    assert {[set ${conn}::sock] ne $sock1 } 1 ;# now we have a new socket
+    assert {[set ${conn}::status] == $nats::status_connected} 1
+    lassign [$conn current_server] host port
+    assert {$host eq "localhost"}
+    assert {$port == 5222}
+    set test_utils::simpleMsg
+} -result "Buffered message" -cleanup {
+    $conn disconnect
+    stopNats NATS1
+    stopNats NATS2
 }
 
 $conn destroy
-
-stopNats NATS2
 tcltest::cleanupTests

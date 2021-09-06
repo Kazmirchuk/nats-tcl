@@ -193,6 +193,10 @@ oo::class create ::nats::connection {
             throw {NATS ErrNoServers} "Server pool is empty"
         }
         set last_error ""
+        # "reconnects" counter should be reset only once here rather than on every reconnect
+        # e.g. if a server is in the pool, but it is down, we want to keep track of its "reconnects" counter
+        # until the NATS connection is completely closed
+        $serverPool reset_counters
         
         # this coroutine will handle all work to connect and read from the socket
         coroutine coro {*}[mymethod CoroMain]
@@ -477,7 +481,6 @@ oo::class create ::nats::connection {
             lassign [$serverPool current_server] host port
             ${logger}::info "Closing connection to $host:$port" ;# in case of broken socket, the error will be logged elsewhere
             # make sure we wait until successful flush, if connection was not broken
-            # TODO do it only for destructor? before exiting process
             chan configure $sock -blocking 1
             foreach msg $outBuffer {
                 append msg "\r\n"
@@ -487,7 +490,6 @@ oo::class create ::nats::connection {
         }
         close $sock ;# all buffered input is discarded, all buffered output is flushed
         set sock ""
-        array unset serverInfo
         after cancel $timers(ping)
         after cancel $timers(flush)
         set timers(flush) ""
@@ -529,7 +531,7 @@ oo::class create ::nats::connection {
                 append msg "\r\n"
                 puts -nonewline $sock $msg
             }
-            chan flush $sock
+            flush $sock
         } on error err {
             lassign [$serverPool current_server] host port
             my AsyncError ErrBrokenSocket "Failed to send data to $host:$port: $err"
@@ -590,11 +592,13 @@ oo::class create ::nats::connection {
         } finally {
             json::write::indented $ind
         }
-        #TODO what if I have other PUB messages pending in the buffer???
-        lappend outBuffer "CONNECT $jsonMsg"
-        lappend outBuffer "PING"
-        my Flusher
-        # rest of handshake is done in method PONG 
+        
+        # do NOT use outBuffer here! it may have pending messages from a previous connection
+        # we can flush them only after authentication is confirmed
+        puts -nonewline $sock "CONNECT $jsonMsg\r\n"
+        puts -nonewline $sock "PING\r\n"
+        flush $sock
+        # rest of the handshake is done in method PONG 
     }
     
     method RestoreSubs {} {
@@ -620,7 +624,7 @@ oo::class create ::nats::connection {
             # --client_advertise NATS option can be used to make it clearer
             set infoDict [json::json2dict $cmd]
             if {[dict exists $infoDict connect_urls]} {
-                ${logger}::info "Got connect_urls: [dict get $infoDict connect_urls]"
+                ${logger}::debug "Got connect_urls: [dict get $infoDict connect_urls]"
                 foreach url [dict get $infoDict connect_urls] {
                     $serverPool add $url
                 }
@@ -631,10 +635,12 @@ oo::class create ::nats::connection {
         # example info
         #{"server_id":"kfNjUNirYU3tRVC7akGOcS","version":"1.4.1","proto":1,"go":"go1.11.5","host":"0.0.0.0","port":4222,"max_payload":1048576,"client_id":3,"client_ip":"::1"}
         # optional: auth_required, tls_required, tls_verify
+        array unset serverInfo ;# do not unset it in CloseSocket!
+        # otherwise publishing messages while reconnecting does not work, due to the check for max_payload
         array set serverInfo [json::json2dict $cmd]
         if {[info exists serverInfo(tls_required)] && $serverInfo(tls_required)} {
             #NB! NATS server will never accept a TLS connection. Always start connecting with plain TCP,
-            # and only after receiving INFO upgrade to TLS if needed
+            # and only after receiving INFO, we can upgrade to TLS if needed
             package require tls
             # I couldn't figure out how to use tls::import with non-blocking sockets
             chan configure $sock -blocking 1
@@ -739,12 +745,12 @@ oo::class create ::nats::connection {
         if {$status != $nats::status_connected} {
             # auth OK: finalise the connection process
             $serverPool current_server_connected true
-            $serverPool reset_counters
             lassign [$serverPool current_server] host port
             ${logger}::info "Connected to the server at $host:$port"
             # exit from vwait in "connect"
             set status $nats::status_connected
             my RestoreSubs
+            my ScheduleFlush
             set timers(ping) [after $config(ping_interval) [mymethod Pinger]]
         }
     }
@@ -863,28 +869,23 @@ oo::class create ::nats::connection {
                 my ConnectNextServer
             }
             readable {
-                # confirmed by testing: apparently the Tcl TCP is implemented like:
-                # 1. send "readable" event
-                # 2. any bytes left in the input buffer? send the event again
-                # so, it simplifies my work here - even if I don't read all available bytes with this "chan gets",
-                # the coroutine will be invoked again as soon as a complete line is available
-                #TODO do i need catch around gets? if remote end aborts network connection
+                # the chan readable event will be sent again and again for as long as there's pending data
+                # so I don't need a loop around [chan gets] to read all lines, even if they arrive together
                 set readCount [chan gets $sock line]
-                # FIXME chan pending should be before chan gets  ?
-                if {[chan pending input $sock] > 1024} {
-                    # max length of control line in the NATS protocol is 1024 (see MAX_CONTROL_LINE_SIZE in nats.py)
-                    # this should not happen unless the NATS server is malfunctioning
-                    my AsyncError PROTOCOL_ERR "Maximum control line exceeded"
-                    my CloseSocket 1
-                    my ConnectNextServer
-                    return
-                }
                 if {$readCount < 0} {
                     if {[eof $sock]} { 
                         # server closed the socket
                         #set err [chan configure $sock -error] - no point in this, $err will be blank
                         lassign [$serverPool current_server] host port
-                        my AsyncError ErrBrokenSocket "Failed to read data from $host:$port" 1
+                        my AsyncError ErrBrokenSocket "Server $host:$port closed the connection" 1
+                        return
+                    }
+                    if {[chan pending input $sock] > 1024} {
+                        # do not let the buffer grow forever if \r\n never arrives
+                        # max length of control line in the NATS protocol is 1024 (see MAX_CONTROL_LINE_SIZE in nats.py)
+                        # this should not happen unless the NATS server is malfunctioning
+                        my AsyncError ErrServer "Maximum control line exceeded" 1
+                        return
                     }
                     # else - we don't have a full line yet - wait for next chan event
                     return

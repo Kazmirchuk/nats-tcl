@@ -107,9 +107,10 @@ oo::class create ::nats::server_pool {
                 throw {NATS ErrNoServers} "No servers available for connection"
             }
             set servers [lreplace $servers 0 0]
-            # max_reconnect_attempts == -1 means "unlimited"
-            if {$config(max_reconnect_attempts) >= 0 && [dict get $s reconnects] > $config(max_reconnect_attempts)} {
-                continue ;# remove the server from the pool
+            # max_reconnect_attempts == -1 means "unlimited". See also selectNextServer in nats.go
+            if {$config(max_reconnect_attempts) >= 0 && [dict get $s reconnects] >= $config(max_reconnect_attempts)} {
+                [$conn logger]::debug "Removed [dict get $s host]:[dict get $s port] from the server pool"
+                continue
             }
             
             set now [clock milliseconds]
@@ -122,12 +123,11 @@ oo::class create ::nats::server_pool {
                 set reason [yield] ;# may be interrupted by a user calling disconnect
                 if {$reason eq "stop" } {
                     after cancel $timer
-                    dict set s last_attempt [clock seconds]
+                    dict set s last_attempt [clock milliseconds]
                     lappend servers $s
                     throw {NATS STOP_CORO} "Stop coroutine" ;# break from the main loop
                 }
             }
-            dict set s last_attempt [clock milliseconds]
             lappend servers $s
             break
         }
@@ -146,7 +146,7 @@ oo::class create ::nats::server_pool {
         set timers(connect) ""
         
         set s [lindex $servers end]
-        dict set s last_attempt [clock seconds]
+        dict set s last_attempt [clock milliseconds]
         if {$ok} {
             dict set s reconnects 0
         } else {

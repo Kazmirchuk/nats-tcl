@@ -9,7 +9,6 @@
 # - trying to connect when there are no NATS servers available
 
 set conn [nats::connection new]
-#$conn configure -reconnect_time_wait 0
 $conn configure -randomize false
 
 set sp [set ${conn}::serverPool] ;# access to a private variable only for test purposes!
@@ -97,5 +96,64 @@ test server_pool-13 "Initial connection attempt goes through the server pool onl
     set err
 } -result "No servers available for connection"
 
+test server_pool-14.1 "Reconnecting timings and counters" -body {
+    startNats NATS1
+    $conn configure -servers [list nats://localhost:4222 nats://localhost:5222 nats://localhost:6222] -randomize false
+    $conn configure -max_reconnect_attempts 1 -connect_timeout 500 -reconnect_time_wait 3000
+    debugLogging $conn
+    
+    set all_errors [list]
+    set error_trace [lambda {var idx op } {
+        upvar $var e
+        if {$e ne ""} {
+            lappend ::all_errors [lindex [dict get $e code] 1] ;# keep only the second part of the error code
+        }
+    }]    
+    trace add variable ${conn}::last_error write $error_trace
+    
+    $conn connect
+    stopNats NATS1 ;# the client goes into reconnecting
+    duration {
+        startNats NATS1
+        [$conn logger]::info "Waiting for the client to go into reconnecting"
+        while {[set ${conn}::status] != $nats::status_reconnecting} {
+            vwait ${conn}::status
+        }
+        [$conn logger]::info "Waiting for the client to restore connection"
+        while {[set ${conn}::status] != $nats::status_connected} {
+            vwait ${conn}::status
+        }
+    } elapsed
+    assert {[approx $elapsed 3000]} 1 ;# should be equal to reconnect_time_wait
+    assert {$all_errors eq [list ErrBrokenSocket ErrConnectionTimeout ErrConnectionTimeout]}
+    foreach s [$conn all_servers] {
+        if {[dict get $s port] == 4222} {
+            assert {[dict get $s reconnects] == 0}
+        } else {
+            assert {[dict get $s reconnects] == 1}
+        }
+    }
+} -cleanup {
+    trace remove variable ${conn}::last_error write $error_trace
+}
+
+test server_pool-14.2 "Remove servers from the pool when they reach max_reconnect_attempts" -body {
+    stopNats NATS1 ;# the client goes into reconnecting    
+    startNats NATS1
+    [$conn logger]::info "Waiting for the client to go into reconnecting"
+    while {[set ${conn}::status] != $nats::status_reconnecting} {
+        vwait ${conn}::status
+    }
+    [$conn logger]::info "Waiting for the client to restore connection"
+    while {[set ${conn}::status] != $nats::status_connected} {
+        vwait ${conn}::status
+    }
+    # you should see "Removed N from the server pool" in the log...
+    assert {[llength [$conn all_servers]] == 1} 1
+} -cleanup {
+    $conn disconnect
+    stopNats NATS1
+}
+    
 $conn destroy
 tcltest::cleanupTests

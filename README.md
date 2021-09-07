@@ -22,6 +22,7 @@ Simply clone the repository in some place where Tcl will be able to find it, e.g
 ## Supported features
 - Publish and subscribe to messages
 - Synchronous and asynchronous requests (optimized: under the hood a single wildcard subscription is used for all requests)
+- Basic JetStream support
 - Queue groups
 - Client-side validation of subjects
 - Standard `configure` interface with many options
@@ -86,6 +87,40 @@ $conn request service "I need help" -timeout 1000 -callback asyncReqCallback
 # Finally don't forget to delete our object. Again, this is standard TclOO.
 # All pending outgoing messages will be flushed, and the TCP socket will be closed.
 $conn destroy
+
+###  JetStream support  ###
+# get jet_stream object to use jet stream api
+set jet_stream [$conn jet_stream]
+
+# to consume messages use "consume" method (pull consumer) in sync or async form
+# its arguments are stream name and consumer name, optional: -timeout, -callback as in original request method
+set result [$jet_stream consume my_stream my_consumer]
+
+# received result contains one additional variable "ackAddr" (so response is list in form {message ackAddr})
+# ackAddr is used to acknowlege consumed (received) message to server
+lassign $result msg ackAddr
+$jet_stream ack $ackAddr
+
+# consume can also be used in asynchronous manner
+proc consumeAsyncCallback {timedOut msg ackAddr} {
+    # do sth...
+    $jet_stream ack $ackAddr
+}
+
+$jet_stream consume my_stream my_consumer -callback consumeAsyncCallback -timeout 1000
+
+# publishing to jet stream can be done using publish on jet_stream object
+# synchronous varsion
+$jet_stream publish "test.1" "msg 1"
+
+# asynchronous version
+proc pubAsyncCallback {timedOut info error} {
+    # if "error" is not empty it is dict containing "type" and "error" keys sended from NATS server
+    # if "error" is empty, publish was successfull and "info" is dict containing "stream", "seq" and optionally "duplicate"
+    ...
+}
+
+$jet_stream publish "test.1" "msg 1" -callback pubAsyncCallback -timeout 1000
 ```
 
 ## Missing features (in comparison to official NATS clients)
@@ -97,6 +132,8 @@ The tests are based on the standard Tcl unit testing framework, [tcltest](https:
 And this is how you can run just one test script: `tclsh tests/all.tcl -file basic.test`
 
 To run the TLS tests, you will need to provide certificates yourself in `cert` subfolder. E.g. you can generate them using [mkcert](https://docs.nats.io/nats-server/configuration/securing_nats/tls#self-signed-certificates-for-testing).
+
+To run Jet Stream tests `nats` command from [nats-cli](https://github.com/nats-io/natscli) needs to be available in you `$PATH` (it is additional tool for NATS server configuration - creating streams, consumers etc. which is not supported by this library yet).
 
 Tests are numbered to reflect their dependency, i.e. tests from the same group (e.g. basic-2.1, basic-2.2 and basic-2.3) are dependent on each other. Tests from different groups should be independent, except basic assumptions about a NATS connection and e.g. a running Responder.
 

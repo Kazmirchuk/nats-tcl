@@ -21,6 +21,12 @@ package require nats ?0.9?
 [*objectName* **logger**](#objectName-logger) <br/>
 [*objectName* **destroy**](#objectName-destroy)
 
+[*objectName* **jet_stream**](#objectName-jet_stream)
+[*jetStreamObjectName* **consume**](#jetStreamObjectName-consume-stream-consumer--timeout-ms--callback-cmdPrefix)
+[*jetStreamObjectName* **ack**](#jetStreamObjectName-ack-ackAddr)
+[*jetStreamObjectName* **publish**](#jetStreamObjectName-publish-subject-message--timeout-ms--callback-cmdPrefix?)
+
+
 ## Callbacks
 All callbacks are treated as command prefixes (like [trace](https://www.tcl.tk/man/tcl8.6/TclCmd/trace.htm) callbacks), so in addition to a command itself they may include user-supplied arguments. They are invoked as follows:
 
@@ -109,6 +115,22 @@ Returns a logger instance.
 
 ### objectName destroy
 TclOO destructor. Flushes pending data and closes the TCP socket.
+
+### objectName jet_stream
+Returns `jetStreamObjectName` object to deal with [JetStreams](https://docs.nats.io/jetstream/jetstream).
+
+### jetStreamObjectName consume stream consumer ?-timeout ms? ?-callback cmdPrefix?
+Consume message from [consumer](https://docs.nats.io/jetstream/concepts/consumers) named `consumer` defined on [stream](https://docs.nats.io/jetstream/concepts/streams) `stream`. Similarly to `request` method:
+- If no callback is given, the request is synchronous and blocks in `vwait` until a reply is received. The reply is list containing the return value and address to acknowledge received message. If no reply arrives within `timeout`, it raises an error "TIMEOUT".
+- If a callback is given, the call returns immediately, and when a reply is received or a timeout fires, the command prefix will be invoked from the event loop with 3 additional arguments: `timedOut` (equal to 1, if the request timed out), `message` and `ackAddr`, which is used to acknowledge received message in a way shown below.
+
+### jetStreamObjectName ack ackAddr
+Acknowledge received message using `ackAddr` from [*jetStreamObjectName* **consume**](#jetStreamObjectName-consume) method. If message was not acknowledged it will be redelivered on next `consume` (depending on NATS server settings).
+
+### jetStreamObjectName publish subject message ?-timeout ms? ?-callback cmdPrefix?
+Publish `message` to [stream](https://docs.nats.io/jetstream/concepts/streams) on specified `subject` and wait for acknowledgement. `timeout` and `cmdPrefix` have similar meaning as in `request` method. If no stream exists on specified `subject` method will be stuck waiting.
+- In synchronous version method returns response from server as dict containing `stream`, `seq` and optionally `duplicate` keys. Can also throw `NATS ErrResponse` if NATS server passed error response.
+- In asynchronous version `cmdPrefix` callback is called with 3 additional arguments: `timedOut` (equal to 1, if the request timed out), `info` and `error`. If `error` is not empty it is dict containing `type` and `error` keys sended from NATS server, otherwise `info` contains information passed from NATS server in dict form: `stream`, `seq` and optionally `duplicate`.
 
 ## Error handling
 Error codes are similar to those from the nats.go client as much as possible. A few additional error codes provide more information about failed connection attempts to the NATS server: ErrBrokenSocket, ErrTLS, ErrConnectionRefused.

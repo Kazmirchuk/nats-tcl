@@ -95,7 +95,7 @@ namespace eval test_utils {
         method Finalize {} {
             # really important! remove the transformation
             if {$sock ne ""} {
-                chan pop $sock
+                catch {chan pop $sock}
                 set sock ""
             }
             if {$readChan ne ""} {
@@ -235,9 +235,9 @@ namespace eval test_utils {
     }
     
     # processman::kill doesn't work reliably with tclsh, so instead we send a NATS message to stop the responder gracefully
-    proc startResponder { {subj "service"} {queue ""}} {
+    proc startResponder { {subj "service"} {queue ""} {dictMsg 0}} {
         set scriptPath [file join [file dirname [info script]] responder.tcl]
-        exec [info nameofexecutable] $scriptPath $subj $queue &
+        exec [info nameofexecutable] $scriptPath $subj $queue $dictMsg &
         sleep 500
     }
     

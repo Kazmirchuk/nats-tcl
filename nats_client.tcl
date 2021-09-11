@@ -12,6 +12,7 @@ package require tcl::chan::random
 package require tcl::randomseed
 package require coroutine
 package require logger
+package require textutil::split
 
 namespace eval ::nats {
     # improvised enum
@@ -39,6 +40,7 @@ set ::nats::option_syntax {
     { token.arg ""                      "Default authentication token"}
     { secure.boolean false              "Indicate to the server if the client wants a TLS connection"}
     { check_subjects.boolean true       "Enable client-side checking of subjects when publishing or subscribing"}
+    { dictmsg.boolean false             "Return messages from subscribe&request as dicts by default" }
 }
 
 oo::class create ::nats::connection {
@@ -52,7 +54,7 @@ oo::class create ::nats::connection {
     constructor { { conn_name "" } } {
         set status $nats::status_closed
         set last_error ""
-        
+
         # initialise default configuration
         foreach option $nats::option_syntax {
             lassign $option name defValue comment
@@ -81,13 +83,13 @@ oo::class create ::nats::connection {
         array set timers {ping {} flush {} connect {} }
         array set counters {subscription 0 request 0 pendingPings 0}
         array set subscriptions {} ;# subID -> dict (subj, queue, cmd, maxMsgs, recMsgs)
-        # async reqs: reqID -> {1 timer callback} ; sync requests: reqID -> {0 timedOut response}
+        # async reqs: reqID -> {1 timer callback isDictMsg} ; sync requests: reqID -> {0 timedOut response}
         # RequestCallback needs to distinguish between sync and async, so we need 0/1 in front
         array set requests {} 
         array set serverInfo {} ;# INFO from a current NATS server
         set serverPool [nats::server_pool new [self object]] 
-        #consider replacing with string is alnum? does this allow Unicode?
-        set subjectRegex {^[[:alnum:]_-]+$}
+        # JetStream uses subjects with $
+        set subjectRegex {^[[:alnum:]$_-]+$}
         # all outgoing messages are put in this list before being flushed to the socket,
         # so that even when we are reconnecting, messages can still be sent
         set outBuffer [list]
@@ -131,8 +133,8 @@ oo::class create ::nats::connection {
             cmdline::typedGetoptions args $nats::option_syntax $usage
         } trap {CMDLINE USAGE} msg {
             # -help also leads here
-            puts $msg
-            return
+            throw {NATS ErrInvalidArg} $msg
+            # could be a bit nicer to check for $tcl_interactive, but in Komodo's shell it's 0 anyway :(
         }
         # -randomize may be one of the options, so process them *before* -servers
         foreach {opt val} $args_copy {
@@ -178,6 +180,10 @@ oo::class create ::nats::connection {
         return [$serverPool all_servers]
     }
     
+    method server_info {} {
+        return [array get serverInfo]
+    }
+    
     method connect { args } {
         switch -- $args {
             -async {
@@ -212,7 +218,6 @@ oo::class create ::nats::connection {
             ${logger}::debug "Waiting for connection"
             my CoroVwait [self object]::status
             if {$status != $nats::status_connected} {
-                #NTH: report a more specific error like AUTH_FAILED,TLS_FAILED if server pool=1? check with other NATS clients
                 throw {NATS ErrNoServers} "No servers available for connection"
             }
             ${logger}::debug "Finished waiting for connection"
@@ -244,19 +249,56 @@ oo::class create ::nats::connection {
         return
     }
     
-    method publish {subject msg {replySubj ""}} {
+    method publish {subject message args} {
+        set replySubj ""
+        set header ""
+        if {[llength $args] == 1} {
+            set replySubj $args
+        } else {
+            foreach {opt val} $args {
+                switch -- $opt {
+                    -header {
+                        set header $val
+                    }
+                    -reply {
+                        set replySubj $val
+                    }
+                    default {
+                        throw {NATS ErrInvalidArg} "Unknown option $opt"
+                    }
+                }
+            }
+        }
         my CheckConnection
-        set msgLen [string length $msg]
+        set msgLen [string length $message]
         if {$msgLen > $serverInfo(max_payload)} {
             throw {NATS ErrMaxPayload} "Maximum size of NATS message is $serverInfo(max_payload)"
+        }
+        if {$header ne "" && ![info exists serverInfo(headers)]} {
+            throw {NATS ErrHeadersNotSupported} "Headers are not supported by this server"
         }
         
         if {![my CheckSubject $subject]} {
             throw {NATS ErrBadSubject} "Invalid subject $subject"
         }
+        if {$replySubj ne "" && ![my CheckSubject $replySubj]} {
+            throw {NATS ErrBadSubject} "Invalid reply $replySubj"
+        }
         
-        set data "PUB $subject $replySubj $msgLen"
-        lappend outBuffer $data $msg
+        if {$header eq ""} {
+            set ctrl_line "PUB $subject $replySubj $msgLen"
+            lappend outBuffer $ctrl_line $message
+        } else {
+            try {
+                set hdr [nats::format_header $header]
+            } trap {TCL VALUE DICTIONARY} err {
+                throw {NATS ErrInvalidArg} "header is not a valid dict"
+            }
+            set hdr_len [expr {[string length $hdr] + 2}] ;# account for one more crlf that will be added when flushing
+            set ctrl_line "HPUB $subject $replySubj $hdr_len [expr {$msgLen+$hdr_len}]"
+            lappend outBuffer $ctrl_line $hdr $message
+        }
+        
         my ScheduleFlush
         return
     }
@@ -266,6 +308,8 @@ oo::class create ::nats::connection {
         set queue ""
         set callback ""
         set maxMsgs 0
+        set dictmsg $config(dictmsg)
+        
         foreach {opt val} $args {
             switch -- $opt {
                 -queue {
@@ -276,6 +320,9 @@ oo::class create ::nats::connection {
                 }
                 -max_msgs {
                     set maxMsgs $val
+                }
+                -dictmsg {
+                    set dictmsg $val
                 }
                 default {
                     throw {NATS ErrInvalidArg} "Unknown option $opt"
@@ -295,6 +342,10 @@ oo::class create ::nats::connection {
             throw {NATS ErrInvalidArg} "Invalid max_msgs $maxMsgs"
         }
         
+        if {![string is boolean -strict $dictmsg]} {
+            throw {NATS ErrInvalidArg} "Invalid dictmsg $dictmsg"
+        }
+        
         #rules for queue names are more relaxed than for subjects
         # badQueue in nats.go checks for whitespace
         if {$queue ne "" && ![string is graph $queue]} {
@@ -302,7 +353,7 @@ oo::class create ::nats::connection {
         }
                                    
         set subID [incr counters(subscription)]
-        set subscriptions($subID) [dict create subj $subject queue $queue cmd $callback maxMsgs $maxMsgs recMsgs 0]
+        set subscriptions($subID) [dict create subj $subject queue $queue cmd $callback maxMsgs $maxMsgs recMsgs 0 dictmsg $dictmsg]
         
         #the format is SUB <subject> [queue group] <sid>
         if {$status != $nats::status_reconnecting} {
@@ -357,15 +408,23 @@ oo::class create ::nats::connection {
     method request {subject message args} {
         set timeout -1 ;# ms
         set callback ""
+        set dictmsg $config(dictmsg)
+        set header ""
         
         foreach {opt val} $args {
             switch -- $opt {
                 -timeout {
-                    my CheckTimeout $val
+                    nats::check_timeout $val
                     set timeout $val
                 }
                 -callback {
                     set callback $val
+                }
+                -dictmsg {
+                    set dictmsg $val
+                }
+                -header {
+                    set header $val
                 }
                 default {
                     throw {NATS ErrInvalidArg} "Unknown option $opt"
@@ -375,12 +434,13 @@ oo::class create ::nats::connection {
         
         if {$requestsInboxPrefix eq ""} {
             set requestsInboxPrefix [my inbox]
-            my subscribe "$requestsInboxPrefix.*" -callback [mymethod RequestCallback]
+            my subscribe "$requestsInboxPrefix.*" -dictmsg 1 -callback [mymethod RequestCallback]
         }
         
         set timerID ""
         set reqID [incr counters(request)]
-        my publish $subject $message "$requestsInboxPrefix.$reqID"
+        # will perform more argument checking, so it may raise an error
+        my publish $subject $message -reply "$requestsInboxPrefix.$reqID" -header $header
         if {$callback eq ""} {
             # sync request
             # remember that we can get a reply after timeout, so vwait must wait on a specific reqID
@@ -395,13 +455,21 @@ oo::class create ::nats::connection {
                 throw {NATS ErrTimeout} "Request to $subject timed out"
             }
             after cancel $timerID
-            return $response
+            set in_hdr [dict get $response header]
+            if {[dict exists $in_hdr Status] && [dict get $in_hdr Status] == 503} {
+                throw {NATS ErrNoResponders} "No responders available for request"
+            }
+            if {$dictmsg} {
+                return $response
+            } else {
+                return [dict get $response data]
+            }
         }
         # async request
         if {$timeout != -1} {  
             set timerID [after $timeout [mymethod RequestCallback "" "" "" $reqID]]
         }
-        set requests($reqID) [list 1 $timerID $callback]
+        set requests($reqID) [list 1 $timerID $callback $dictmsg]
         return
     }
     
@@ -412,7 +480,7 @@ oo::class create ::nats::connection {
         foreach {opt val} $args {
             switch -- $opt {
                 -timeout {
-                    my CheckTimeout $val
+                    nats::check_timeout $val
                     set timeout $val
                 }
                 default {
@@ -420,8 +488,6 @@ oo::class create ::nats::connection {
                 }
             }
         }
-        
-        my CheckTimeout $timeout
         
         if {$status != $nats::status_connected} {
             # unlike CheckConnection, here we want to raise the error also if the client is reconnecting, in line with cnats
@@ -457,7 +523,7 @@ oo::class create ::nats::connection {
     method RequestCallback {subj msg reply {reqID_timeout 0}} {
         if {$reqID_timeout != 0} {
             #async request timed out
-            lassign $requests($reqID_timeout) ignored timerID callback
+            set callback [lindex $requests($reqID_timeout) 2]
             after 0 [list {*}$callback 1 ""]
             unset requests($reqID_timeout)
             return
@@ -469,25 +535,39 @@ oo::class create ::nats::connection {
             # ${logger}::debug "RequestCallback got [string range $msg 0 15] on reqID $reqID - discarded"
             return
         }
-        lassign $requests($reqID) reqType timer callback
+        lassign $requests($reqID) reqType timer callback isDictMsg
         if {$reqType == 0} {
             # resume from vwait in "method request"; "requests" array will be cleaned up there
             set requests($reqID) [list 0 0 $msg]
             return
         }
         after cancel $timer
-        after 0 [list {*}$callback 0 $msg]
+        
+        # no-responders is equivalent to timedOut=1
+        set timedOut 0
+        set in_hdr [dict get $msg header]
+        if {[dict exists $in_hdr Status] && [dict get $in_hdr Status] == 503} {
+            set timedOut 1
+        }
+        if {!$isDictMsg} {
+            set msg [dict get $msg data]
+        }
+        after 0 [list {*}$callback $timedOut $msg]
         unset requests($reqID)
     }
     
     method CloseSocket { {broken 0} } {
-        # this method is only for closing an established connection
-        # it is not convenient to re-use it for all cases of close $sock
+        # this method is only for closing an established TCP connection
+        # it is not convenient to re-use it for all cases of close $sock (timeout or rejected connection)
         # because it does a lot of other work
         
         chan event $sock readable {}
         if {$broken} {
-            if {$status != $nats::status_connecting} {
+            if {$status != $nats::status_connected} {
+                # whether we are connecting or reconnecting, increment reconnect count for this server
+                $serverPool current_server_connected false
+            }
+            if {$status == $nats::status_connected} {
                 # recall that during initial connection round we try all servers only once
                 # method next_server relies on this status to know that
                 set status $nats::status_reconnecting
@@ -551,10 +631,6 @@ oo::class create ::nats::connection {
         } on error err {
             lassign [$serverPool current_server] host port
             my AsyncError ErrBrokenSocket "Failed to send data to $host:$port: $err"
-            if {$status != $nats::status_connected} {
-                # in the unlikely case that the connection fails right after receiving INFO
-                $serverPool current_server_connected false
-            }
             my CloseSocket 1
             $coro connect
             return
@@ -587,22 +663,26 @@ oo::class create ::nats::connection {
             # I guess I should preserve this stupid global variable
             set ind [json::write::indented]
             json::write::indented false
-            set connectParams [list verbose $config(verbose) \
-                                    pedantic $config(pedantic) \
+            
+            
+            set connectParams [list verbose [nats::bool2json $config(verbose)] \
+                                    pedantic [nats::bool2json $config(pedantic)] \
                                     tls_required false \
                                     name [json::write::string $config(name)] \
                                     lang [json::write::string Tcl] \
                                     version [json::write::string 0.9] \
                                     protocol 1 \
-                                    echo $config(echo)]
+                                    echo [nats::bool2json $config(echo)] ] 
             
+            if {[info exists serverInfo(headers)] && $serverInfo(headers)} {
+                lappend connectParams headers true no_responders true
+            }
             if {[info exists serverInfo(auth_required)] && $serverInfo(auth_required)} {
                 lappend connectParams {*}[$serverPool format_credentials]
             } 
             set jsonMsg [json::write::object {*}$connectParams]
         } trap {NATS ErrAuthorization} err {
             # no credentials could be found for this server, try next one
-            $serverPool current_server_connected false
             my AsyncError ErrAuthorization $err 1
             return
         } finally {
@@ -680,28 +760,40 @@ oo::class create ::nats::connection {
         my SendConnect
     }
     
-    method MSG {cmd} {
-        # the format is <subject> <sid> [reply-to] <#bytes>
+    method MSG {cmd {with_headers 0}} {
+        # HMSG is also handled here
         set replyTo ""
-        if {[llength $cmd] == 4} {
-            lassign $cmd subject subID replyTo expMsgLength
+        set expHdrLength 0
+        if {$with_headers} {
+            # the format is HMSG <subject> <sid> [reply-to] <#hdr bytes> <#total bytes>
+            if {[llength $cmd] == 5} {
+                lassign $cmd subject subID replyTo expHdrLength expMsgLength
+            } else {
+                lassign $cmd subject subID expHdrLength expMsgLength
+            }
         } else {
-            lassign $cmd subject subID expMsgLength
+            # the format is MSG <subject> <sid> [reply-to] <#bytes>
+            if {[llength $cmd] == 4} {
+                lassign $cmd subject subID replyTo expMsgLength
+            } else {
+                lassign $cmd subject subID expMsgLength
+            }
         }
+        # easier to read both headers and the body together as binary data; also fewer calls to chan read
         # turn off crlf translation while we read the message body
         chan configure $sock -translation binary
         # account for these crlf bytes that follow the message
         incr expMsgLength 2
         set remainingBytes $expMsgLength ;# how many bytes left to read until the message is complete
-        set messageBody "" 
+        set payload "" ;# both header (if any) and body
         while {1} {
-            append messageBody [chan read $sock $remainingBytes]
+            append payload [chan read $sock $remainingBytes]
             if {[eof $sock]} {
                 # server closed the socket - Tcl will invoke "CoroMain readable" again and close the socket
                 # so no need to do anything here
                 return
             }
-            set actualLength [string length $messageBody]
+            set actualLength [string length $payload]
             # probably == should work ok, but just for safety let's use >=
             if {$actualLength >= $expMsgLength} {
                 break
@@ -726,15 +818,28 @@ oo::class create ::nats::connection {
         chan configure $sock -translation {crlf binary}
         
         if {[info exists subscriptions($subID)]} {
-            # remove the trailing crlf; is it efficient on large messages?
-            set messageBody [string range $messageBody 0 end-2]
-            
             set maxMsgs [dict get $subscriptions($subID) maxMsgs]
             set recMsgs [dict get $subscriptions($subID) recMsgs]
-            
             set cmdPrefix [dict get $subscriptions($subID) cmd]
-            after 0 [list {*}$cmdPrefix $subject $messageBody $replyTo]
+            set header ""
+            if {$expHdrLength > 0} {
+                try {
+                    set header [nats::parse_header [string range $payload 0 $expHdrLength-1]]
+                } trap {NATS ErrBadHeaderMsg} err {
+                    # invalid header causes an async error, nevertheless the message is delivered, see nats.go, func processMsg
+                    my AsyncError ErrBadHeaderMsg $err
+                }
+            }
+            set body [string range $payload $expHdrLength end-2] ;# discard \r\n at the end
             
+            if {[dict get $subscriptions($subID) dictmsg]} {
+                # deliver the message as a dict, including headers, if any
+                set msg [dict create header $header data $body]
+                after 0 [list {*}$cmdPrefix $subject $msg $replyTo]
+            } else {
+                # deliver the message as an opaque string
+                after 0 [list {*}$cmdPrefix $subject $body $replyTo]
+            }
             incr recMsgs
             if {$maxMsgs > 0 && $maxMsgs == $recMsgs} {
                 unset subscriptions($subID) ;# UNSUB has already been sent, no need to do it here
@@ -777,36 +882,30 @@ oo::class create ::nats::connection {
     
     method ERR {cmd} {
         set errMsg [string tolower [string trim $cmd " '"]] ;# remove blanks and single quotes around the message
-        # I *guess* I should call "$serverPool current_server_connected false" only for those errors that can happen during handshake
         if [string match "stale connection*" $errMsg] {
             my AsyncError ErrStaleConnection $errMsg 1
             return
         }
         
         if [string match "authorization violation*" $errMsg] {
-            $serverPool current_server_connected false
             my AsyncError ErrAuthorization $errMsg 1
             return
         }
         if [string match "user authentication expired*" $errMsg] {
-            $serverPool current_server_connected false
             my AsyncError ErrAuthExpired $errMsg 1
             return
         }
         if [string match "user authentication revoked*" $errMsg] {
-            $serverPool current_server_connected false
             my AsyncError ErrAuthRevoked $errMsg 1
             return
         }
         if [string match "account authentication expired*" $errMsg] {
             #nats server account authorization has expired
-            $serverPool current_server_connected false
             my AsyncError ErrAccountAuthExpired $errMsg 1
             return
         }
         # non-critical errors that do not close the connection
         if [string match "permissions violation*" $errMsg] {
-            # not fatal for the connection
             my AsyncError ErrPermissions $errMsg
             return
         }
@@ -890,7 +989,6 @@ oo::class create ::nats::connection {
                 set readCount [chan gets $sock line]
                 if {$readCount < 0} {
                     if {[eof $sock]} { 
-                        # server closed the socket
                         #set err [chan configure $sock -error] - no point in this, $err will be blank
                         lassign [$serverPool current_server] host port
                         my AsyncError ErrBrokenSocket "Server $host:$port closed the connection" 1
@@ -911,10 +1009,14 @@ oo::class create ::nats::connection {
                 set protocol_arg [lassign $line protocol_op]
                 # in case of -ERR or +OK
                 set protocol_op [string trimleft $protocol_op -+]
+                if {$protocol_op eq "HMSG"} {
+                    my MSG $protocol_arg 1
+                    return
+                }
                 if {$protocol_op in {MSG INFO ERR OK PING PONG}} {
                     my $protocol_op $protocol_arg
                 } else {
-                    ${logger}::warn "Invalid protocol $protocol_op"
+                    ${logger}::warn "Invalid protocol $protocol_op $protocol_arg"
                 }
             }
         }
@@ -929,12 +1031,6 @@ oo::class create ::nats::connection {
         if {!$config(check_subjects)} {
             return true
         }
-
-        # for API like '$JS.API.STREAM.NAMES'
-        if {[string index $subj 0] eq "\$"} {
-            set subj [string range $subj 1 end]
-        }
-
         foreach token [split $subj .] {
             if {[regexp -- $subjectRegex $token]} {
                 continue
@@ -967,12 +1063,6 @@ oo::class create ::nats::connection {
         }
     }
     
-    method CheckTimeout {timeout} {
-        if {! ([string is integer -strict $timeout] && $timeout > 0)} {
-            throw {NATS ErrBadTimeout} "Invalid timeout $timeout"
-        }
-    }
-    
     method AsyncError {code msg { doReconnect 0 }} {
         ${logger}::error $msg
         set last_error [dict create code "NATS $code" message $msg]
@@ -983,6 +1073,12 @@ oo::class create ::nats::connection {
     }
 }
 
+# all following procs are private!
+proc ::nats::check_timeout {timeout} {
+    if {! ([string is integer -strict $timeout] && $timeout > 0)} {
+        throw {NATS ErrBadTimeout} "Invalid timeout $timeout"
+    }
+}
 proc ::nats::timestamp {} {
     # workaround for not being able to format current time with millisecond precision
     # should not be needed in Tcl 8.7, see https://core.tcl-lang.org/tips/doc/trunk/tip/423.md
@@ -994,6 +1090,66 @@ proc ::nats::timestamp {} {
 }
 proc ::nats::log_stdout {service level text} {
     puts "\[[nats::timestamp] $service $level\] $text"
+}
+# returns a dict, where each key points to a list of values
+# NB! unlike HTTP headers, in NATS headers keys are case-sensitive
+proc ::nats::parse_header {header} {
+    set result [dict create]
+    set i 0
+    foreach line [textutil::split::splitx $header {\r\n}] {
+        if {$line eq ""} {
+            # the header finishes with \r\n\r\n, so splitx will return a list with an empty element in the end
+            continue
+        }
+        if {$i == 0} {
+            set descr [lassign $line protocol status]
+            if {$protocol ne "NATS/1.0"} {
+                throw {NATS ErrBadHeaderMsg} "Unknown protocol $protocol"
+            }
+            if {$status ne ""} {
+                if {! ([string is integer $status] && $status > 0)} {
+                    throw {NATS ErrBadHeaderMsg} "Invalid status $status"
+                }
+                dict set result Status $status
+            }
+            if {$descr ne ""} {
+                dict set result Description $descr
+            }
+        } else {
+            lassign [split $line :] k v
+            set k [string trim $k]
+            set v [string trim $v]
+            if {$k ne "" && $v ne ""} {
+                dict lappend result $k $v
+            }
+            # strictly speaking, I should raise an error if k or v are empty
+        }
+        incr i
+    }
+    return $result
+}
+proc ::nats::format_header { header } {
+    # other official clients accept inline status & description in the first line when *parsing* headers
+    # but when serializing headers, status & description are treated just like usual headers
+    # so I will do the same, and it simplifies my job here
+    set result "NATS/1.0\r\n"
+    dict for {k v} $header {
+        foreach el $v {
+            append result "$k: $el\r\n"
+        }
+    }
+    # don't append one more \r\n here! the header is put into outBuffer as a separate element
+    # so \r\n will be added when flushing
+    return $result
+}
+
+# because there's no json::write::boolean
+proc ::nats::bool2json {val} {
+    if {[string is true -strict $val]} {
+        return true
+    } else {
+        return false
+    }
 }
 
 package provide nats 0.9

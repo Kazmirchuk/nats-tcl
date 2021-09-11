@@ -6,7 +6,9 @@
 # Test summary:
 # - verbose, pedantic, no-echo options
 # - PING/PONG protocol and timeouts
-
+# - publishing and subscription to messages with headers
+# - treating a received message as a dict
+# - the no-responders feature
 
 startNats NATS
 
@@ -182,5 +184,105 @@ test extra_opts-5 "PING/PONG - no response from the server" -setup {
     stopFakeServer
 }
 
+startNats NATS
+
+test extra_opts-6.1 "Publish and receive a message with a header" -body {
+    $conn configure -dictmsg 1
+    $conn connect
+    set obs [test_utils::chanObserver new $conn b]
+    set msg_received 0
+    set sid [$conn subscribe nats_2.2 -callback [lambda {subject message replyTo} {
+        assert {$subject eq "nats_2.2"}
+        assert {[dict get $message data] eq "payload"}
+        assert {$replyTo eq ""}
+        set hdr [dict get $message header]
+        # each key points to a list of values
+        assert {[lindex [dict get $hdr hdr1] 0] eq "val 1"}
+        assert {[lindex [dict get $hdr hdr2] 0] eq "val2"}
+        set ::msg_received 1
+    }]]
+    
+    set h [dict create hdr1 [list "val 1"] hdr2 val2]
+    $conn publish nats_2.2 "payload" -header $h
+    vwait ::msg_received
+    assert {$msg_received == 1}
+    lassign [$obs getChanData 0 1] readData writtenData
+    $obs destroy
+    # remove the first element in the list with SUB
+    assert {[lrange $writtenData 1 end] eq [list {HPUB nats_2.2  37 44} NATS/1.0 {hdr1: val 1} {hdr2: val2} {} payload {}]} 1
+    assert {$readData eq [list "HMSG nats_2.2 $sid 37 44" "NATS/1.0" "hdr1: val 1" "hdr2: val2" "" "payload" ""]}
+} -cleanup {
+    $conn disconnect
+    $conn reset -dictmsg
+}
+
+test extra_opts-6.2 "Send requests with headers" -setup {
+    startResponder nats_2.2 "" 1
+} -body {
+    $conn connect
+    # test a sync request
+    set header_out [dict create hdr1 val1]
+    set response [$conn request "nats_2.2" "0 msg with header" -dictmsg true -header $header_out -timeout 500]
+    set header_in [dict get $response header]
+    assert {[dict get $response data] eq "msg with header" } 1
+    assert {$header_in eq $header_out}
+    
+    # test an async request
+    $conn request "nats_2.2" "0 msg2 with header" -dictmsg true -header $header_out -timeout 500 -callback [lambda {timedOut msg} {
+        assert {[string is false -strict $timedOut]}
+        assert {[dict get $msg data] eq "msg2 with header"} 1
+        assert {[dict get $msg header] eq $::header_out} 1
+        set ::msg_received 2
+    }]
+    vwait ::msg_received
+    assert {$msg_received == 2}
+    
+    # test a sync request, but get back a plain message with no header
+    set response [$conn request "nats_2.2" "0 msg3 with header" -header $header_out -timeout 500]
+    assert { $response eq "msg3 with header" }
+} -cleanup {
+    stopResponder $conn nats_2.2
+    $conn disconnect
+}
+
+test extra_opts-7 "Receive no-responders from a subscription" -body {
+    $conn connect
+    set inbox [$conn inbox]
+    $conn subscribe $inbox -callback test_utils::simpleCallback -dictmsg true
+    $conn publish nats_2.2 -reply $inbox
+    vwait test_utils::simpleMsg
+    assert {[dict get $test_utils::simpleMsg data] eq ""}
+    set hdr [dict get $test_utils::simpleMsg header]
+    assert {[dict get $hdr Status] == 503} 1
+} -cleanup {
+    $conn disconnect
+}
+
+test extra_opts-8 "Receive no-responders from a request" -body {
+    $conn connect
+    set msg_received 0
+    
+    duration {
+        catch {$conn request nats_2.2 "no response" -timeout 500} err errOpts
+    } elapsed
+    assert { $elapsed < 100 } ;# much lower than the timeout!
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrNoResponders}}
+    assert {$err eq "No responders available for request" }
+    
+    $conn request nats_2.2 "no response" -timeout 500 -callback [lambda {timedOut msg} {
+        assert {[string is true -strict $timedOut]}
+        set ::msg_received 1
+    }]
+    duration {
+        vwait ::msg_received
+    } elapsed
+    assert { $elapsed < 100 }
+} -cleanup {
+    $conn disconnect
+}
+
+#TODO: receive a msg with headers from NATS CLI?
+
+stopNats NATS
 $conn destroy
 tcltest::cleanupTests

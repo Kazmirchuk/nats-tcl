@@ -11,6 +11,9 @@ test regex-1 "Check exact subjects" -body {
     assert {[${conn}::my CheckSubject foo]}
     assert {[${conn}::my CheckSubject FOO.ba_r]}
     assert {[${conn}::my CheckSubject foo1.bAr2.ba-z]}
+    # JetStream uses subjects with $
+    assert {[${conn}::my CheckSubject "\$JS.API.STREAM.NAMES"]}
+        
     # these are invalid
     assert {![${conn}::my CheckSubject ""]}
     assert {![${conn}::my CheckSubject .]}

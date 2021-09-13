@@ -303,7 +303,7 @@ oo::class create ::nats::connection {
         return
     }
     
-    method subscribe {subject args } { 
+    method subscribe {subject args } {
         my CheckConnection
         set queue ""
         set callback ""
@@ -447,7 +447,7 @@ oo::class create ::nats::connection {
             if {$timeout != -1} {
                  set timerID [after $timeout [list set [self object]::requests($reqID) [list 0 1 ""]]]
             }
-            set requests($reqID) [list 0]
+            set requests($reqID) 0
             my CoroVwait [self object]::requests($reqID)
             lassign $requests($reqID) ignored timedOut response
             unset requests($reqID)
@@ -521,6 +521,7 @@ oo::class create ::nats::connection {
     }
     
     method RequestCallback {subj msg reply {reqID_timeout 0}} {
+        # $msg is always a dict in this method, and it already contains (optional) $reply in it, so we just pass it over to users
         if {$reqID_timeout != 0} {
             #async request timed out
             set callback [lindex $requests($reqID_timeout) 2]
@@ -834,7 +835,9 @@ oo::class create ::nats::connection {
             
             if {[dict get $subscriptions($subID) dictmsg]} {
                 # deliver the message as a dict, including headers, if any
-                set msg [dict create header $header data $body]
+                # even though replyTo is passed to the callback, let's include it in the dict too
+                # so that we don't need do to it in RequestCallback
+                set msg [dict create header $header data $body reply $replyTo]
                 after 0 [list {*}$cmdPrefix $subject $msg $replyTo]
             } else {
                 # deliver the message as an opaque string

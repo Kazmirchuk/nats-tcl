@@ -22,7 +22,7 @@ test auth-1.1 "Connect to NATS using login/password in URL" -body {
     set test_utils::simpleMsg ""
     $conn subscribe subject1 -callback test_utils::simpleCallback
     $conn publish subject1 "Hello Bilbo"
-    vwait test_utils::simpleMsg
+    wait_for test_utils::simpleMsg
     
     assert {[string is true -strict [set ${conn}::serverInfo(auth_required)]]}
     
@@ -43,7 +43,7 @@ test auth-1.2 "Connect to NATS using login/password in options" -body {
     set test_utils::simpleMsg ""
     $conn subscribe subject1 -callback test_utils::simpleCallback
     $conn publish subject1 "hello again"
-    vwait test_utils::simpleMsg
+    wait_for test_utils::simpleMsg
     set test_utils::simpleMsg
 } -result {hello again} -cleanup {
     $conn disconnect
@@ -73,7 +73,7 @@ test auth-2.1 "Connect to NATS using an authentication token in URL" -body {
     set test_utils::simpleMsg ""
     $conn subscribe subject1 -callback test_utils::simpleCallback
     $conn publish subject1 "hello token"
-    vwait test_utils::simpleMsg
+    wait_for test_utils::simpleMsg
     
     assert {[string is true -strict [set ${conn}::serverInfo(auth_required)]]}
     set connectDict [getConnectOpts [$obs getChanData]]
@@ -92,7 +92,7 @@ test auth-2.2 "Connect to NATS using an authentication token in options" -body {
     set test_utils::simpleMsg ""
     $conn subscribe subject1 -callback test_utils::simpleCallback
     $conn publish subject1 "hello token2"
-    vwait test_utils::simpleMsg
+    wait_for test_utils::simpleMsg
     set test_utils::simpleMsg
 } -result {hello token2} -cleanup {
     $conn disconnect

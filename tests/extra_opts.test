@@ -25,7 +25,7 @@ test extra_opts-1 "Check verbose and pedantic modes" -body {
     $conn connect -async ;# NATS sends back INFO, then replies +OK to our CONNECT
     set obs [test_utils::chanObserver new $conn b]
     while {[set ${conn}::status] ne $nats::status_connected} {
-        vwait ${conn}::status
+        wait_for ${conn}::status
     }
     
     $conn publish dummy_subj "Hello NATS" ;# NATS sends back +OK
@@ -56,7 +56,7 @@ test extra_opts-2 "Check the echo=false option" -body {
     $conn connect -async
     set obs [test_utils::chanObserver new $conn w]
     while {[set ${conn}::status] ne $nats::status_connected} {
-        vwait ${conn}::status
+        wait_for ${conn}::status
     }
     set connectDict [getConnectOpts [$obs getChanData]]
     $obs destroy
@@ -65,12 +65,7 @@ test extra_opts-2 "Check the echo=false option" -body {
         
     $conn subscribe no_echo -callback test_utils::simpleCallback
     $conn publish no_echo "cold is the void" ;# we will not get this message back
-    after 300 [list set test_utils::simpleMsg "timeout"]
-    duration {
-        vwait test_utils::simpleMsg
-    } elapsed
-    assert {[approx $elapsed 300]}
-    assert {$test_utils::simpleMsg eq "timeout"}
+    assert {[catch {wait_for test_utils::simpleMsg}] == 1}
     # but a request to another subscriber still works fine
     startResponder no_echo
     set result [$conn request no_echo "0 hello"]
@@ -86,7 +81,7 @@ test extra_opts-3 "PING/PONG protocol initiated by client" -body {
     $conn connect
     set obs [test_utils::chanObserver new $conn b]
     duration {
-        vwait ${conn}::pong
+        wait_for ${conn}::pong 2000
     } elapsed
     assert {$elapsed >= 1000 && $elapsed < 1300}
     lassign [$obs getChanData 0 0] readData writtenData
@@ -136,7 +131,7 @@ test extra_opts-4.2 "PING/PONG - no response from the client" -body {
     # we do not respond to PING, so the server will report an error with -ERR and close the socket
     # which will make the client go into the reconnecting mode
     duration {
-        vwait ${conn}::status
+        wait_for ${conn}::status 6000
     } elapsed
     assert {[dict get [set ${conn}::last_error] code] eq [list NATS ErrStaleConnection]}
     assert {[set ${conn}::status] == $nats::status_reconnecting} 1
@@ -173,7 +168,7 @@ test extra_opts-5 "PING/PONG - no response from the server" -setup {
     duration {
         # the client will send 2 PINGs without reply; when Pinger runs for the 3rd time, it will raise the error
         # and the client will go into reconnecting
-        vwait ${conn}::status
+        wait_for ${conn}::status 4000
     } elapsed
     assert {[dict get [set ${conn}::last_error] code] eq [list NATS ErrStaleConnection]}
     assert {[set ${conn}::status] == $nats::status_reconnecting} 1
@@ -204,7 +199,7 @@ test extra_opts-6.1 "Publish and receive a message with a header" -body {
     
     set h [dict create hdr1 [list "val 1"] hdr2 val2]
     $conn publish nats_2.2 "payload" -header $h
-    vwait ::msg_received
+    wait_for ::msg_received
     assert {$msg_received == 1}
     lassign [$obs getChanData 0 1] readData writtenData
     $obs destroy
@@ -234,7 +229,7 @@ test extra_opts-6.2 "Send requests with headers" -setup {
         assert {[dict get $msg header] eq $::header_out} 1
         set ::msg_received 2
     }]
-    vwait ::msg_received
+    wait_for ::msg_received
     assert {$msg_received == 2}
     
     # test a sync request, but get back a plain message with no header
@@ -250,7 +245,7 @@ test extra_opts-7 "Receive no-responders from a subscription" -body {
     set inbox [$conn inbox]
     $conn subscribe $inbox -callback test_utils::simpleCallback -dictmsg true
     $conn publish nats_2.2 -reply $inbox
-    vwait test_utils::simpleMsg
+    wait_for test_utils::simpleMsg
     assert {[dict get $test_utils::simpleMsg data] eq ""}
     set hdr [dict get $test_utils::simpleMsg header]
     assert {[dict get $hdr Status] == 503} 1
@@ -274,7 +269,7 @@ test extra_opts-8 "Receive no-responders from a request" -body {
         set ::msg_received 1
     }]
     duration {
-        vwait ::msg_received
+        wait_for ::msg_received
     } elapsed
     assert { $elapsed < 100 }
 } -cleanup {

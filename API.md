@@ -3,18 +3,18 @@ nats - a client library for the NATS message broker.
 
 ## Synopsis
 
-package require nats ?0.9?
+package require nats
 
-[**::nats::connection new** *?conn_name?*](#constructor) <br/>
+[**::nats::connection new** *?conn_name?*](#constructor-conn_name) <br/>
 [*objectName* **cget** *option*](#objectName-cget-option) <br/>
 [*objectName* **configure** *?option? ?value option value ...?*](#objectName-configure-option-value-option-value) <br/>
 [*objectName* **reset** *option*](#objectName-reset-option) <br/>
 [*objectName* **connect** *?-async?*](#objectName-connect--async) <br/>
 [*objectName* **disconnect**](#objectName-disconnect) <br/>
-[*objectName* **publish** *subject msg ?replySubj?*](#objectName-publish-subject-msg-replySubj) <br/>
-[*objectName* **subscribe** *subject ?-queue queueGroup? ?-callback cmdPrefix? ?-max_msgs maxMsgs?*](#objectName-subscribe-subject--queue-queueGroup--callback-cmdPrefix--max_msgs-maxMsgs) <br/>
+[*objectName* **publish** *subject message ?args?*](#objectName-publish-subject-message-args) <br/>
+[*objectName* **subscribe** *subject ?-queue queueGroup? ?-callback cmdPrefix? ?-max_msgs maxMsgs? ?-dictmsg dictmsg?*](#objectName-subscribe-subject--queue-queueGroup--callback-cmdPrefix--max_msgs-maxMsgs--dictmsg-dictmsg) <br/>
 [*objectName* **unsubscribe** *subID ?-max_msgs maxMsgs?*](#objectName-unsubscribe-subID--max_msgs-maxMsgs) <br/>
-[*objectName* **request** *subject message ?-timeout ms? ?-callback cmdPrefix?*](#objectName-request-subject-message--timeout-ms--callback-cmdPrefix) <br/>
+[*objectName* **request** *subject message ?-timeout ms? ?-callback cmdPrefix? ?-dictmsg dictmsg? ?-header header?*](#objectName-request-subject-message--timeout-ms--callback-cmdPrefix--dictmsg-dictmsg--header-header) <br/>
 [*objectName* **ping** *?-timeout ms?*](#objectName-ping--timeout-ms) <br/>
 [*objectName* **inbox**](#objectName-inbox) <br/>
 [*objectName* **current_server**](#objectName-current_server) <br/>
@@ -25,8 +25,8 @@ package require nats ?0.9?
 
 [*objectName* **jet_stream**](#objectName-jet_stream) <br/>
 [*jetStreamObject* **consume** stream consumer ?-timeout ms? ?-callback cmdPrefix?](#jetStreamObject-consume-stream-consumer--timeout-ms--callback-cmdPrefix) <br/>
-[*jetStreamObject* **ack** ackAddr](#jetStreamObject-ack-ackAddr) <br/>
-[*jetStreamObject* **publish** subject message ?-timeout ms? ?-callback cmdPrefix?](#jetStreamObject-publish-subject-message--timeout-ms--callback-cmdPrefix) <br/>
+[*jetStreamObject* **ack** message](#jetStreamObject-ack-message) <br/>
+[*jetStreamObject* **publish** subject message ?-timeout ms? ?-callback cmdPrefix? ?-header header?](#jetStreamObject-publish-subject-message--timeout-ms--callback-cmdPrefix--header-header) <br/>
 
 
 ## Callbacks
@@ -35,8 +35,7 @@ All callbacks are treated as command prefixes (like [trace](https://www.tcl.tk/m
 **subscriptionCallback** *subject message replyTo*<br/>
 **asyncRequestCallback** *timedOut message* <br/>
 ### JetStream: <br/>
-**consumeCallback** *timedOut message ackAddr* <br/>
-**publishCallback** *timedOut info error* <br/>
+**publishCallback** *timedOut pubAck error* <br/>
 
 ## Message headers
 When using NATS server version 2.2 and later, you can publish and receive messages with [headers](https://pkg.go.dev/github.com/nats-io/nats.go?utm_source=godoc#Header). Please, keep in mind that:
@@ -47,7 +46,7 @@ When using NATS server version 2.2 and later, you can publish and receive messag
 Examples of valid headers:
 ```Tcl
 set h [dict create hdr1 val1 hdr2 val2]
-# values must be wrapped using `list` if they have spaces
+# values must be wrapped using [list] if they have spaces
 set h [dict create hdr1 [list "val 1"] hdr2 val2]
 # multiple values for the same key
 set h [dict create hdr1 [list val1 val2] hdr2 val3]
@@ -55,11 +54,14 @@ set h [dict create hdr1 [list val1 val2] hdr2 val3]
 
 ## Receiving a message as a Tcl dict
 Typically the package delivers a message as a string, be it the `message` argument to the above callbacks or a return value from `request`. <br />  When publishing a message, its body and header are specified as separate arguments to `publish` or `request`. And when subscribing, you can pass `-dictmsg true` to indicate that the package should deliver `message` as a dict. Besides access to the headers, this approach also provides for better API extensibility in future.<br/>
-The dict has 2 keys:
+The dict has 3 keys:
 - header - a dict as shown above
 - data - a message body (string)
-  
-If you have received a message with a header, but have *not* used `-dictmsg true`, this is not an error: the header is discarded, and you get back only the message body as a string, as usual.
+- reply - reply subject
+
+All 3 keys are always present in the dict, but they can be empty. <br />
+If you have received a message with a header, but have *not* used `-dictmsg true`, this is not an error: the header is discarded, and you get back only the message body as a string, as usual.<br />
+Note that the JetStream API *always* returns messages as dicts.
 
 ## Public variables
 The connection object exposes 2 "public" read-only variables:
@@ -98,7 +100,7 @@ The **configure** method accepts the following options. Make sure to set them *b
 ## Description
 
 ### constructor ?conn_name?
-Creates a new instance of `nats::connection` with default options and initialises a [logger](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/log/logger.md) instance with the severity level set to `warn`. If you pass in a connection name, it will be sent to NATS in a `CONNECT` message, and will be indicated in the logger name.
+Creates a new instance of the TclOO object `nats::connection` with default options and initialises a [logger](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/log/logger.md) instance with the severity level set to `warn`. If you pass in a connection name, it will be sent to NATS in a `CONNECT` message, and will be indicated in the logger name.
 
 ### objectName cget option
 Returns the current value of an option as described above. 
@@ -116,7 +118,7 @@ Opens a TCP connection to one of the NATS servers specified in the `servers` lis
 Flushes all outgoing data, closes the TCP connection and sets the `status` to "closed".
 
 ### objectName publish subject message ?args?
-This method can be used in 2 way. The simple way:
+This method can be used in 2 ways. The simple way:
 ```Tcl
 objectName publish subject message ?reply?
 ```
@@ -125,7 +127,7 @@ and if you need extra options:
 objectName publish subject message ?-header header? ?-reply reply?
 ```
 Publishes a message to the specified subject. See the NATS [documentation](https://docs.nats.io/nats-concepts/subjects) for more details about subjects and wildcards. The client will check subject's validity before sending. Allowed characters are Latin-1 characters, digits, dot, dash and underscore. <br/>
-`message` is sent as is, it can be a binary string. If you specify `reply`, a responder will know where to send a reply. You can use the `inbox` method to generate a transient [subject name](https://docs.nats.io/developing-with-nats/sending/replyto) starting with _INBOX. However, using asynchronous requests might accomplish the same task in an easier manner - see below.<br/>
+`message` is sent as is, it can be a binary string. If you specify a `reply` subject, a responder will know where to send a reply. You can use the `inbox` method to generate a transient [subject name](https://docs.nats.io/developing-with-nats/sending/replyto) starting with _INBOX. However, using asynchronous requests might accomplish the same task in an easier manner - see below.<br/>
 When using NATS server version 2.2 and later, you can provide a `header` with the message. 
 
 ### objectName subscribe subject ?-queue queueGroup? ?-callback cmdPrefix? ?-max_msgs maxMsgs? ?-dictmsg dictmsg?
@@ -164,20 +166,20 @@ Returns a logger instance.
 TclOO destructor. Flushes pending data and closes the TCP socket.
 
 ### objectName jet_stream
-Returns `jetStreamObject` object to work with [JetStreams](https://docs.nats.io/jetstream/jetstream).
+Returns `jetStreamObject` TclOO object to work with [JetStreams](https://docs.nats.io/jetstream/jetstream).
 
 ### jetStreamObject consume stream consumer ?-timeout ms? ?-callback cmdPrefix?
 Consume a message from a [consumer](https://docs.nats.io/jetstream/concepts/consumers) defined on a [stream](https://docs.nats.io/jetstream/concepts/streams) `stream`. Similarly to the `request` method:
-- If no callback is given, the request is synchronous and blocks in `vwait` until a reply is received. The reply is a list containing the return value and address to acknowledge the received message. If no reply arrives within `timeout`, it raises `ErrTimeout`.
-- If a callback is given, the call returns immediately, and when a reply is received or a timeout fires, the command prefix will be invoked from the event loop with 3 additional arguments: `timedOut` (equal to 1, if the request timed out), `message` and `ackAddr`, which is used to acknowledge received message in a way shown below.
+- If no callback is given, the request is synchronous and blocks in `vwait` until a response is received. The response message is always delivered as a dict. If no response arrives within `timeout`, it raises `ErrTimeout`.
+- If a callback is given, the call returns immediately, and when a reply is received or a timeout fires, the command prefix will be invoked from the event loop with 2 additional arguments: `timedOut` (true, if the request timed out) and `message` as a dict (same as for `asyncRequestCallback`). If your consumer is configured for explicit acknowledgement, pass the received `message` to the `ack` method as shown below.
 
-### jetStreamObject ack ackAddr
-Acknowledge the received message using `ackAddr` from [*jetStreamObject* **consume**](#jetStreamObjectName-consume) method. If the message is not acknowledged, it is redelivered on next `consume` (depending on NATS server settings).
+### jetStreamObject ack message
+Acknowledge the received `message` from the *jetStreamObject* **consume** method. If the message is not acknowledged, it is redelivered on next `consume` (depending on NATS server settings).
 
-### jetStreamObject publish subject message ?-timeout ms? ?-callback cmdPrefix?
+### jetStreamObject publish subject message ?-timeout ms? ?-callback cmdPrefix? ?-header header?
 Publish `message` to a [stream](https://docs.nats.io/jetstream/concepts/streams) on the specified `subject` and wait for acknowledgement. `timeout` and `cmdPrefix` have similar meaning as in `request` method. If no stream exists on specified `subject`, the call will be blocked waiting.
 - In synchronous version the method returns a response from server as a dict containing `stream`, `seq` and optionally `duplicate` keys. If NATS server returned an error response, it raises `ErrResponse`.
-- In asynchronous version `cmdPrefix` callback is called with 3 additional arguments: `timedOut` (equal to 1, if the request timed out), `info` and `error`. If `error` is not empty, it is a dict containing `type` and `error` keys sent by NATS server, otherwise `info` contains information passed from NATS server as a dict with keys: `stream`, `seq` and optionally `duplicate`.
+- In asynchronous version `cmdPrefix` callback is called with 3 additional arguments: `timedOut` (true, if the request timed out), `pubAck` and `error`. If `error` is not empty, it is a dict containing `code` and `description` JSON keys sent by NATS server, otherwise `pubAck` contains information passed from NATS server as a dict with keys: `stream`, `seq` and optionally `duplicate`.
 
 ## Error handling
 Error codes are similar to those from the nats.go client as much as possible. A few additional error codes provide more information about failed connection attempts to the NATS server: ErrBrokenSocket, ErrTLS, ErrConnectionRefused.
@@ -204,6 +206,8 @@ try {
 | ErrTimeout | Timeout of a synchronous request, ping or JetStream's `consume` |
 | ErrNoResponders | No responders are available for request |
 | ErrHeadersNotSupported| Headers are not supported by this server |
+| ErrInvalidJSAck | Invalid JSON when parsing a JS publish acknowledgement |
+| ErrResponse \<NATS err code\> | Negative JS publish acknowledgement. |
 
 Asynchronous errors are sent to the logger and can also be queried/traced using 
 `$last_error`, for example:
@@ -219,6 +223,7 @@ puts "Error text: [dict get $err message]"
 | ErrStaleConnection | The client or server closed the connection, because the other party did not respond to PING on time |
 | ErrConnectionRefused | TCP connection to a NATS server was refused, possibly due to wrong port, or the server was not running; the client will try the next server from the pool |
 | ErrConnectionTimeout | Connection to a server could not be established within connect_timeout ms |
+| ErrBadHeaderMsg | The client failed to parse message headers. Nevertheless, the message body is delivered |
 | ErrServer | Generic error reported by NATS server |
 | ErrPermissions | subject authorization has failed |
 | ErrAuthorization | user authorization has failed or no credentials are known for this server |

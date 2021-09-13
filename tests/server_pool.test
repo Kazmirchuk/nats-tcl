@@ -100,7 +100,7 @@ test server_pool-14.1 "Reconnecting timings and counters" -body {
     startNats NATS1
     $conn configure -servers [list nats://localhost:4222 nats://localhost:5222 nats://localhost:6222] -randomize false
     $conn configure -max_reconnect_attempts 1 -connect_timeout 500 -reconnect_time_wait 3000
-    debugLogging $conn
+    #debugLogging $conn
     
     set all_errors [list]
     set error_trace [lambda {var idx op } {
@@ -117,11 +117,11 @@ test server_pool-14.1 "Reconnecting timings and counters" -body {
         startNats NATS1
         [$conn logger]::info "Waiting for the client to go into reconnecting"
         while {[set ${conn}::status] != $nats::status_reconnecting} {
-            vwait ${conn}::status
+            wait_for ${conn}::status 5000
         }
         [$conn logger]::info "Waiting for the client to restore connection"
         while {[set ${conn}::status] != $nats::status_connected} {
-            vwait ${conn}::status
+            wait_for ${conn}::status 5000
         }
     } elapsed
     assert {[approx $elapsed 3000]} 1 ;# should be equal to reconnect_time_wait
@@ -142,11 +142,11 @@ test server_pool-14.2 "Remove servers from the pool when they reach max_reconnec
     startNats NATS1
     [$conn logger]::info "Waiting for the client to go into reconnecting"
     while {[set ${conn}::status] != $nats::status_reconnecting} {
-        vwait ${conn}::status
+        wait_for ${conn}::status 5000
     }
     [$conn logger]::info "Waiting for the client to restore connection"
     while {[set ${conn}::status] != $nats::status_connected} {
-        vwait ${conn}::status
+        wait_for ${conn}::status 5000
     }
     # you should see "Removed N from the server pool" in the log...
     assert {[llength [$conn all_servers]] == 1} 1

@@ -23,6 +23,16 @@ namespace eval test_utils {
         vwait ::test_utils::sleepVar
     }
     
+    proc wait_for {var {timeout 300}} {
+        set timer [after $timeout [list set $var "test_utils_timeout"]]
+        vwait $var
+        if {[set $var] eq "test_utils_timeout"} {
+            return -code error "Timeout on $var"
+        } else {
+            after cancel $timer
+        }
+    }
+    
     proc wait_flush {conn} {
         # wait until Flusher executes
         vwait ${conn}::timers(flush)
@@ -189,24 +199,6 @@ namespace eval test_utils {
         }
     }
 
-    proc asyncConsumeCallback {timedOut msg ackAddr} {
-        variable simpleMsg
-        if {$timedOut} {
-            set simpleMsg "timeout"
-        } else {
-            set simpleMsg [dict create msg $msg ackAddr $ackAddr]
-        }
-    }
-
-    proc asyncJetStreamPublishCallback {timedOut result error} {
-        variable simpleMsg
-        if {$timedOut} {
-            set simpleMsg "timeout"
-        } else {
-            set simpleMsg [dict create result $result error $error]
-        }
-    }
-    
     proc startNats {id args} {
         processman::spawn $id nats-server {*}$args
         sleep 500
@@ -228,10 +220,10 @@ namespace eval test_utils {
         puts "[nats::timestamp] Stopped $id"
     }
 
-    proc executeNatsCmd {id options} {
-        processman::spawn $id nats {*}$options
+    proc execNatsCmd {args} {
+        exec nats {*}$args
         sleep 500
-        puts stderr "[nats::timestamp] Executed: nats $options"
+        puts "[nats::timestamp] Executed: nats $args"
     }
     
     # processman::kill doesn't work reliably with tclsh, so instead we send a NATS message to stop the responder gracefully
@@ -289,6 +281,6 @@ namespace eval test_utils {
         return [expr {$actual > ($ref - $tolerance) && $actual < ($ref + $tolerance)}]
     }
     
-    namespace export sleep wait_flush chanObserver duration startNats stopNats startResponder stopResponder startFakeServer stopFakeServer sendFakeServer \
-                     assert approx getConnectOpts debugLogging executeNatsCmd
+    namespace export sleep wait_for wait_flush chanObserver duration startNats stopNats startResponder stopResponder startFakeServer stopFakeServer sendFakeServer \
+                     assert approx getConnectOpts debugLogging execNatsCmd
 }

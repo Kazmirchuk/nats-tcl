@@ -20,7 +20,7 @@ Regarding the NATS server version, I tested against v2.1.7, and the package shou
 Simply clone the repository in some place where Tcl will be able to find it, e.g. in `$auto_path` or `$tcl_library`. No need to compile anything!
 
 ## Supported features
-- Publish and subscribe to messages
+- Publish and subscribe to messages, also with headers (NATS version 2.2)
 - Synchronous and asynchronous requests (optimized: under the hood a single wildcard subscription is used for all requests)
 - Basic JetStream support
 - Queue groups

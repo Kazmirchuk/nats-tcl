@@ -207,7 +207,7 @@ try {
 | ErrNoResponders | No responders are available for request |
 | ErrHeadersNotSupported| Headers are not supported by this server |
 | ErrInvalidJSAck | Invalid JSON when parsing a JS publish acknowledgement |
-| ErrResponse \<NATS err code\> | Negative JS publish acknowledgement. |
+| ErrJSResponse \<NATS err code\> | Negative JS publish acknowledgement. |
 
 Asynchronous errors are sent to the logger and can also be queried/traced using 
 `$last_error`, for example:

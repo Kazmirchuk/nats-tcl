@@ -140,7 +140,7 @@ oo::class create ::nats::jet_stream {
         try {
             set pubAckResponse [my ParsePublishResponse $result]
             after 0 [list {*}$userCallback 0 $pubAckResponse ""]
-        } trap {NATS ErrResponse} {msg opt} {
+        } trap {NATS ErrJSResponse} {msg opt} {
             set errorCode [lindex [dict get $opt -errorcode] end]
             # make a dict with the same structure as AsyncError
             after 0 [list {*}$userCallback 0 "" [dict create code $errorCode message $msg]]
@@ -161,7 +161,7 @@ oo::class create ::nats::jet_stream {
         # should I do anything with err_code?
         if {[dict exists $responseDict error]} {
             set errDict [dict get $responseDict error]
-            throw [list NATS ErrResponse [dict get $errDict code]] [dict get $errDict description]
+            throw [list NATS ErrJSResponse [dict get $errDict code]] [dict get $errDict description]
         }
         return $responseDict
     }

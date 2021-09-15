@@ -67,7 +67,7 @@ Note that the JetStream API *always* returns messages as dicts.
 The connection object exposes 2 "public" read-only variables:
 - `last_error` - used to deliver asynchronous errors, e.g. if the network fails. It is a dict with 2 keys similar to the arguments for `throw`:
   - code: error code 
-  - message: error message
+  - errorMessage: error message
 - `status` - connection status, one of `$nats::status_closed`, `$nats::status_connecting`, `$nats::status_connected` or `$nats::status_reconnecting`.
 
 You can set up traces on these variables to get notified e.g. when a connection status changes.
@@ -115,7 +115,7 @@ Resets the option(s) to the default value.
 Opens a TCP connection to one of the NATS servers specified in the `servers` list. Unless the `-async` option is given, this call blocks in a `vwait` loop until the connection is completed, including a TLS handshake if needed.
 
 ### objectName disconnect 
-Flushes all outgoing data, closes the TCP connection and sets the `status` to "closed".
+Flushes all outgoing data, closes the TCP connection and sets the `status` to "closed". Pending asynchronous requests are cancelled.
 
 ### objectName publish subject message ?args?
 This method can be used in 2 ways. The simple way:

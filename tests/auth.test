@@ -56,7 +56,7 @@ test auth-1.3 "Try connecting to NATS with wrong login/password" -body {
     assert {[dict get $errOpts -errorcode] eq {NATS ErrNoServers}}
     set last_error [set ${conn}::last_error]
     assert {[dict get $last_error code] eq {NATS ErrAuthorization}}
-    dict get $last_error message
+    dict get $last_error errorMessage
 } -result {authorization violation*} -match glob -cleanup {
     $conn disconnect
     $conn reset -servers -user -password
@@ -105,7 +105,7 @@ test auth-2.3 "Try connecting with no credentials" -body {
     assert {[dict get $errOpts -errorcode] eq {NATS ErrNoServers}}
     set last_error [set ${conn}::last_error]
     assert {[dict get $last_error code] eq {NATS ErrAuthorization}}
-    dict get $last_error message
+    dict get $last_error errorMessage
 } -result {No credentials known*} -match glob -cleanup {
     $conn disconnect
     $conn reset -servers

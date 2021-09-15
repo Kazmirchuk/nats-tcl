@@ -221,8 +221,7 @@ namespace eval test_utils {
     }
 
     proc execNatsCmd {args} {
-        exec nats {*}$args
-        sleep 500
+        exec -ignorestderr nats {*}$args
         puts "[nats::timestamp] Executed: nats $args"
     }
     

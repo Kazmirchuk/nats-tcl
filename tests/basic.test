@@ -330,8 +330,6 @@ for {set i 0} { $i < 3} {incr i} {
     sleep 500
 }
 
-stopResponder $conn
-
 test basic-17 "Check internal state after disconnection" -body {
     $conn disconnect
     assert {[set ${conn}::sock] eq ""} 1
@@ -339,6 +337,20 @@ test basic-17 "Check internal state after disconnection" -body {
     assert {[array size ${conn}::subscriptions] == 0} 1
     assert {[array size ${conn}::requests] == 0} 1
     assert {[llength [set ${conn}::outBuffer]] == 0} 1
+}
+
+test basic-18 "Disconnection cancels pending async requests" -body {
+    set test_utils::simpleMsg -1
+    $conn connect
+    $conn request service "2000 foo" -timeout 1000 -callback [lambda {timedOut msg} {
+        set test_utils::simpleMsg $timedOut
+    }]
+    sleep 500
+    # don't stop the responder before sending the request, otherwise we'll get no-responders immediately
+    stopResponder $conn
+    $conn disconnect
+    sleep 700
+    assert {$test_utils::simpleMsg == -1}
 }
 
 $conn destroy

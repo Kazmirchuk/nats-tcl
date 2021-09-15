@@ -240,6 +240,27 @@ test extra_opts-6.2 "Send requests with headers" -setup {
     $conn disconnect
 }
 
+test extra_opts-6.3 "Receive a message with a header from NATS CLI" -body {
+    set msg_received 0
+    $conn connect
+    $conn subscribe nats_cli -dictmsg true -callback [lambda {subject message replyTo} {
+        assert {$subject eq "nats_cli"}
+        assert {[dict get $message data] eq "payload"}
+        assert {$replyTo eq ""}
+        set hdr [dict get $message header]
+        # each key points to a list of values
+        assert {[lindex [dict get $hdr hdr1] 0] eq "val1"}
+        assert {[lindex [dict get $hdr hdr2] 0] eq "val2"}
+        set ::msg_received 1
+    }]
+    wait_flush $conn
+    execNatsCmd pub -H hdr1:val1 -H hdr2:val2 nats_cli payload
+    wait_for ::msg_received 1000
+    set msg_received
+} -result 1 -cleanup {
+    $conn disconnect
+}
+
 test extra_opts-7 "Receive no-responders from a subscription" -body {
     $conn connect
     set inbox [$conn inbox]
@@ -275,8 +296,6 @@ test extra_opts-8 "Receive no-responders from a request" -body {
 } -cleanup {
     $conn disconnect
 }
-
-#TODO: receive a msg with headers from NATS CLI?
 
 stopNats NATS
 $conn destroy

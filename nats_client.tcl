@@ -237,6 +237,14 @@ oo::class create ::nats::connection {
             my CloseSocket
         }
         array unset subscriptions ;# make sure we don't try to "restore" subscriptions when we connect next time
+        foreach reqID [array names requests] {
+            # cancel pending async requests
+            lassign $requests($reqID) reqType timer
+            if {$reqType == 1} {
+                after cancel $timer
+                ${logger}::debug "Cancelled pending async request $reqID"
+            }
+        }
         array unset requests
         set requestsInboxPrefix ""
         if {$jetStream ne ""} {
@@ -530,6 +538,10 @@ oo::class create ::nats::connection {
             return
         }
         # we received a NATS message
+        if {![string match $requestsInboxPrefix* $subj]} {
+            # sanity check against JetStream that delivers a message with the *original* subject instead of the one we requested
+            ${logger}::warn "RequestCallback got an unexpected message on subject: $subj, sub ID: [dict get $msg sib_id] - discarded"
+        }
         set reqID [lindex [split $subj .] 2]
         if {![info exists requests($reqID)]} {
             # ignore all further responses, if >1 arrives; or it could be an overdue message
@@ -837,7 +849,7 @@ oo::class create ::nats::connection {
                 # deliver the message as a dict, including headers, if any
                 # even though replyTo is passed to the callback, let's include it in the dict too
                 # so that we don't need do to it in RequestCallback
-                set msg [dict create header $header data $body reply $replyTo]
+                set msg [dict create header $header data $body subject $subject reply $replyTo sub_id $subID]
                 after 0 [list {*}$cmdPrefix $subject $msg $replyTo]
             } else {
                 # deliver the message as an opaque string
@@ -1068,7 +1080,8 @@ oo::class create ::nats::connection {
     
     method AsyncError {code msg { doReconnect 0 }} {
         ${logger}::error $msg
-        set last_error [dict create code "NATS $code" message $msg]
+        # errorMessage used to be just "message", but I already have many other messages in the code
+        set last_error [dict create code "NATS $code" errorMessage $msg]
         if {$doReconnect} {
             my CloseSocket 1
             my ConnectNextServer ;# can be done only in the coro

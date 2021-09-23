@@ -54,12 +54,14 @@ set h [dict create hdr1 [list val1 val2] hdr2 val3]
 
 ## Receiving a message as a Tcl dict
 Typically the package delivers a message as a string, be it the `message` argument to the above callbacks or a return value from `request`. <br />  When publishing a message, its body and header are specified as separate arguments to `publish` or `request`. And when subscribing, you can pass `-dictmsg true` to indicate that the package should deliver `message` as a dict. Besides access to the headers, this approach also provides for better API extensibility in future.<br/>
-The dict has 3 keys:
+The dict has 5 keys:
 - header - a dict as shown above
 - data - a message body (string)
-- reply - reply subject
+- subject - subject of the message
+- reply - the reply-to subject
+- sub_id - subscription ID
 
-All 3 keys are always present in the dict, but they can be empty. <br />
+All keys are always present in the dict, but some of them can be empty. <br />
 If you have received a message with a header, but have *not* used `-dictmsg true`, this is not an error: the header is discarded, and you get back only the message body as a string, as usual.<br />
 Note that the JetStream API *always* returns messages as dicts.
 
@@ -143,6 +145,7 @@ Sends a message with an optional `-header` to the specified subject using an aut
 - If a callback is given, the call returns immediately, and when a response is received or a timeout fires, the command prefix will be invoked from the event loop with 2 additional arguments: `timedOut` (equal to 1, if the request timed out or no responders are available) and a `response`.<br />
 
 By default, `response` is delivered as a string. Use `-dictmsg true` to receive `response` as a dict, e.g. to access headers. You can also `configure` the connection to have `-dictmsg` as true by default for all calls.<br />
+Default timeout is unlimited. <br />
 
 ### objectName ping ?-timeout ms?
 A blocking call that triggers a ping-pong exchange with the NATS server and returns true upon success. If the server does not reply within the specified timeout (ms), it raises `TIMEOUT` error. Default timeout is 10s. You can use this method to check if the server is alive.

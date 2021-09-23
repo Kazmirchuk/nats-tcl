@@ -9,21 +9,12 @@ package require json
 namespace eval ::nats {}
 
 oo::class create ::nats::jet_stream {
-    variable conn consumerInboxPrefix logger consumes counters
+    variable conn
     
     constructor {c} {
         set conn $c
-        array set consumes {} 
-        array set counters {consumes 10} 
-        set consumerInboxPrefix ""
-        set logger [$conn logger]
     }
 
-    method disconnect {} {
-        array unset consumes
-        set consumerInboxPrefix ""
-    }
-    
     method consume {stream consumer args} {
         if {![${conn}::my CheckSubject $stream]} {
             throw {NATS ErrInvalidArg} "Invalid stream name $stream"
@@ -33,7 +24,7 @@ oo::class create ::nats::jet_stream {
         }
 
         set subject "\$JS.API.CONSUMER.MSG.NEXT.$stream.$consumer"
-        set batch 1 ;# get only one message at time from consumer
+        set batch_size 1 ;# by default, get only one message at a time from a consumer
         set timeout -1 ;# ms
         set callback ""
         
@@ -46,41 +37,23 @@ oo::class create ::nats::jet_stream {
                 -callback {
                     set callback $val
                 }
+                -batch_size {
+                    set batch_size $val
+                }
                 default {
                     throw {NATS ErrInvalidArg} "Unknown option $opt"
                 }
             }
         }
         
-        set reqID [incr counters(consumes)]
-        if {$consumerInboxPrefix eq ""} {
-            set consumerInboxPrefix [$conn inbox]
+        if {$batch_size > 1 && $callback eq ""} {
+            throw {NATS ErrInvalidArg} "batch_size > 1 can be done only with an async consumer"
         }
-        $conn subscribe "$consumerInboxPrefix.$reqID" -callback [mymethod ConsumeCallback $reqID] -max_msgs $batch -dictmsg true
-        
-        set timerID ""
-        $conn publish $subject $batch -reply "$consumerInboxPrefix.$reqID"
-        if {$callback eq ""} {
-            # sync request
-            if {$timeout != -1} {
-                 set timerID [after $timeout [list set [self object]::consumes($reqID) [list 0 1 ""]]]
-            }
-            set consumes($reqID) 0
-            ${conn}::my CoroVwait [self object]::consumes($reqID)
-            lassign $consumes($reqID) ignored timedOut response
-            unset consumes($reqID)
-            if {$timedOut} {
-                throw {NATS ErrTimeout} "Consume $stream.$consumer timed out"
-            }
-            after cancel $timerID
-            return $response
+        try {
+            return [$conn request $subject $batch_size -dictmsg true -timeout $timeout -callback $callback -max_msgs $batch_size]
+        } trap {NATS ErrTimeout} err {
+            throw {NATS ErrTimeout} "Consume $stream.$consumer timed out"
         }
-        # async request
-        if {$timeout != -1} {
-            set timerID [after $timeout [mymethod ConsumeCallback $reqID "" "" "" $reqID]]
-        }
-        set consumes($reqID) [list 1 $timerID $callback]
-        return
     }
 
     method ack {message} {
@@ -107,30 +80,6 @@ oo::class create ::nats::jet_stream {
         return [my ParsePublishResponse $result]
     }
 
-    method ConsumeCallback {reqID subj msg reply {reqID_timeout 0}} {
-        if {$reqID_timeout != 0} {
-            #async request timed out
-            lassign $consumes($reqID_timeout) ignored timerID callback
-            after 0 [list {*}$callback 1 ""]
-            unset consumes($reqID_timeout)
-            return
-        }
-        # we received a NATS message
-        if {![info exists consumes($reqID)]} {
-            #${logger}::debug "ConsumeCallback got [string range $msg 0 15] on reqID $reqID - discarded"
-            return
-        }
-        lassign $consumes($reqID) reqType timer callback
-        if {$reqType == 0} {
-            # resume from vwait in "method consume"; "consumes" array will be cleaned up there
-            set consumes($reqID) [list 0 0 $msg]
-            return
-        }
-        after cancel $timer
-        after 0 [list {*}$callback 0 $msg]
-        unset consumes($reqID)
-    }
-    
     method PublishCallback {userCallback timedOut result} {
         if {$timedOut} {
             after 0 [list {*}$userCallback 1 "" ""]
@@ -141,11 +90,12 @@ oo::class create ::nats::jet_stream {
             set pubAckResponse [my ParsePublishResponse $result]
             after 0 [list {*}$userCallback 0 $pubAckResponse ""]
         } trap {NATS ErrJSResponse} {msg opt} {
-            set errorCode [lindex [dict get $opt -errorcode] end]
             # make a dict with the same structure as AsyncError
-            after 0 [list {*}$userCallback 0 "" [dict create code $errorCode message $msg]]
+            # but the error code should be the same as reported in JSON, so remove "NATS ErrJSResponse" from it
+            set errorCode [lindex [dict get $opt -errorcode] end]
+            after 0 [list {*}$userCallback 0 "" [dict create code $errorCode errorMessage $msg]]
         } on error {msg opt} {
-            ${logger}::error "Error while parsing jet stream publish callback: $msg"
+            [$conn logger]::error "Error while parsing JetStream response: $msg"
         }
     }
 

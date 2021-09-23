@@ -83,7 +83,7 @@ oo::class create ::nats::connection {
         array set timers {ping {} flush {} connect {} }
         array set counters {subscription 0 request 0 pendingPings 0}
         array set subscriptions {} ;# subID -> dict (subj, queue, cmd, maxMsgs, recMsgs)
-        # async reqs: reqID -> {1 timer callback isDictMsg} ; sync requests: reqID -> {0 timedOut response}
+        # async reqs: reqID -> {1 timer callback isDictMsg subID} ; sync requests: reqID -> {0 timedOut response}
         # RequestCallback needs to distinguish between sync and async, so we need 0/1 in front
         array set requests {} 
         array set serverInfo {} ;# INFO from a current NATS server
@@ -238,20 +238,18 @@ oo::class create ::nats::connection {
         }
         array unset subscriptions ;# make sure we don't try to "restore" subscriptions when we connect next time
         foreach reqID [array names requests] {
-            # cancel pending async requests
+            # cancel pending async timers
             lassign $requests($reqID) reqType timer
             if {$reqType == 1} {
                 after cancel $timer
-                ${logger}::debug "Cancelled pending async request $reqID"
             }
         }
         array unset requests
         set requestsInboxPrefix ""
-        if {$jetStream ne ""} {
-            $jetStream disconnect
+        if {$timers(connect) ne ""} {
+            after cancel $timers(connect)
+            ${logger}::debug "Cancelled connection timer $timers(connect)"
         }
-        after cancel $timers(connect)
-        ${logger}::debug "Cancelled connection timer $timers(connect)"
         set timers(connect) ""
         #CoroMain will set status to "closed"
         return
@@ -315,7 +313,7 @@ oo::class create ::nats::connection {
         my CheckConnection
         set queue ""
         set callback ""
-        set maxMsgs 0
+        set maxMsgs 0 ;# unlimited by default
         set dictmsg $config(dictmsg)
         
         foreach {opt val} $args {
@@ -377,7 +375,7 @@ oo::class create ::nats::connection {
     
     method unsubscribe {subID args} {
         my CheckConnection
-        set maxMsgs 0
+        set maxMsgs 0 ;# unlimited by default
         foreach {opt val} $args {
             switch -- $opt {
                 -max_msgs {
@@ -418,6 +416,7 @@ oo::class create ::nats::connection {
         set callback ""
         set dictmsg $config(dictmsg)
         set header ""
+        set maxMsgs -1
         
         foreach {opt val} $args {
             switch -- $opt {
@@ -434,51 +433,70 @@ oo::class create ::nats::connection {
                 -header {
                     set header $val
                 }
+                -max_msgs {
+                    # for internal use only by JetStream!
+                    set maxMsgs $val
+                }
                 default {
                     throw {NATS ErrInvalidArg} "Unknown option $opt"
                 }
             }
         }
         
+        set reqID [incr counters(request)]
+        
         if {$requestsInboxPrefix eq ""} {
             set requestsInboxPrefix [my inbox]
-            my subscribe "$requestsInboxPrefix.*" -dictmsg 1 -callback [mymethod RequestCallback]
+            my subscribe "$requestsInboxPrefix.*" -dictmsg 1 -callback [mymethod RequestCallback -1]
+        }
+        
+        set subID ""
+        
+        if {$maxMsgs == -1} {
+            # "new-style" request with one wildcard subscription
+            # only the first response is delivered
+            # will perform more argument checking, so it may raise an error
+            my publish $subject $message -reply "$requestsInboxPrefix.$reqID" -header $header
+        } else {
+            # "old-style" request with a SUB per each request is needed for JetStream,
+            # because messages received from a stream have a subject that differs from our reply-to
+            # $maxMsgs is always 1 for sync requests
+            set subID [my subscribe "$requestsInboxPrefix.JS.$reqID" -dictmsg 1 -callback [mymethod RequestCallback $reqID] -max_msgs $maxMsgs]
+            my publish $subject $message -reply "$requestsInboxPrefix.JS.$reqID" -header $header
         }
         
         set timerID ""
-        set reqID [incr counters(request)]
-        # will perform more argument checking, so it may raise an error
-        my publish $subject $message -reply "$requestsInboxPrefix.$reqID" -header $header
-        if {$callback eq ""} {
-            # sync request
-            # remember that we can get a reply after timeout, so vwait must wait on a specific reqID
-            if {$timeout != -1} {
-                 set timerID [after $timeout [list set [self object]::requests($reqID) [list 0 1 ""]]]
-            }
-            set requests($reqID) 0
-            my CoroVwait [self object]::requests($reqID)
-            lassign $requests($reqID) ignored timedOut response
-            unset requests($reqID)
-            if {$timedOut} {
-                throw {NATS ErrTimeout} "Request to $subject timed out"
-            }
-            after cancel $timerID
-            set in_hdr [dict get $response header]
-            if {[dict exists $in_hdr Status] && [dict get $in_hdr Status] == 503} {
-                throw {NATS ErrNoResponders} "No responders available for request"
-            }
-            if {$dictmsg} {
-                return $response
-            } else {
-                return [dict get $response data]
-            }
+        if {$timeout != -1} {
+            # RequestCallback is called in all cases: timeout/no timeout, sync/async request
+            set timerID [after $timeout [mymethod RequestCallback $reqID]]
         }
-        # async request
-        if {$timeout != -1} {  
-            set timerID [after $timeout [mymethod RequestCallback "" "" "" $reqID]]
+        if {$callback ne ""} {
+            # async request
+            set requests($reqID) [list 1 $timerID $callback $dictmsg $subID]
+            return
         }
-        set requests($reqID) [list 1 $timerID $callback $dictmsg]
-        return
+        # sync request
+        # remember that we can get a reply after timeout, so vwait must wait on a specific reqID
+        set requests($reqID) 0
+        my CoroVwait [self object]::requests($reqID)
+        lassign $requests($reqID) ignored timedOut response
+        unset requests($reqID)
+        if {$timedOut} {
+            if {$subID ne ""} {
+                unset subscriptions($subID)
+            }
+            throw {NATS ErrTimeout} "Request to $subject timed out"
+        }
+        after cancel $timerID
+        set in_hdr [dict get $response header]
+        if {[dict exists $in_hdr Status] && [dict get $in_hdr Status] == 503} {
+            throw {NATS ErrNoResponders} "No responders available for request"
+        }
+        if {$dictmsg} {
+            return $response
+        } else {
+            return [dict get $response data]
+        }
     }
     
     #this function is called "flush" in all other NATS clients, but I find it confusing
@@ -528,32 +546,42 @@ oo::class create ::nats::connection {
         return "_INBOX.[binary encode hex [read $randomChan 10]]"
     }
     
-    method RequestCallback {subj msg reply {reqID_timeout 0}} {
-        # $msg is always a dict in this method, and it already contains (optional) $reply in it, so we just pass it over to users
-        if {$reqID_timeout != 0} {
-            #async request timed out
-            set callback [lindex $requests($reqID_timeout) 2]
-            after 0 [list {*}$callback 1 ""]
-            unset requests($reqID_timeout)
+    method RequestCallback { {reqID -1} {subj ""} {msg ""} {reply ""} } {
+        if {$subj eq "" && $reqID != -1} {
+            # request timed out
+            if {[lindex $requests($reqID) 0]} {
+                #async request
+                lassign $requests($reqID) ignored timer callback isDictMsg subID
+                after 0 [list {*}$callback 1 ""]
+                if {$subID ne ""} {
+                    unset subscriptions($subID)
+                }
+                unset requests($reqID)
+            } else {
+                #sync request - exit from vwait in "method request"
+                set requests($reqID) [list 0 1 ""]
+            }
             return
         }
         # we received a NATS message
-        if {![string match $requestsInboxPrefix* $subj]} {
-            # sanity check against JetStream that delivers a message with the *original* subject instead of the one we requested
-            ${logger}::warn "RequestCallback got an unexpected message on subject: $subj, sub ID: [dict get $msg sib_id] - discarded"
+        # $msg is always a dict in this method, and it already contains (optional) $reply in it, so we just pass it over to users
+        if {$reqID == -1} {
+            # new-style request
+            set reqID [lindex [split $subj .] 2]
         }
-        set reqID [lindex [split $subj .] 2]
         if {![info exists requests($reqID)]} {
             # ignore all further responses, if >1 arrives; or it could be an overdue message
             # ${logger}::debug "RequestCallback got [string range $msg 0 15] on reqID $reqID - discarded"
             return
         }
-        lassign $requests($reqID) reqType timer callback isDictMsg
+        # most of these variables will be empty in case of a sync request
+        lassign $requests($reqID) reqType timer callback isDictMsg subID
         if {$reqType == 0} {
             # resume from vwait in "method request"; "requests" array will be cleaned up there
             set requests($reqID) [list 0 0 $msg]
             return
         }
+        # handle the async request
         after cancel $timer
         
         # no-responders is equivalent to timedOut=1
@@ -566,7 +594,16 @@ oo::class create ::nats::connection {
             set msg [dict get $msg data]
         }
         after 0 [list {*}$callback $timedOut $msg]
-        unset requests($reqID)
+        
+        if {$subID eq ""} {
+            # in new style requests, maxMsgs = 1
+            unset requests($reqID)
+        } else {
+            if {![info exists subscriptions($subID)]} {
+                # we've received maxMsgs, and the subscriptions array has been already cleaned up, so do the same with requests
+                unset requests($reqID)
+            }
+        }
     }
     
     method CloseSocket { {broken 0} } {
@@ -1091,7 +1128,7 @@ oo::class create ::nats::connection {
 
 # all following procs are private!
 proc ::nats::check_timeout {timeout} {
-    if {! ([string is integer -strict $timeout] && $timeout > 0)} {
+    if {! ([string is integer -strict $timeout] && $timeout >= -1)} {
         throw {NATS ErrBadTimeout} "Invalid timeout $timeout"
     }
 }
@@ -1169,3 +1206,8 @@ proc ::nats::bool2json {val} {
 }
 
 package provide nats 0.9
+
+# Let me respectfully remind you:
+# Birth and death are of supreme importance.
+# Time swiftly passes and opportunity is lost.
+# Do not squander your life!

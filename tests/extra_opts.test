@@ -229,7 +229,7 @@ test extra_opts-6.2 "Send requests with headers" -setup {
         assert {[dict get $msg header] eq $::header_out} 1
         set ::msg_received 2
     }]
-    wait_for ::msg_received
+    wait_for ::msg_received 1000
     assert {$msg_received == 2}
     
     # test a sync request, but get back a plain message with no header
@@ -294,6 +294,31 @@ test extra_opts-8 "Receive no-responders from a request" -body {
     } elapsed
     assert { $elapsed < 100 }
 } -cleanup {
+    $conn disconnect
+}
+
+test extra_opts-9 "Gather multiple responses to a request" -setup {
+    for {set i 0} { $i < 3} { incr i } {
+        startResponder
+    }
+    $conn connect
+} -body {
+    set msg_received 0
+    set exit_wait 0
+    # request with -max_msgs option is undocumented and for internal use only!
+    $conn request service "0 I need help" -max_msgs 3 -callback [lambda {timedOut msg} {
+        assert {$msg eq "I need help"}
+        incr ::msg_received
+        if {$::msg_received == 3} {
+            set ::exit_wait 1
+        }
+    }]
+    wait_for ::exit_wait 2000
+    assert {$msg_received == 3}
+    assert {[array size ${conn}::requests] == 0} 1
+} -cleanup {
+    # will stop all 3 responders
+    stopResponder $conn
     $conn disconnect
 }
 

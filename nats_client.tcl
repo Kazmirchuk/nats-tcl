@@ -83,9 +83,9 @@ oo::class create ::nats::connection {
         array set timers {ping {} flush {} connect {} }
         array set counters {subscription 0 request 0 pendingPings 0}
         array set subscriptions {} ;# subID -> dict (subj, queue, cmd, maxMsgs, recMsgs)
-        # async reqs: reqID -> {1 timer callback isDictMsg subID} ; sync requests: reqID -> {0 timedOut response}
-        # RequestCallback needs to distinguish between sync and async, so we need 0/1 in front
-        array set requests {} 
+        array set requests {} ;# reqID -> dict
+        # for sync reqs the dict has: (timedOut, response)
+        # for async reqs the dict has: (timer, callback, isDictMsg, subID, maxMsgs, recMsgs)
         array set serverInfo {} ;# INFO from a current NATS server
         set serverPool [nats::server_pool new [self object]] 
         # JetStream uses subjects with $
@@ -239,10 +239,7 @@ oo::class create ::nats::connection {
         array unset subscriptions ;# make sure we don't try to "restore" subscriptions when we connect next time
         foreach reqID [array names requests] {
             # cancel pending async timers
-            lassign $requests($reqID) reqType timer
-            if {$reqType == 1} {
-                after cancel $timer
-            }
+            after cancel [nats::get_default $requests($reqID) timer ""]
         }
         array unset requests
         set requestsInboxPrefix ""
@@ -472,24 +469,25 @@ oo::class create ::nats::connection {
         }
         if {$callback ne ""} {
             # async request
-            set requests($reqID) [list 1 $timerID $callback $dictmsg $subID]
+            set requests($reqID) [dict create timer $timerID callback $callback isDictMsg $dictmsg subID $subID maxMsgs $maxMsgs recMsgs 0]
             return
         }
         # sync request
         # remember that we can get a reply after timeout, so vwait must wait on a specific reqID
         set requests($reqID) 0
         my CoroVwait [self object]::requests($reqID)
-        lassign $requests($reqID) ignored timedOut response
+        set sync_req $requests($reqID)
         unset requests($reqID)
-        if {$timedOut} {
+        if {[dict get $sync_req timedOut]} {
             if {$subID ne ""} {
                 unset subscriptions($subID)
             }
             throw {NATS ErrTimeout} "Request to $subject timed out"
         }
         after cancel $timerID
+        set response [dict get $sync_req response]
         set in_hdr [dict get $response header]
-        if {[dict exists $in_hdr Status] && [dict get $in_hdr Status] == 503} {
+        if {[nats::get_default $in_hdr Status 0] == 503} {
             throw {NATS ErrNoResponders} "No responders available for request"
         }
         if {$dictmsg} {
@@ -549,17 +547,18 @@ oo::class create ::nats::connection {
     method RequestCallback { {reqID -1} {subj ""} {msg ""} {reply ""} } {
         if {$subj eq "" && $reqID != -1} {
             # request timed out
-            if {[lindex $requests($reqID) 0]} {
-                #async request
-                lassign $requests($reqID) ignored timer callback isDictMsg subID
+            set callback [nats::get_default $requests($reqID) callback ""]
+            if {$callback ne ""} {
                 after 0 [list {*}$callback 1 ""]
+                set subID [dict get $requests($reqID) subID]
                 if {$subID ne ""} {
                     unset subscriptions($subID)
                 }
+                # basically, it means that in case of -max_msgs>1, -timeout applies only to the first message
                 unset requests($reqID)
             } else {
                 #sync request - exit from vwait in "method request"
-                set requests($reqID) [list 0 1 ""]
+                set requests($reqID) [dict create timedOut 1 response ""]
             }
             return
         }
@@ -575,33 +574,41 @@ oo::class create ::nats::connection {
             return
         }
         # most of these variables will be empty in case of a sync request
-        lassign $requests($reqID) reqType timer callback isDictMsg subID
-        if {$reqType == 0} {
+        set callback [nats::get_default $requests($reqID) callback ""]
+        if {$callback eq ""} {
             # resume from vwait in "method request"; "requests" array will be cleaned up there
-            set requests($reqID) [list 0 0 $msg]
+            set requests($reqID) [dict create timedOut 0 response $msg]
             return
         }
         # handle the async request
-        after cancel $timer
+        after cancel [dict get $requests($reqID) timer]
         
         # no-responders is equivalent to timedOut=1
         set timedOut 0
         set in_hdr [dict get $msg header]
-        if {[dict exists $in_hdr Status] && [dict get $in_hdr Status] == 503} {
+        if {[nats::get_default $in_hdr Status 0] == 503} {
             set timedOut 1
         }
-        if {!$isDictMsg} {
+        if {![dict get $requests($reqID) isDictMsg]} {
             set msg [dict get $msg data]
         }
+
         after 0 [list {*}$callback $timedOut $msg]
-        
+        set subID [dict get $requests($reqID) subID]
         if {$subID eq ""} {
             # in new style requests, maxMsgs = 1
             unset requests($reqID)
         } else {
-            if {![info exists subscriptions($subID)]} {
-                # we've received maxMsgs, and the subscriptions array has been already cleaned up, so do the same with requests
+            # important! I can't simply check for [info exists subscriptions] here, because the subscription might have already been deleted,
+            # while RequestCallback events are still in the event queue
+            # so I need separate counters of maxMsgs, recMsgs for requests
+            set maxMsgs [dict get $requests($reqID) maxMsgs]
+            set recMsgs [dict get $requests($reqID) recMsgs]
+            incr recMsgs
+            if {$maxMsgs > 0 && $maxMsgs == $recMsgs} {
                 unset requests($reqID)
+            } else {
+                dict set requests($reqID) recMsgs $recMsgs
             }
         }
     }
@@ -881,17 +888,19 @@ oo::class create ::nats::connection {
                 }
             }
             set body [string range $payload $expHdrLength end-2] ;# discard \r\n at the end
-            
             if {[dict get $subscriptions($subID) dictmsg]} {
                 # deliver the message as a dict, including headers, if any
                 # even though replyTo is passed to the callback, let's include it in the dict too
                 # so that we don't need do to it in RequestCallback
                 set msg [dict create header $header data $body subject $subject reply $replyTo sub_id $subID]
-                after 0 [list {*}$cmdPrefix $subject $msg $replyTo]
             } else {
                 # deliver the message as an opaque string
-                after 0 [list {*}$cmdPrefix $subject $body $replyTo]
+                set msg $body 
             }
+            
+            after 0 [list {*}$cmdPrefix $subject $msg $replyTo]
+            # interesting: if I try calling RequestCallback directly instead of "after 0", it crashes tclsh
+            
             incr recMsgs
             if {$maxMsgs > 0 && $maxMsgs == $recMsgs} {
                 unset subscriptions($subID) ;# UNSUB has already been sent, no need to do it here
@@ -1204,6 +1213,15 @@ proc ::nats::bool2json {val} {
         return false
     }
 }
+
+# pending TIP 342 in Tcl 8.7
+proc ::nats::get_default {dict_val key def} {
+     if {[dict exists $dict_val $key]} {
+         return [dict get $dict_val $key]
+     } else {
+         return $def
+     }
+ }
 
 package provide nats 0.9
 

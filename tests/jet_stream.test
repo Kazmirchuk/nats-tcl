@@ -3,6 +3,11 @@
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
+# Test summary:
+# - sync, async consuming from a durable consumer with ACK
+# - sync, async publishing to a stream
+# - async consuming messages in batches
+
 # skip JetStream tests if NATS CLI is not available in $PATH
 set nats_cli [catch {exec -ignorestderr nats --version}]
 tcltest::testConstraint nats_cli [expr !$nats_cli]
@@ -24,25 +29,22 @@ test jet_stream-1.1 "Publish and sync consume" -constraints nats_cli -setup {
     $conn publish test.1 "msg 1"
     set jet_stream [$conn jet_stream]
     set msg [$jet_stream consume $stream_name $consumer_name]
-    #return only message
+    assert {[dict get $msg subject] eq "test.1"} 1
     dict get $msg data
 } -result {msg 1}
 
-test jet_stream-1.2 "Sync consume redelivered message" -constraints nats_cli -body {
-    # message has not been ACK, so it should be redelivered
-    set msg [$jet_stream consume $stream_name $consumer_name]
-    dict get $msg data
-} -result {msg 1}
-
-test jet_stream-1.3 "Sync consume redelivered message and ACK" -constraints nats_cli -body {
+test jet_stream-1.2 "Sync consume redelivered message and ACK" -constraints nats_cli -body {
     # message has not been ACK, so it should be redelivered
     set msg [$jet_stream consume $stream_name $consumer_name]
     $jet_stream ack $msg
     dict get $msg data
 } -result {msg 1}
 
-test jet_stream-1.4 "No message left after ACK - timeout" -constraints nats_cli -body {
-    $jet_stream consume $stream_name $consumer_name -timeout 2000
+test jet_stream-1.3 "No message left after ACK - timeout" -constraints nats_cli -body {
+    duration {
+        $jet_stream consume $stream_name $consumer_name -timeout 1000
+    } elapsed
+    assert {[approx $elapsed 1000]}
 } -match glob -result {Consume * timed out*} -returnCodes {error} -errorCode {NATS ErrTimeout}
 
 test jet_stream-2 "Publish and async consume" -constraints nats_cli -body {
@@ -81,11 +83,11 @@ test jet_stream-4 "Async consume timeout" -constraints nats_cli -body {
     set test_utils::simpleMsg
 } -result {timeout}
 
-test jet_stream-5 "Publish message to jet-stream sync" -constraints nats_cli -body {
+test jet_stream-5 "Publish message to JetStream sync" -constraints nats_cli -body {
     $jet_stream publish test.3 "msg 3"
 } -result [dict create stream $stream_name seq 3]
 
-test jet_stream-6 "Publish message to jet-stream async" -constraints nats_cli -body {
+test jet_stream-6 "Publish message to JetStream async" -constraints nats_cli -body {
     duration {
         $jet_stream publish test.4 "msg 4" -callback [lambda {timedOut pubAck pubError} {
             set ::pubAck $pubAck
@@ -95,13 +97,16 @@ test jet_stream-6 "Publish message to jet-stream async" -constraints nats_cli -b
     
     wait_for ::pubAck 1000
     set ::pubAck
-} -result [dict create stream $stream_name seq 4]
+} -result [dict create stream $stream_name seq 4] -cleanup {
+    # we are not going to consume these messages
+    execNatsCmd stream purge --force $stream_name
+}
 
-test jet_stream-7 "Publish message to jet-stream sync timeout" -constraints nats_cli -body {
+test jet_stream-7 "Publish message to JetStream sync timeout" -constraints nats_cli -body {
     $jet_stream publish not.exists "not.exists" -timeout 1000
 } -result "No responders available for request" -returnCodes {error} -errorCode {NATS ErrNoResponders}
 
-test jet_stream-8 "Publish message to jet-stream async timeout" -constraints nats_cli -body {
+test jet_stream-8 "Publish message to JetStream async timeout" -constraints nats_cli -body {
     duration {
         $jet_stream publish not.exists "not.exists" -timeout 500 -callback [lambda {timedOut pubAck pubError} {
             set ::timedOut $timedOut
@@ -112,9 +117,31 @@ test jet_stream-8 "Publish message to jet-stream async timeout" -constraints nat
         wait_for ::timedOut 1000
     } elapsed
     string is true -strict $timedOut
-} -result {1} -cleanup {
-    $conn destroy
-    stopNats NATS_JS
+} -result {1}
+
+test jet_stream-9 "Consume messages in batches" -constraints nats_cli -body {
+    # publish 8 messages and consume them in batches of 5
+    for {set i 1} { $i <= 8} {incr i} {
+        $conn publish test.1 $i
+    }
+    set msg_count 0
+    set cb [lambda {timedOut msg} {
+        incr ::msg_count
+        assert {[string is false -strict $timedOut]}
+        assert {[dict get $msg subject] eq "test.1"} 1
+        assert {[dict get $msg data] == $::msg_count} 1
+        $::jet_stream ack $msg
+    }]
+    $jet_stream consume $stream_name $consumer_name -batch_size 5 -callback $cb
+    while {$msg_count != 5} {
+        wait_for ::msg_count 2000
+    }
+    $jet_stream consume $stream_name $consumer_name -batch_size 5 -callback $cb
+    while {$msg_count != 8} {
+        wait_for ::msg_count 2000
+    }
 }
 
+$conn destroy
+stopNats NATS_JS
 tcltest::cleanupTests

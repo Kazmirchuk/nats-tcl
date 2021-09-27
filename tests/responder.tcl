@@ -37,7 +37,7 @@ package require nats
 
 lassign $argv subj queue dictMsg
 
-set conn [nats::connection new]
+set conn [nats::connection new "Responder $subj"]
 $conn configure -servers nats://localhost:4222
 $conn connect
 if {$queue eq "" } {
@@ -45,7 +45,6 @@ if {$queue eq "" } {
 } else {
     $conn subscribe $subj -dictmsg $dictMsg -callback echo -queue $queue
 }
-#force flush
-$conn ping
+
 puts "Responder listening on $subj : $queue"
 vwait forever

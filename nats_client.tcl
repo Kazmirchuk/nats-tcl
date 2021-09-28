@@ -34,7 +34,8 @@ set ::nats::option_syntax {
     { ping_interval.integer 120000      "Interval (ms) to send PING messages to a NATS server"}
     { max_outstanding_pings.integer 2   "Max number of PINGs without a reply from a NATS server before closing the connection"}
     { echo.boolean true                 "If true, messages from this connection will be echoed back by the server if the connection has matching subscriptions"}
-    { tls_opts.list ""                  "Options for tls::import"}
+    { tls_opts.list ""                  "Additional options for tls::import"}
+    { default_tls_opts.list {-require 1 -command ::nats::tls_callback} "Default options for tls::import"}
     { user.list ""                      "Default username"}
     { password.list ""                  "Default password"}
     { token.arg ""                      "Default authentication token"}
@@ -631,7 +632,7 @@ oo::class create ::nats::connection {
             }
         } else {
             # we get here only from method disconnect
-            lassign [$serverPool current_server] host port
+            lassign [my current_server] host port
             ${logger}::info "Closing connection to $host:$port" ;# in case of broken socket, the error will be logged elsewhere
             # make sure we wait until successful flush, if connection was not broken
             chan configure $sock -blocking 1
@@ -686,7 +687,7 @@ oo::class create ::nats::connection {
             }
             flush $sock
         } on error err {
-            lassign [$serverPool current_server] host port
+            lassign [my current_server] host port
             my AsyncError ErrBrokenSocket "Failed to send data to $host:$port: $err"
             my CloseSocket 1
             $coro connect
@@ -715,16 +716,17 @@ oo::class create ::nats::connection {
         chan event $sock writable [list $coro connected]
     }
     
-    method SendConnect {} {
+    method SendConnect {tls_done} {
         try {
             # I guess I should preserve this stupid global variable
             set ind [json::write::indented]
             json::write::indented false
             
-            
+            # tls_required=true in CONNECT seems unnecessary to me, because TLS handshake has already happened
+            # but nats.go does this
             set connectParams [list verbose [nats::bool2json $config(verbose)] \
                                     pedantic [nats::bool2json $config(pedantic)] \
-                                    tls_required false \
+                                    tls_required [nats::bool2json $tls_done] \
                                     name [json::write::string $config(name)] \
                                     lang [json::write::string Tcl] \
                                     version [json::write::string 0.9] \
@@ -791,30 +793,31 @@ oo::class create ::nats::connection {
         array unset serverInfo ;# do not unset it in CloseSocket!
         # otherwise publishing messages while reconnecting does not work, due to the check for max_payload
         array set serverInfo [json::json2dict $cmd]
+        set tls_done 0
+        lassign [my current_server] host port
+        set scheme [dict get [lindex [$serverPool all_servers] end] scheme]
         if {[info exists serverInfo(tls_required)] && $serverInfo(tls_required)} {
             #NB! NATS server will never accept a TLS connection. Always start connecting with plain TCP,
             # and only after receiving INFO, we can upgrade to TLS if needed
             package require tls
-            # I couldn't figure out how to use tls::import with non-blocking sockets
+            # for simplicity, let's switch to the blocking mode just for the handshake
             chan configure $sock -blocking 1
-            lassign [$serverPool current_server] host port
-            # TODO: move -require 1 to tls_opts to make it optional
-            tls::import $sock -require 1 -servername $host {*}$config(tls_opts)
             try {
+                tls::import $sock {*}$config(default_tls_opts) {*}$config(tls_opts)
                 tls::handshake $sock
+                set tls_done 1
+                # -errorcode will be NONE
             } on error err {
-                my AsyncError ErrTLS "TLS handshake with server $host:$port failed: $err"
-                close $sock
-                # TODO no point in trying to reconnect to it, so remove it from the pool
-                # set serverPool [lreplace serverPool $counters(curServer) $counters(curServer)]
-                # nats.py doesn't do it?
-                $serverPool current_server_connected false
-                my ConnectNextServer ;#TODO replace
+                my AsyncError ErrTLS "TLS handshake with server $host:$port failed: $err" 1
                 return
             }
             chan configure $sock -blocking 0
+        } elseif {$config(secure) || $scheme eq "tls"} {
+            # the client requires TLS, but the server doesn't provide it
+            my AsyncError ErrSecureConnWanted "Server $host:$port does not provide TLS" 1
+            return
         }
-        my SendConnect
+        my SendConnect $tls_done
     }
     
     method MSG {cmd {with_headers 0}} {
@@ -927,7 +930,7 @@ oo::class create ::nats::connection {
         if {$status != $nats::status_connected} {
             # auth OK: finalise the connection process
             $serverPool current_server_connected true
-            lassign [$serverPool current_server] host port
+            lassign [my current_server] host port
             ${logger}::info "Connected to the server at $host:$port"
             # exit from vwait in "connect"
             set status $nats::status_connected
@@ -1017,7 +1020,7 @@ oo::class create ::nats::connection {
             connected {
                 # this event will arrive again and again if we don't disable it
                 chan event $sock writable {}
-                lassign [$serverPool current_server] host port
+                lassign [my current_server] host port
                 # the socket either connected or failed to connect
                 set errorMsg [chan configure $sock -error]
                 if { $errorMsg ne "" } {
@@ -1038,7 +1041,7 @@ oo::class create ::nats::connection {
             }
             connect_timeout {
                 # we get here both in case of TCP-level timeout and if the server does not reply to the initial PING/PONG on time
-                lassign [$serverPool current_server] host port
+                lassign [my current_server] host port
                 close $sock
                 my AsyncError ErrConnectionTimeout "Connection timeout for $host:$port"
                 $serverPool current_server_connected false
@@ -1051,7 +1054,7 @@ oo::class create ::nats::connection {
                 if {$readCount < 0} {
                     if {[eof $sock]} { 
                         #set err [chan configure $sock -error] - no point in this, $err will be blank
-                        lassign [$serverPool current_server] host port
+                        lassign [my current_server] host port
                         my AsyncError ErrBrokenSocket "Server $host:$port closed the connection" 1
                         return
                     }
@@ -1216,12 +1219,16 @@ proc ::nats::bool2json {val} {
 
 # pending TIP 342 in Tcl 8.7
 proc ::nats::get_default {dict_val key def} {
-     if {[dict exists $dict_val $key]} {
-         return [dict get $dict_val $key]
-     } else {
-         return $def
-     }
- }
+    if {[dict exists $dict_val $key]} {
+        return [dict get $dict_val $key]
+    } else {
+        return $def
+    }
+}
+
+# by default, when a handshake fails, the TLS library reports it to stderr AND raises an error - see tls.c, function Tls_Error
+# so I end up with the same message logged twice. Let's suppress stderr altogether
+proc ::nats::tls_callback {args} { }
 
 package provide nats 0.9
 

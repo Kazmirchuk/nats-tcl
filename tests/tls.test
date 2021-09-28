@@ -3,29 +3,93 @@
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
-cd cert
-test_utils::startNats NATS --tls --tlscert=server-cert.pem --tlskey=server-key.pem --tlscacert=rootCA.pem
+# Test summary:
+# - connect to NATS with TLS
+# - provide a client TLS certificate
 
-set conn [nats::connection new TLS_NATS]
-[$conn logger]::setlevel debug
+set tls_failed [catch {package require tls}]
+set certs_present [file isdirectory cert]
+tcltest::testConstraint tls [expr {!$tls_failed && $certs_present}]
 
 # my certificates are self-signed and not known by the system, so Tcl should reject them
-test tls-1.1 "Try connecting to NATS without CA" -body {
-    $conn configure -servers tls://localhost:4222
-    $conn connect
-} -result {No NATS servers available} -returnCodes {error} -errorCode {NATS CONNECT_FAILED}
+test tls-1.1 "Try connecting to NATS without CA" -constraints tls -setup {
+    cd cert
+    startNats NATS --tlscert=server-cert.pem --tlskey=server-key.pem --tlscacert=rootCA.pem
+    set conn [nats::connection new TLS_NATS]
+    #debugLogging $conn
+} -body {
+    $conn configure -servers localhost:4222
+    $conn connect ;# client will not recognize server's CA
+} -result {No servers available for connection} -returnCodes {error} -errorCode {NATS ErrNoServers}
 
-test tls-1.2 "Check last error" -body {
-    dict get [set ${conn}::last_error] message
+test tls-1.2 "Check last error" -constraints tls -body {
+    set le [set ${conn}::last_error]
+    assert {[dict get $le code] eq {NATS ErrTLS}} 1
+    assert {[set ${conn}::status] == $nats::status_closed} 1
+    dict get $le errorMessage
 } -match glob -result {*certificate verify failed} 
 
-test tls-2 "Connect to NATS using CA" -body {
-    $conn configure -servers tls://localhost:4222 -tls_opts "-cafile rootCA.pem" -ping_interval 60000
+test tls-1.3 "Connect to NATS using CA" -constraints tls -body {
+    $conn configure -tls_opts [list -cafile rootCA.pem]
     $conn connect
-} -result {}
+    assert { [string is true -strict [dict get [$conn server_info] tls_required]]} 1
+    set ${conn}::status
+} -result $nats::status_connected -cleanup {
+    $conn disconnect
+    $conn reset -tls_opts
+    stopNats NATS
+}
 
-# auth with client certificate
-cd ..
-$conn destroy
-test_utils::stopNats NATS
+test tls-2.1 "Connect to NATS with client verification" -constraints tls -setup {
+    startNats NATS --tlsverify --tlscert=server-cert.pem --tlskey=server-key.pem --tlscacert=rootCA.pem
+} -body {
+    $conn configure -tls_opts [list -cafile rootCA.pem -certfile client-cert.pem -keyfile client-key.pem]
+    $conn connect
+    assert { [string is true -strict [dict get [$conn server_info] tls_verify]]} 1
+    set ${conn}::status
+} -result $nats::status_connected -cleanup {
+    $conn disconnect
+    $conn reset -tls_opts
+}
+
+test tls-2.2 "Connect to NATS with client verification - failed" -constraints tls -body {
+    $conn configure -tls_opts [list -cafile rootCA.pem]
+    $conn connect
+} -result {No servers available for connection} -returnCodes {error} -errorCode {NATS ErrNoServers} -cleanup {
+    $conn reset -tls_opts
+    stopNats NATS
+}
+
+test tls-2.3 "Check last error" -constraints tls -body {
+    set le [set ${conn}::last_error]
+    assert {[dict get $le code] eq {NATS ErrTLS}} 1
+    assert {[set ${conn}::status] == $nats::status_closed} 1
+    dict get $le errorMessage
+} -match glob -result {*bad certificate} 
+
+test tls-3.1 "Connect to NATS without TLS" -constraints tls -setup {
+    startNats NATS
+} -body {
+    # explicit TLS scheme in the URL means that client will require TLS from NATS
+    # or you can specify secure=true in "configure"
+    $conn configure -servers tls://localhost:4222 -tls_opts [list -cafile rootCA.pem]
+    $conn connect
+    assert { [string is true -strict [dict get [$conn server_info] tls_verify]]} 1
+    set ${conn}::status
+} -result {No servers available for connection} -returnCodes {error} -errorCode {NATS ErrNoServers}
+
+test tls-3.2 "Check last error" -constraints tls -body {
+    set le [set ${conn}::last_error]
+    dict get $le code
+} -result {NATS ErrSecureConnWanted} -cleanup {
+    $conn reset -tls_opts
+    stopNats NATS
+}
+
+# This should be the last test case in the file!
+test tls-99 "Finalize the tests" -constraints tls -body {
+    # because of the tls constraint, this cleanup can't be done in the global scope
+    cd ..
+    $conn destroy
+}
 tcltest::cleanupTests

@@ -24,9 +24,9 @@ package require nats
 [*objectName* **destroy**](#objectName-destroy)
 
 [*objectName* **jet_stream**](#objectName-jet_stream) <br/>
-[*jetStreamObject* **consume** stream consumer ?-timeout ms? ?-callback cmdPrefix?](#jetStreamObject-consume-stream-consumer--timeout-ms--callback-cmdPrefix) <br/>
-[*jetStreamObject* **ack** message](#jetStreamObject-ack-message) <br/>
-[*jetStreamObject* **publish** subject message ?-timeout ms? ?-callback cmdPrefix? ?-header header?](#jetStreamObject-publish-subject-message--timeout-ms--callback-cmdPrefix--header-header) <br/>
+[*jetStreamObject* **consume** *stream consumer ?-timeout ms? ?-callback cmdPrefix? ?-batch_size batch_size?*](#jetStreamObject-consume-stream-consumer--timeout-ms--callback-cmdPrefix--batch_size-batch_size) <br/>
+[*jetStreamObject* **ack** *message*](#jetStreamObject-ack-message) <br/>
+[*jetStreamObject* **publish** *subject message ?-timeout ms? ?-callback cmdPrefix? ?-header header?*](#jetStreamObject-publish-subject-message--timeout-ms--callback-cmdPrefix--header-header) <br/>
 
 
 ## Callbacks
@@ -63,7 +63,7 @@ The dict has 5 keys:
 
 All keys are always present in the dict, but some of them can be empty. <br />
 If you have received a message with a header, but have *not* used `-dictmsg true`, this is not an error: the header is discarded, and you get back only the message body as a string, as usual.<br />
-Note that the JetStream API *always* returns messages as dicts.
+Note that the JetStream API **always** returns messages as dicts.
 
 ## Public variables
 The connection object exposes 2 "public" read-only variables:
@@ -90,11 +90,12 @@ The **configure** method accepts the following options. Make sure to set them *b
 | ping_interval | integer | 120000 | Interval (ms) to send PING messages to a NATS server|
 | max_outstanding_pings | integer | 2 | Max number of PINGs without a reply from a NATS server before closing the connection |
 | echo | boolean | true | If true, messages from this connection will be echoed back by the server if the connection has matching subscriptions|
-| tls_opts | list | | Options for tls::import |
+| tls_opts | list | | Additional options for `tls::import` - here you can provide `-cafile` etc |
+| default_tls_opts | list | -require 1 <br /> -command nats::tls_callback | Default options for `tls::import` - rarely need to be changed; effective list of options for tcl::import will be combination of default_tls_opts and tls_opts|
 | user | string | | Default username|
 | password | string |   | Default password|
 | token | string | | Default authentication token|
-| secure | boolean | false | Indicate to the server if the client wants a TLS connection or not|
+| secure | boolean | false | If secure=true, connection will fail if a server can't provide a TLS connection |
 | check_subjects | boolean | true | Enable client-side checking of subjects when publishing or subscribing |
 | dictmsg | boolean | false | Return messages from `subscribe` and `request` as dicts by default |
 | -? | | | Provides interactive help with all options|
@@ -171,10 +172,12 @@ TclOO destructor. Flushes pending data and closes the TCP socket.
 ### objectName jet_stream
 Returns `jetStreamObject` TclOO object to work with [JetStreams](https://docs.nats.io/jetstream/jetstream).
 
-### jetStreamObject consume stream consumer ?-timeout ms? ?-callback cmdPrefix?
-Consume a message from a [consumer](https://docs.nats.io/jetstream/concepts/consumers) defined on a [stream](https://docs.nats.io/jetstream/concepts/streams) `stream`. Similarly to the `request` method:
-- If no callback is given, the request is synchronous and blocks in `vwait` until a response is received. The response message is always delivered as a dict. If no response arrives within `timeout`, it raises `ErrTimeout`.
+### jetStreamObject consume stream consumer ?-timeout ms? ?-callback cmdPrefix? ?-batch_size batch_size?
+Consume a message or `batch_size` number of messages from a [consumer](https://docs.nats.io/jetstream/concepts/consumers) defined on a [stream](https://docs.nats.io/jetstream/concepts/streams). Similarly to the `request` method:
+- If no callback is given, the request is synchronous and blocks in a (coroutine-aware) `vwait` until a response is received. The response message is always returned as a dict. If no response arrives within `timeout`, it raises `ErrTimeout`.
 - If a callback is given, the call returns immediately, and when a reply is received or a timeout fires, the command prefix will be invoked from the event loop with 2 additional arguments: `timedOut` (true, if the request timed out) and `message` as a dict (same as for `asyncRequestCallback`). If your consumer is configured for explicit acknowledgement, pass the received `message` to the `ack` method as shown below.
+
+Default `batch_size` is 1. `batch_size`>1 is possible only in the async version, i.e. `cmdPrefix` becomes mandatory.
 
 ### jetStreamObject ack message
 Acknowledge the received `message` from the *jetStreamObject* **consume** method. If the message is not acknowledged, it is redelivered on next `consume` (depending on NATS server settings).
@@ -217,7 +220,7 @@ Asynchronous errors are sent to the logger and can also be queried/traced using
 ```Tcl
 set err [set ${conn}::last_error]
 puts "Error code: [dict get $err code]"
-puts "Error text: [dict get $err message]"
+puts "Error text: [dict get $err errorMessage]"
 ```
 | Error type        | Reason   | 
 | ------------- |--------|
@@ -225,6 +228,7 @@ puts "Error text: [dict get $err message]"
 | ErrTLS | TLS handshake failed |
 | ErrStaleConnection | The client or server closed the connection, because the other party did not respond to PING on time |
 | ErrConnectionRefused | TCP connection to a NATS server was refused, possibly due to wrong port, or the server was not running; the client will try the next server from the pool |
+| ErrSecureConnWanted | Client requires TLS, but a NATS server does not provide TLS; the client will try the next server from the pool |
 | ErrConnectionTimeout | Connection to a server could not be established within connect_timeout ms |
 | ErrBadHeaderMsg | The client failed to parse message headers. Nevertheless, the message body is delivered |
 | ErrServer | Generic error reported by NATS server |
@@ -232,4 +236,4 @@ puts "Error text: [dict get $err message]"
 | ErrAuthorization | user authorization has failed or no credentials are known for this server |
 | ErrAuthExpired | user authorization has expired |
 | ErrAuthRevoked | user authorization has been revoked |
-| ErrAccountAuthExpired | nats server account authorization has expired |
+| ErrAccountAuthExpired | NATS server account authorization has expired |

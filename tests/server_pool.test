@@ -91,7 +91,7 @@ test server_pool-13 "Initial connection attempt goes through the server pool onl
         catch {$conn connect} err errOpts
     } elapsed
     # connect_timeout=2000 for 2 servers
-    assert {[approx $elapsed 4000]}
+    assert { $elapsed < 5000 }
     assert {[dict get $errOpts -errorcode] eq {NATS ErrNoServers}}    
     set err
 } -result "No servers available for connection"

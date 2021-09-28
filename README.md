@@ -4,7 +4,7 @@
 
 Learn more about NATS [here](https://nats.io) and Tcl/Tk [here](https://www.tcl.tk/).
 
-Feature-wise, the package is comparable to other NATS clients and is inspired by the official [nats.py](https://github.com/nats-io/nats.py) and [cnats](https://github.com/nats-io/nats.c).
+Feature-wise, the package is comparable to other NATS clients and is inspired by the official [nats.py](https://github.com/nats-io/nats.py) and [nats.go](https://github.com/nats-io/nats.go).
 
 With this package you can bring the power of the publish/subscribe mechanism to your Tcl and significantly simplify development of distributed applications.
 
@@ -22,16 +22,17 @@ Simply clone the repository in some place where Tcl will be able to find it, e.g
 ## Supported features
 - Publish and subscribe to messages, also with headers (NATS version 2.2)
 - Synchronous and asynchronous requests (optimized: under the hood a single wildcard subscription is used for all requests)
-- Basic JetStream support
+- Basic JetStream support: publish and consume messages from a stream in sync and async manners
 - Queue groups
 - Client-side validation of subjects
 - Standard `configure` interface with many options
 - Automatic reconnection in case of network or server failure
 - While the client is trying to reconnect, outgoing messages are buffered in memory and will be flushed as soon as the connection is restored
-- Authentication with NATS server using a login+password, an authentication token or an SSH certificate
+- Authentication with NATS server using a login+password, an authentication token or a TLS certificate
 - Protected connections using TLS
 - Cluster support (including receiving additional server addresses from INFO messages)
 - Logging using the standard Tcl [logger](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/log/logger.md) package
+- Extensive test suite with 80+ unit tests, checking nominal use cases, error handling, timings and the wire protocol ensures that the Tcl client behaves in line with official NATS clients
 
 ## Usage
 

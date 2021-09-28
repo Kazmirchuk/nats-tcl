@@ -7,8 +7,8 @@ package require lambda
 package require tcltest
 
 # shortcut to locate the nats package; use proper Tcl mechanisms in production! e.g. TCLLIBPATH
-set thisDir [file dirname [info script]]
-lappend auto_path [file normalize [file join $thisDir ..]]
+set thisDir [file dirname [file normalize [info script]]]
+lappend auto_path [file join $thisDir ..]
 package require nats
 
 source [file join $thisDir test_utils.tcl]

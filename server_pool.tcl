@@ -69,7 +69,12 @@ oo::class create ::nats::server_pool {
         
         #uri::split will return a dict with these keys: scheme, host, port, user, pwd (and others)
         # note that these keys will always be present even if empty
-        array set parsed [uri::split "http://$dummy_url"]
+        # NB! starting from version 1.2.7, uri::split throws an error in case of invalid URI
+        try {
+            array set parsed [uri::split "http://$dummy_url"]
+        } on error err {
+            throw {NATS ErrInvalidArg} "Invalid URL $url"
+        }
         # if the port is not a number, it will end up in "path", e.g. http://foo:202a => path=a
         # so check that the path is empty 
         if {$parsed(host) eq "" || $parsed(path) ne ""} {

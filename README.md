@@ -12,10 +12,6 @@ With this package you can bring the power of the publish/subscribe mechanism to 
 
 The package is written in pure Tcl, without any C code, and so will work anywhere with `Tcl 8.6` and `Tcllib`. If you need to connect to a NATS server using TLS, of course you will need the `tls` package too.
 
-It has been tested on Windows 10 using the latest pre-built Tcl available from ActiveState (Tcl 8.6.9, Tcllib 1.18) and on openSUSE Leap 15.1 using self-built Tcl of the same version. It might work on earlier versions too.
-
-Regarding the NATS server version, I tested against v2.1.7, and the package should work with all previous releases of NATS, because the protocol remained very stable over years.
-
 ## Installing
 Simply clone the repository in some place where Tcl will be able to find it, e.g. in `$auto_path` or `$tcl_library`. No need to compile anything!
 
@@ -129,13 +125,18 @@ $jet_stream publish "test.1" "msg 1" -callback pubAsyncCallback -timeout 1000
 - The new authentication mechanism using NKey & [JWT](https://docs.nats.io/developing-with-nats/security/creds). This one will be difficult to do, because it requires support for _ed25519_ cryptography that is missing in Tcl AFAIK. Please let me know if you need it.
 
 ## Running tests
+
+The library has been tested on Windows 10 using the latest pre-built Tcl available from ActiveState (Tcl 8.6.9, Tcllib 1.18, TLS 1.7.16) and on CentOS 8.2 using Tcl from the distribution (Tcl 8.6.8, Tcllib 1.19, TLS 1.7.21). It might work on earlier versions too.
+
+Regarding the NATS server version, I tested against v2.4.0, and the package should work with all previous releases of NATS, because the protocol remained very stable over years. Of course, JetStream and message headers need NATS 2.2+.
+
 The tests are based on the standard Tcl unit testing framework, [tcltest](https://www.tcl.tk/man/tcl8.6/TclCmd/tcltest.htm). Simply run `tclsh tests/all.tcl` and the tests will be executed one after another. They assume that `nats-server` is available in your `$PATH`, but it should **not** be already running. 
 
 And this is how you can run just one test script: `tclsh tests/all.tcl -file basic.test`
 
-To run the TLS tests, you will need to provide certificates yourself in `cert` subfolder. E.g. you can generate them using [mkcert](https://docs.nats.io/nats-server/configuration/securing_nats/tls#self-signed-certificates-for-testing).
+To run the TLS tests, you will need to provide certificates yourself in `tests/cert` subfolder. E.g. you can generate them using [mkcert](https://docs.nats.io/nats-server/configuration/securing_nats/tls#self-signed-certificates-for-testing).
 
-To run Jet Stream tests `nats` command from [nats-cli](https://github.com/nats-io/natscli) needs to be available in you `$PATH` (it is additional tool for NATS server configuration - creating streams, consumers etc. which is not supported by this library yet).
+To run Jet Stream tests `nats` command from [nats-cli](https://github.com/nats-io/natscli) needs to be available in you `$PATH` (it is an additional tool for NATS server configuration - creating streams, consumers etc. which is not supported by this library yet).
 
 Tests are numbered to reflect their dependency, i.e. tests from the same group (e.g. basic-2.1, basic-2.2 and basic-2.3) are dependent on each other. Tests from different groups should be independent, except basic assumptions about a NATS connection and e.g. a running Responder.
 

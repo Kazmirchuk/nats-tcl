@@ -58,10 +58,10 @@ oo::class create ::nats::connection {
 
         # initialise default configuration
         foreach option $nats::option_syntax {
-            lassign $option name defValue comment
+            lassign $option optName defValue comment
             #drop everything after dot
-            set name [lindex [split $name .] 0]
-            set config($name) $defValue
+            set optName [lindex [split $optName .] 0]
+            set config($optName) $defValue
         }
         set config(name) $conn_name
         # create a logger with a unique name, smth like Obj58
@@ -730,7 +730,7 @@ oo::class create ::nats::connection {
                                     tls_required [nats::bool2json $tls_done] \
                                     name [json::write::string $config(name)] \
                                     lang [json::write::string Tcl] \
-                                    version [json::write::string 0.9] \
+                                    version [json::write::string 1.0] \
                                     protocol 1 \
                                     echo [nats::bool2json $config(echo)] ] 
             
@@ -1238,7 +1238,7 @@ proc ::nats::get_default {dict_val key def} {
 # so I end up with the same message logged twice. Let's suppress stderr altogether
 proc ::nats::tls_callback {args} { }
 
-package provide nats 0.9
+package provide nats 1.0
 
 # Let me respectfully remind you:
 # Birth and death are of supreme importance.

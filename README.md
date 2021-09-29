@@ -85,40 +85,38 @@ $conn request service "I need help" -timeout 1000 -callback asyncReqCallback
 # Finally don't forget to delete our object. Again, this is standard TclOO.
 # All pending outgoing messages will be flushed, and the TCP socket will be closed.
 $conn destroy
-
-###  JetStream support  ###
-# get jet_stream object to use jet stream api
+```
+JetStream example:
+```Tcl
 set jet_stream [$conn jet_stream]
+# Having created a stream and a durable consumer, you can pull messages using 
+# the "consume" method in the sync or async form:
+set msg [$jet_stream consume my_stream my_consumer]
 
-# to consume messages use "consume" method (pull consumer) in sync or async form
-# its arguments are stream name and consumer name, optional: -timeout, -callback as in original request method
-set result [$jet_stream consume my_stream my_consumer]
+# and don't forget to acknowlege the consumed message:
+$jet_stream ack $msg
 
-# received result contains one additional variable "ackAddr" (so response is list in form {message ackAddr})
-# ackAddr is used to acknowlege consumed (received) message to server
-lassign $result msg ackAddr
-$jet_stream ack $ackAddr
-
-# consume can also be used in asynchronous manner
-proc consumeAsyncCallback {timedOut msg ackAddr} {
+# consume can also be used in the asynchronous manner using the same callback as asyncReqCallback:
+proc consumeAsyncCallback {timedOut msg} {
     # do sth...
-    $jet_stream ack $ackAddr
+    $jet_stream ack $msg
 }
+# consume a batch of 100 messages within the next 10 seconds
+# the callback will be invoked once for each message
+$jet_stream consume my_stream my_consumer -callback consumeAsyncCallback -timeout 10000 -batch_size 100
 
-$jet_stream consume my_stream my_consumer -callback consumeAsyncCallback -timeout 1000
+# publishing to jet stream can be done using the publish method
+# synchronous varsion:
+$jet_stream publish test.1 "msg 1"
 
-# publishing to jet stream can be done using publish on jet_stream object
-# synchronous varsion
-$jet_stream publish "test.1" "msg 1"
-
-# asynchronous version
-proc pubAsyncCallback {timedOut info error} {
-    # if "error" is not empty it is dict containing "type" and "error" keys sended from NATS server
-    # if "error" is empty, publish was successfull and "info" is dict containing "stream", "seq" and optionally "duplicate"
+# asynchronous version:
+proc pubAsyncCallback {timedOut pubAck error} {
+    # if "error" is not empty it is a dict containing decoded JSON from NATS server
+    # if "error" is empty, publish was successfull and "pubAck" is a dict containing "stream", "seq" and optionally "duplicate"
     ...
 }
 
-$jet_stream publish "test.1" "msg 1" -callback pubAsyncCallback -timeout 1000
+$jet_stream publish test.1 "msg 1" -callback pubAsyncCallback -timeout 1000
 ```
 
 ## Missing features (in comparison to official NATS clients)
@@ -138,8 +136,8 @@ To run the TLS tests, you will need to provide certificates yourself in `tests/c
 
 If you get debug output in stderr from C code in the TLS package, it must have been compiled with `#define TCLEXT_TCLTLS_DEBUG` (seems to be default in the EPEL repo). You'll need to recompile TclTLS yourself without this flag.
 
-To run Jet Stream tests `nats` command from [nats-cli](https://github.com/nats-io/natscli) needs to be available in you `$PATH` (it is an additional tool for NATS server configuration - creating streams, consumers etc. which is not supported by this library yet).
+The JetStream tests rely on the `nats` command from [nats-cli](https://github.com/nats-io/natscli) available in your `$PATH` (it is an additional tool for NATS server configuration - creating streams, consumers etc. which is not supported by this library yet).
 
-Tests are numbered to reflect their dependency, i.e. tests from the same group (e.g. basic-2.1, basic-2.2 and basic-2.3) are dependent on each other. Tests from different groups should be independent, except basic assumptions about a NATS connection and e.g. a running Responder.
+Tests are numbered to reflect their dependency, i.e. tests from the same group (e.g. basic-2.1, basic-2.2 and basic-2.3) are dependent on each other. Tests from different groups should be ~independent, except basic assumptions about a NATS connection and e.g. a running Responder.
 
 While most of the tests stick to the public API, some of them need to hack into package's internals to verify some behavioural aspects. This is *not* an invitation for users to do the same! If you are missing a function in API, please let me know.

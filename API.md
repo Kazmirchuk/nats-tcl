@@ -39,8 +39,8 @@ All callbacks are treated as command prefixes (like [trace](https://www.tcl.tk/m
 
 ## Message headers
 When using NATS server version 2.2 and later, you can publish and receive messages with [headers](https://pkg.go.dev/github.com/nats-io/nats.go?utm_source=godoc#Header). Please, keep in mind that:
-- keys are case-sensitive (unlike with standard HTTP headers)
-- duplicate keys are allowed (just like with standard HTTP headers). In Tcl this is represented as a key pointing to a *list* of values, mimicking the same API as in nats.go and nats.java.
+- keys are case-sensitive (unlike standard HTTP headers)
+- duplicate keys are allowed (just like standard HTTP headers). In Tcl this is represented as a key pointing to a *list* of values, mimicking the same API as in nats.go and nats.java.
 - `Status` and `Description` keys are reserved by the NATS protocol, in particular for implementation of the [no-responders](https://docs.nats.io/whats_new_22#react-quicker-with-no-responder-notifications) feature.
 
 Examples of valid headers:
@@ -62,6 +62,7 @@ The dict has 5 keys:
 - sub_id - subscription ID
 
 All keys are always present in the dict, but some of them can be empty. <br />
+Instead of passing `-dictmsg true` to every call, you can `configure` your connection to return messages always as dicts.<br />
 If you have received a message with a header, but have *not* used `-dictmsg true`, this is not an error: the header is discarded, and you get back only the message body as a string, as usual.<br />
 Note that the JetStream API **always** returns messages as dicts.
 
@@ -80,30 +81,31 @@ The **configure** method accepts the following options. Make sure to set them *b
 
 | Option        | Type   | Default | Comment |
 | ------------- |--------|---------|---------|
-| servers (mandatory)      | list   |         | URLs of NATS servers|
-| name          | string |         | Client name sent to NATS server when connecting|
-| pedantic      | boolean |false   | Pedantic protocol mode. If true some extra checks will be performed by NATS server|
-| verbose       | boolean | false | If true, every protocol message is echoed by the server with +OK. Has no effect on functioning of the client itself |
-|connect_timeout | integer | 2000 | Connection timeout (ms) |
-| reconnect_time_wait | integer | 2000 | How long to wait between two reconnect attempts to the same server (ms)|
-| max_reconnect_attempts | integer | 60 | Maximum number of reconnect attempts per server. Set it to -1 for infinite attempts. |
-| ping_interval | integer | 120000 | Interval (ms) to send PING messages to a NATS server|
-| max_outstanding_pings | integer | 2 | Max number of PINGs without a reply from a NATS server before closing the connection |
-| echo | boolean | true | If true, messages from this connection will be echoed back by the server if the connection has matching subscriptions|
-| tls_opts | list | | Additional options for `tls::import` - here you can provide `-cafile` etc |
-| default_tls_opts | list | -require 1 <br /> -command nats::tls_callback | Default options for `tls::import` - rarely need to be changed; effective list of options for tcl::import will be combination of default_tls_opts and tls_opts|
-| user | string | | Default username|
-| password | string |   | Default password|
-| token | string | | Default authentication token|
-| secure | boolean | false | If secure=true, connection will fail if a server can't provide a TLS connection |
-| check_subjects | boolean | true | Enable client-side checking of subjects when publishing or subscribing |
-| dictmsg | boolean | false | Return messages from `subscribe` and `request` as dicts by default |
+| -servers (mandatory)      | list   |         | URLs of NATS servers|
+| -name          | string |         | Client name sent to NATS server when connecting|
+| -pedantic      | boolean |false   | Pedantic protocol mode. If true some extra checks will be performed by NATS server|
+| -verbose       | boolean | false | If true, every protocol message is echoed by the server with +OK. Has no effect on functioning of the client itself |
+| -randomize | boolean | true | Shuffle server addresses passed to `configure`| 
+| -connect_timeout | integer | 2000 | Connection timeout (ms) |
+| -reconnect_time_wait | integer | 2000 | How long to wait between two reconnect attempts to the same server (ms)|
+| -max_reconnect_attempts | integer | 60 | Maximum number of reconnect attempts per server. Set it to -1 for infinite attempts. |
+| -ping_interval | integer | 120000 | Interval (ms) to send PING messages to a NATS server|
+| -max_outstanding_pings | integer | 2 | Max number of PINGs without a reply from a NATS server before closing the connection |
+| -echo | boolean | true | If true, messages from this connection will be echoed back by the server, if the connection has matching subscriptions|
+| -tls_opts | list | | Additional options for `tls::import` - here you can provide `-cafile` etc |
+| -default_tls_opts | list | -require 1 <br /> -command nats::tls_callback | Default options for `tls::import` - rarely need to be changed; effective list of options for `tls::import` will be combination of default_tls_opts and tls_opts|
+| -user | string | | Default username|
+| -password | string |   | Default password|
+| -token | string | | Default authentication token|
+| -secure | boolean | false | If secure=true, connection will fail if a server can't provide a TLS connection |
+| -check_subjects | boolean | true | Enable client-side checking of subjects when publishing or subscribing |
+| -dictmsg | boolean | false | Return messages from `subscribe` and `request` as dicts by default |
 | -? | | | Provides interactive help with all options|
 
 ## Description
 
 ### constructor ?conn_name?
-Creates a new instance of the TclOO object `nats::connection` with default options and initialises a [logger](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/log/logger.md) instance with the severity level set to `warn`. If you pass in a connection name, it will be sent to NATS in a `CONNECT` message, and will be indicated in the logger name.
+Creates a new instance of the TclOO object `nats::connection` with default options and initialises a [logger](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/log/logger.md) instance with the severity level set to `warn`. If you pass in a connection name, it is sent to NATS in a `CONNECT` message, and is indicated in the logger name.
 
 ### objectName cget option
 Returns the current value of an option as described above. 
@@ -112,13 +114,13 @@ Returns the current value of an option as described above.
 When given no arguments, returns a dict of all options with their current values. When given one option, returns its current value (same as `cget`). When given more arguments, assigns each value to an option. The only mandatory option is `servers`, and others have reasonable defaults. Under the hood it is implemented using the [cmdline::getoptions](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/cmdline/cmdline.md#3) command, so it understands the special `-?` option for interactive help.
 
 ### objectName reset ?option ... ?
-Resets the option(s) to the default value.
+Resets the option(s) to default values.
 
 ### objectName connect ?-async? 
-Opens a TCP connection to one of the NATS servers specified in the `servers` list. Unless the `-async` option is given, this call blocks in a `vwait` loop until the connection is completed, including a TLS handshake if needed.
+Opens a TCP connection to one of the NATS servers specified in the `servers` list. Unless the `-async` option is given, this call blocks in a (coroutine-aware) `vwait` loop until the connection is completed, including a TLS handshake if needed.
 
 ### objectName disconnect 
-Flushes all outgoing data, closes the TCP connection and sets the `status` to "closed". Pending asynchronous requests are cancelled.
+Flushes all outgoing data, closes the TCP connection and sets the `status` to `$nats::status_closed`. Pending asynchronous requests are cancelled.
 
 ### objectName publish subject message ?args?
 This method can be used in 2 ways. The simple way:
@@ -130,7 +132,7 @@ and if you need extra options:
 objectName publish subject message ?-header header? ?-reply reply?
 ```
 Publishes a message to the specified subject. See the NATS [documentation](https://docs.nats.io/nats-concepts/subjects) for more details about subjects and wildcards. The client will check subject's validity before sending. Allowed characters are Latin-1 characters, digits, dot, dash and underscore. <br/>
-`message` is sent as is, it can be a binary string. If you specify a `reply` subject, a responder will know where to send a reply. You can use the `inbox` method to generate a transient [subject name](https://docs.nats.io/developing-with-nats/sending/replyto) starting with _INBOX. However, using asynchronous requests might accomplish the same task in an easier manner - see below.<br/>
+`message` is sent as is, and it can be a binary string. If you specify a `reply` subject, a responder will know where to send a reply. You can use the `inbox` method to generate a transient [subject name](https://docs.nats.io/developing-with-nats/sending/replyto) starting with _INBOX. However, using asynchronous requests might accomplish the same task in an easier manner - see below.<br/>
 When using NATS server version 2.2 and later, you can provide a `header` with the message. 
 
 ### objectName subscribe subject ?-queue queueGroup? ?-callback cmdPrefix? ?-max_msgs maxMsgs? ?-dictmsg dictmsg?
@@ -151,7 +153,7 @@ Default timeout is unlimited. <br />
 In case multiple responses are received, only the first one is returned. If you need to gather all responses, you can specify the expected number with the `-max_msgs` option, and in this case the callback becomes mandatory. If `timeout` is specified, it will fire if not all `maxMsgs` have been received. Note that using the `-max_msgs` option will create an "old" style request, with a separate subscription per each request.
 
 ### objectName ping ?-timeout ms?
-A blocking call that triggers a ping-pong exchange with the NATS server and returns true upon success. If the server does not reply within the specified timeout (ms), it raises `TIMEOUT` error. Default timeout is 10s. You can use this method to check if the server is alive.
+A blocking call that triggers a ping-pong exchange with the NATS server and returns true upon success. If the server does not reply within the specified timeout (ms), it raises `TIMEOUT` error. Default timeout is 10s. You can use this method to check if the server is alive. Note that in other NATS clients this function is usually called "flush".
 
 ### objectName inbox 
 Returns a new inbox - random subject starting with _INBOX.
@@ -160,19 +162,19 @@ Returns a new inbox - random subject starting with _INBOX.
 Returns a 2-element list with host and port of the current NATS server.
 
 ### objectName all_servers
-Returns a list with all servers in the pool
+Returns a list with all servers in the pool.
 
 ### objectName server_info
-Returns a dict with the INFO message from the current server
+Returns a dict with the INFO message from the current server.
 
 ### objectName logger 
 Returns a logger instance.
 
 ### objectName destroy
-TclOO destructor. Flushes pending data and closes the TCP socket.
+TclOO destructor. It calls `disconnect` and then destroys the object.
 
 ### objectName jet_stream
-Returns `jetStreamObject` TclOO object to work with [JetStreams](https://docs.nats.io/jetstream/jetstream).
+Returns `jetStreamObject` TclOO object to work with [JetStream](https://docs.nats.io/jetstream/jetstream).
 
 ### jetStreamObject consume stream consumer ?-timeout ms? ?-callback cmdPrefix? ?-batch_size batch_size?
 Consume a message or `batch_size` number of messages from a [consumer](https://docs.nats.io/jetstream/concepts/consumers) defined on a [stream](https://docs.nats.io/jetstream/concepts/streams). Similarly to the `request` method:
@@ -185,8 +187,8 @@ Default `batch_size` is 1. `batch_size`>1 is possible only in the async version,
 Acknowledge the received `message` from the *jetStreamObject* **consume** method. If the message is not acknowledged, it is redelivered on next `consume` (depending on NATS server settings).
 
 ### jetStreamObject publish subject message ?-timeout ms? ?-callback cmdPrefix? ?-header header?
-Publish `message` to a [stream](https://docs.nats.io/jetstream/concepts/streams) on the specified `subject` and wait for acknowledgement. `timeout` and `cmdPrefix` have similar meaning as in `request` method. If no stream exists on specified `subject`, the call will be blocked waiting.
-- In synchronous version the method returns a response from server as a dict containing `stream`, `seq` and optionally `duplicate` keys. If NATS server returned an error response, it raises `ErrResponse`.
+Publish `message` to a [stream](https://docs.nats.io/jetstream/concepts/streams) on the specified `subject`. `timeout` and `cmdPrefix` have similar meaning as in `request` method. If no stream exists on specified `subject`, the call will raise `ErrNoResponders`.
+- In synchronous version the method waits for acknowledgement and returns a response from server as a dict containing `stream`, `seq` and optionally `duplicate` keys. If NATS server returned an error, it raises `ErrJSResponse`.
 - In asynchronous version `cmdPrefix` callback is called with 3 additional arguments: `timedOut` (true, if the request timed out), `pubAck` and `error`. If `error` is not empty, it is a dict containing `code` and `description` JSON keys sent by NATS server, otherwise `pubAck` contains information passed from NATS server as a dict with keys: `stream`, `seq` and optionally `duplicate`.
 
 ## Error handling
@@ -196,9 +198,9 @@ All synchronous errors are raised using `throw {NATS <error_code>} human-readabl
 ```Tcl
 try {
   ...
-} trap {NATS ErrTimeout} {msg opts} {
+} trap {NATS ErrTimeout} {err opts} {
  # handle a request timeout  
-} trap {NATS} {msg opts} {
+} trap {NATS} {err opts} {
   # handle other NATS errors
 }
 ```
@@ -214,8 +216,8 @@ try {
 | ErrTimeout | Timeout of a synchronous request, ping or JetStream's `consume` |
 | ErrNoResponders | No responders are available for request |
 | ErrHeadersNotSupported| Headers are not supported by this server |
-| ErrInvalidJSAck | Invalid JSON when parsing a JS publish acknowledgement |
-| ErrJSResponse \<NATS err code\> | Negative JS publish acknowledgement. |
+| ErrInvalidJSAck | Invalid JSON when parsing a JetStream publish acknowledgement |
+| ErrJSResponse \<NATS err code\> | Negative JetStream publish acknowledgement. |
 
 Asynchronous errors are sent to the logger and can also be queried/traced using 
 `$last_error`, for example:
@@ -224,13 +226,14 @@ set err [set ${conn}::last_error]
 puts "Error code: [dict get $err code]"
 puts "Error text: [dict get $err errorMessage]"
 ```
+If the TCP connection fails, the client will try the next server from the pool.
 | Error type        | Reason   | 
 | ------------- |--------|
 | ErrBrokenSocket | TCP socket failed |
 | ErrTLS | TLS handshake failed |
 | ErrStaleConnection | The client or server closed the connection, because the other party did not respond to PING on time |
-| ErrConnectionRefused | TCP connection to a NATS server was refused, possibly due to wrong port, or the server was not running; the client will try the next server from the pool |
-| ErrSecureConnWanted | Client requires TLS, but a NATS server does not provide TLS; the client will try the next server from the pool |
+| ErrConnectionRefused | TCP connection to a NATS server was refused, possibly due to wrong port, or the server was not running;  |
+| ErrSecureConnWanted | Client requires TLS, but a NATS server does not provide TLS |
 | ErrConnectionTimeout | Connection to a server could not be established within connect_timeout ms |
 | ErrBadHeaderMsg | The client failed to parse message headers. Nevertheless, the message body is delivered |
 | ErrServer | Generic error reported by NATS server |

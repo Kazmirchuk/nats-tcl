@@ -23,7 +23,7 @@ test basic-1 "Connect NATS" -body {
     $conn connect
     set chanData [$obs getChanData]
     # if the server supports headers, the client sends headers:true, no_responders:true as well, no need to check for them, so just *
-    assert {[string match {CONNECT {"verbose":false,"pedantic":false,"tls_required":false,"name":"BasicNats","lang":"Tcl","version":"0.9","protocol":1,"echo":true*}} $chanData]}
+    assert {[string match {CONNECT {"verbose":false,"pedantic":false,"tls_required":false,"name":"BasicNats","lang":"Tcl","version":"1.0","protocol":1,"echo":true*}} $chanData]}
     $obs destroy
     set ${conn}::last_error
 } -result {}

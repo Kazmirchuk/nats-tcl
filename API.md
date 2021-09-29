@@ -153,7 +153,7 @@ Default timeout is unlimited. <br />
 In case multiple responses are received, only the first one is returned. If you need to gather all responses, you can specify the expected number with the `-max_msgs` option, and in this case the callback becomes mandatory. If `timeout` is specified, it will fire if not all `maxMsgs` have been received. Note that using the `-max_msgs` option will create an "old" style request, with a separate subscription per each request.
 
 ### objectName ping ?-timeout ms?
-A blocking call that triggers a ping-pong exchange with the NATS server and returns true upon success. If the server does not reply within the specified timeout (ms), it raises `TIMEOUT` error. Default timeout is 10s. You can use this method to check if the server is alive. Note that in other NATS clients this function is usually called "flush".
+A blocking call that triggers a ping-pong exchange with the NATS server and returns true upon success. If the server does not reply within the specified timeout (ms), it raises `ErrTimeout`. Default timeout is 10s. You can use this method to check if the server is alive. Note that in other NATS clients this function is usually called "flush".
 
 ### objectName inbox 
 Returns a new inbox - random subject starting with _INBOX.

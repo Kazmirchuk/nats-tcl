@@ -10,7 +10,7 @@ With this package you can bring the power of the publish/subscribe mechanism to 
 
 ## Supported platforms
 
-The package is written in pure Tcl, without any C code, and so will work anywhere with `Tcl 8.6` and `Tcllib`. If you need to connect to a NATS server using TLS, of course you will need the `tls` package too.
+The package is written in pure Tcl, without any C code, and so will work anywhere with `Tcl 8.6` and `Tcllib`. If you need to connect to a NATS server using TLS, of course you will need the `TclTLS` package too.
 
 ## Installing
 Simply clone the repository in some place where Tcl will be able to find it, e.g. in `$auto_path` or `$tcl_library`. No need to compile anything!

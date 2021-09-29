@@ -66,10 +66,10 @@ test tls-2.2 "Connect to NATS with client verification - failed" -constraints tl
 
 test tls-2.3 "Check last error" -constraints tls -body {
     set le [set ${conn}::last_error]
-    assert {[dict get $le code] eq {NATS ErrTLS}} 1
-    assert {[set ${conn}::status] == $nats::status_closed} 1
-    dict get $le errorMessage
-} -match glob -result {*bad certificate} 
+    # I get ErrTLS on Windows and ErrBrokenSocket on Linux
+    assert {[dict get $le code] eq {NATS ErrTLS} || [dict get $le code] eq {NATS ErrBrokenSocket} } 1
+    set ${conn}::status
+} -result $nats::status_closed
 
 test tls-3.1 "Connect to NATS without TLS" -constraints tls -setup {
     startNats NATS

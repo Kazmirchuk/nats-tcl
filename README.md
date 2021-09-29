@@ -136,6 +136,8 @@ And this is how you can run just one test script: `tclsh tests/all.tcl -file bas
 
 To run the TLS tests, you will need to provide certificates yourself in `tests/cert` subfolder. E.g. you can generate them using [mkcert](https://docs.nats.io/nats-server/configuration/securing_nats/tls#self-signed-certificates-for-testing).
 
+If you get debug output in stderr from C code in the TLS package, it must have been compiled with `#define TCLEXT_TCLTLS_DEBUG` (seems to be default in the EPEL repo). You'll need to recompile TclTLS yourself without this flag.
+
 To run Jet Stream tests `nats` command from [nats-cli](https://github.com/nats-io/natscli) needs to be available in you `$PATH` (it is an additional tool for NATS server configuration - creating streams, consumers etc. which is not supported by this library yet).
 
 Tests are numbered to reflect their dependency, i.e. tests from the same group (e.g. basic-2.1, basic-2.2 and basic-2.3) are dependent on each other. Tests from different groups should be independent, except basic assumptions about a NATS connection and e.g. a running Responder.

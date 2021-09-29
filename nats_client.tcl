@@ -1051,7 +1051,14 @@ oo::class create ::nats::connection {
             readable {
                 # the chan readable event will be sent again and again for as long as there's pending data
                 # so I don't need a loop around [chan gets] to read all lines, even if they arrive together
-                set readCount [chan gets $sock line]
+                try {
+                    set readCount [chan gets $sock line]
+                } trap {POSIX ECONNABORTED} {err errOpts} {
+                    # can happen only on Linux
+                    lassign [my current_server] host port
+                    my AsyncError ErrBrokenSocket "Server $host:$port [lindex [dict get $errOpts -errorcode] end]" 1
+                    return
+                }
                 if {$readCount < 0} {
                     if {[eof $sock]} { 
                         #set err [chan configure $sock -error] - no point in this, $err will be blank

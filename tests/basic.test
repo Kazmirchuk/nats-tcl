@@ -18,8 +18,6 @@ set conn [nats::connection new "BasicNats"]
 
 $conn configure -servers nats://localhost:4222
 
-startResponder
-
 test basic-1 "Connect NATS" -body {
     set obs [test_utils::chanObserver new $conn w]
     $conn connect
@@ -100,8 +98,10 @@ test basic-3.1 "Subscribe to a limited number of messages" -body {
 }  -result 10
 
 test basic-3.2 "SubID has expired after -max_msgs" -body {
-    $conn unsubscribe $sub_id
-} -match glob -result {Invalid subscription ID*} -returnCodes {error} -errorCode {NATS ErrBadSubscription}
+    catch {$conn unsubscribe $sub_id} err errOpts
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrBadSubscription}}
+    set err
+} -match glob -result {Invalid subscription ID*}
 
 test basic-4.1 "Subscribe and unsubscribe with -max_msgs" -body {
     set msg_count 0
@@ -134,7 +134,9 @@ test basic-4.1 "Subscribe and unsubscribe with -max_msgs" -body {
     set msg_count
 } -result 10
 
-test basic-5.1 "Synchronous request" -body {
+test basic-5.1 "Synchronous request" -setup {
+    startResponder $conn
+} -body {
     set obs [chanObserver new $conn b]
     duration {
         set result [$conn request service "0 hello"]
@@ -241,15 +243,7 @@ test basic-11 "2 asynchronous requests" -body {
     assert {[approx $elapsed 540]} 
 }
 
-# testing confirmed that
-# [binary decode hex 0a68656c6c6f00776f726c640d0a]  :internal representation = bytearray,no string representation
-# "\nhello\0world\r\n" :internal representation = string
-# [encoding convertfrom identity "\nhello\0world\r\n"] :internal representation = pure string (deprecated by https://core.tcl-lang.org/tips/doc/trunk/tip/345.md)
-# produce exactly the same byte arrays
-# a byte array without string rep can be created as
-# set x [binary format a* $x]
 # exchange of byte arrays has been tested manually with cnats in both directions
-
 test basic-12 "Sending and receiving a binary message" -body {
     set binString "\nhello\0world\r\n" ;# include a null byte and CR+LF that is a delimiter in the NATS protocol
     set sub_id [$conn subscribe bin_subj -callback test_utils::simpleCallback]
@@ -268,7 +262,7 @@ test basic-13 "Binary message request" -body {
 }
 
 for {set i 0} { $i < 5} {incr i} {
-    startResponder multi_subj
+    startResponder $conn multi_subj
 }
 
 test basic-14 "Synchronous request with multiple responders" -body {
@@ -304,10 +298,10 @@ stopResponder $conn multi_subj ;# stop all 5 responders
 test basic-16 "Queue groups and publish with replyTo" -body {
     # start 2 responders on queue group QG1 and 3 more on QG2
     for {set i 0} { $i < 2} {incr i} {
-        startResponder test_qg QG1
+        startResponder $conn test_qg QG1
     }
     for {set i 0} { $i < 3} {incr i} {
-        startResponder test_qg QG2
+        startResponder $conn test_qg QG2
     }
     set msg_count 0
     set myReplyTo [$conn inbox]

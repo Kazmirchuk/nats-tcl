@@ -47,4 +47,5 @@ if {$queue eq "" } {
 }
 
 puts "Responder listening on $subj : $queue"
+$conn publish "$subj.ready" {} ;# test_utils::startResponder is waiting for this message
 vwait forever

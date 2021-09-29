@@ -16,6 +16,7 @@ namespace eval test_utils {
     variable sleepVar 0
     variable simpleMsg ""
     variable commPort 4221
+    variable responderReady 0
     
     # sleep $delay ms in the event loop
     proc sleep {delay} {
@@ -225,13 +226,17 @@ namespace eval test_utils {
         puts "[nats::timestamp] Executed: nats $args"
     }
     
-    # processman::kill doesn't work reliably with tclsh, so instead we send a NATS message to stop the responder gracefully
-    proc startResponder { {subj "service"} {queue ""} {dictMsg 0}} {
+    proc startResponder {conn {subj "service"} {queue ""} {dictMsg 0}} {
+        variable responderReady
+        $conn subscribe "$subj.ready" -max_msgs 1 -callback [lambda {subject message replyTo} {
+            set test_utils::responderReady 1
+        }]
         set scriptPath [file join [file dirname [info script]] responder.tcl]
         exec [info nameofexecutable] $scriptPath $subj $queue $dictMsg &
-        sleep 500
+        wait_for test_utils::responderReady 1000
     }
     
+    # processman::kill doesn't work reliably with tclsh, so instead we send a NATS message to stop the responder gracefully
     proc stopResponder {conn {subj "service"}} {
         $conn publish $subj [list 0 exit]
         wait_flush $conn

@@ -14,7 +14,7 @@ package require nats
 [*objectName* **publish** *subject message ?args?*](#objectName-publish-subject-message-args) <br/>
 [*objectName* **subscribe** *subject ?-queue queueGroup? ?-callback cmdPrefix? ?-max_msgs maxMsgs? ?-dictmsg dictmsg?*](#objectName-subscribe-subject--queue-queueGroup--callback-cmdPrefix--max_msgs-maxMsgs--dictmsg-dictmsg) <br/>
 [*objectName* **unsubscribe** *subID ?-max_msgs maxMsgs?*](#objectName-unsubscribe-subID--max_msgs-maxMsgs) <br/>
-[*objectName* **request** *subject message ?-timeout ms? ?-callback cmdPrefix? ?-dictmsg dictmsg? ?-header header?*](#objectName-request-subject-message--timeout-ms--callback-cmdPrefix--dictmsg-dictmsg--header-header) <br/>
+[*objectName* **request** *subject message ?-timeout ms? ?-callback cmdPrefix? ?-dictmsg dictmsg? ?-header header? ?-max_msgs maxMsgs?*](#objectName-request-subject-message--timeout-ms--callback-cmdPrefix--dictmsg-dictmsg--header-header--max_msgs-maxMsgs) <br/>
 [*objectName* **ping** *?-timeout ms?*](#objectName-ping--timeout-ms) <br/>
 [*objectName* **inbox**](#objectName-inbox) <br/>
 [*objectName* **current_server**](#objectName-current_server) <br/>
@@ -140,13 +140,15 @@ By default, `message` is delivered as a string. Use `-dictmsg true` to receive `
 ### objectName unsubscribe subID ?-max_msgs maxMsgs? 
 Unsubscribes from a subscription with a given `subID` immediately. If `-max_msgs` is given, unsubscribes after this number of messages has been received **on this `subID`**. In other words, if you have already received 10 messages, and then you call `unsubscribe $subID -max_msgs 10`, you will be unsubscribed immediately.
 
-### objectName request subject message ?-timeout ms? ?-callback cmdPrefix? ?-dictmsg dictmsg? ?-header header?
+### objectName request subject message ?-timeout ms? ?-callback cmdPrefix? ?-dictmsg dictmsg? ?-header header? ?-max_msgs maxMsgs?
 Sends a message with an optional `-header` to the specified subject using an automatically generated transient `replyTo` subject (inbox). 
-- If no callback is given, the request is synchronous and blocks in (possibly, coroutine-aware) `vwait` until a response is received. The response is the return value. If no response arrives within `timeout`, it raises the error `ErrTimeout`. When using NATS server version 2.2 and later,  `ErrNoResponders` is raised if nobody is subscribed to `subject`.
-- If a callback is given, the call returns immediately, and when a response is received or a timeout fires, the command prefix will be invoked from the event loop with 2 additional arguments: `timedOut` (equal to 1, if the request timed out or no responders are available) and a `response`.<br />
+- If no callback is given, the request is synchronous and blocks in a (coroutine-aware) `vwait` until a response is received. The response is the return value of the method. If no response arrives within `timeout`, it raises the error `ErrTimeout`. When using NATS server version 2.2 and later,  `ErrNoResponders` is raised if nobody is subscribed to `subject`.
+- If a callback is given, the call returns immediately, and when a response is received or a timeout fires, the command prefix will be invoked from the event loop with 2 additional arguments: `timedOut` (equal to 1, if the request timed out or no responders are available) and a `response`.
 
+The request is done using the "new" style (in NATS terms), i.e. with one wildcard subscription serving all requests.<br />
 By default, `response` is delivered as a string. Use `-dictmsg true` to receive `response` as a dict, e.g. to access headers. You can also `configure` the connection to have `-dictmsg` as true by default for all calls.<br />
 Default timeout is unlimited. <br />
+In case multiple responses are received, only the first one is returned. If you need to gather all responses, you can specify the expected number with the `-max_msgs` option, and in this case the callback becomes mandatory. If `timeout` is specified, it will fire if not all `maxMsgs` have been received. Note that using the `-max_msgs` option will create an "old" style request, with a separate subscription per each request.
 
 ### objectName ping ?-timeout ms?
 A blocking call that triggers a ping-pong exchange with the NATS server and returns true upon success. If the server does not reply within the specified timeout (ms), it raises `TIMEOUT` error. Default timeout is 10s. You can use this method to check if the server is alive.

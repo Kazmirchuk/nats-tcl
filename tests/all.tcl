@@ -25,6 +25,7 @@ tcltest::configure -testdir $thisDir -singleproc 1 {*}$argv
 namespace import ::tcltest::test
 namespace import test_utils::*
 
+# NB! tcltest -errorCode is not available on Linux in Tcl 8.6.8, so I have to use [catch] instead
 tcltest::runAllTests
 
 exit $exitCode

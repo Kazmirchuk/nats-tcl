@@ -31,11 +31,11 @@ test server_pool-4 "Parse URL with a port number" -body {
 
 test server_pool-5.1 "Parse URL without a hostname" -body {
     $sp parse nats://:2020
-} -result {Invalid URL nats://:2020} -errorCode {NATS ErrInvalidArg}
+} -result {Invalid URL nats://:2020} -returnCodes error
 
 test server_pool-5.2 "Parse URL with invalid port number" -body {
     $sp parse nats://localhost:2a20
-} -result {Invalid URL nats://localhost:2a20} -errorCode {NATS ErrInvalidArg}
+} -result {Invalid URL nats://localhost:2a20} -returnCodes error
 
 test server_pool-6.1 "Configure multiple servers" -body {
     $conn configure -servers [list nats-server1.com nats://some_token@nats-server2.com tls://user:pass2@nats-server4.com:2020]

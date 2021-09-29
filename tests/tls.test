@@ -19,8 +19,10 @@ test tls-1.1 "Try connecting to NATS without CA" -constraints tls -setup {
     #debugLogging $conn
 } -body {
     $conn configure -servers localhost:4222
-    $conn connect ;# client will not recognize server's CA
-} -result {No servers available for connection} -returnCodes {error} -errorCode {NATS ErrNoServers}
+    catch {$conn connect} err errOpts ;# client will not recognize server's CA
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrNoServers}}
+    set err
+} -result {No servers available for connection}
 
 test tls-1.2 "Check last error" -constraints tls -body {
     set le [set ${conn}::last_error]
@@ -54,8 +56,10 @@ test tls-2.1 "Connect to NATS with client verification" -constraints tls -setup 
 
 test tls-2.2 "Connect to NATS with client verification - failed" -constraints tls -body {
     $conn configure -tls_opts [list -cafile rootCA.pem]
-    $conn connect
-} -result {No servers available for connection} -returnCodes {error} -errorCode {NATS ErrNoServers} -cleanup {
+    catch {$conn connect} err errOpts
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrNoServers}}
+    set err
+} -result {No servers available for connection} -cleanup {
     $conn reset -tls_opts
     stopNats NATS
 }
@@ -73,10 +77,10 @@ test tls-3.1 "Connect to NATS without TLS" -constraints tls -setup {
     # explicit TLS scheme in the URL means that client will require TLS from NATS
     # or you can specify secure=true in "configure"
     $conn configure -servers tls://localhost:4222 -tls_opts [list -cafile rootCA.pem]
-    $conn connect
-    assert { [string is true -strict [dict get [$conn server_info] tls_verify]]} 1
+    catch {$conn connect} err errOpts
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrNoServers}}
     set ${conn}::status
-} -result {No servers available for connection} -returnCodes {error} -errorCode {NATS ErrNoServers}
+} -result $nats::status_closed
 
 test tls-3.2 "Check last error" -constraints tls -body {
     set le [set ${conn}::last_error]

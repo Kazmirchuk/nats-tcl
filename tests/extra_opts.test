@@ -69,7 +69,7 @@ test extra_opts-2 "Check the echo=false option" -body {
     $conn publish no_echo "cold is the void" ;# we will not get this message back
     assert {[catch {wait_for test_utils::simpleMsg}] == 1}
     # but a request to another subscriber still works fine
-    startResponder no_echo
+    startResponder $conn no_echo
     set result [$conn request no_echo "0 hello"]
     assert {$result eq "hello"}
 } -cleanup {
@@ -216,7 +216,7 @@ test extra_opts-6.1 "Publish and receive a message with a header" -body {
 $conn connect
 
 test extra_opts-6.2 "Send requests with headers" -setup {
-    startResponder nats_2.2 "" 1
+    startResponder $conn nats_2.2 "" 1
 } -body {
     # test a sync request
     set header_out [dict create hdr1 val1]
@@ -290,16 +290,15 @@ test extra_opts-8 "Receive no-responders from a request" -body {
     assert { $elapsed < 100 }
 }
 
-test extra_opts-9 "Gather multiple responses to a request" -setup {
+test extra_opts-9.1 "Gather multiple responses to a request" -setup {
     for {set i 0} { $i < 3} { incr i } {
-        startResponder
+        startResponder $conn
     }
-    sleep 1000 ;#make sure they are all ready for requests
 } -body {
     set msg_received 0
     set exit_wait 0
-    # request with -max_msgs option is undocumented and for internal use only!
     $conn request service "0 I need help" -max_msgs 3 -callback [lambda {timedOut msg} {
+        assert {[string is false -strict $timedOut]}
         assert {$msg eq "I need help"}
         incr ::msg_received
         if {$::msg_received == 3} {
@@ -309,13 +308,33 @@ test extra_opts-9 "Gather multiple responses to a request" -setup {
     wait_for ::exit_wait 2000
     assert {$msg_received == 3}
     assert {[array size ${conn}::requests] == 0} 1
+}
+
+test extra_opts-9.2 "Gather multiple responses to a request - timeout" -body {
+    set msg_received 0
+    set exit_wait 0
+    # now we ask for -max_msgs=4
+    $conn request service "0 I need help" -max_msgs 4 -timeout 1000 -callback [lambda {timedOut msg} {
+        if {$timedOut} {
+            set ::exit_wait 1
+            return
+        }
+        assert {$msg eq "I need help"}
+        incr ::msg_received
+    }]
+    duration {
+        wait_for ::exit_wait 2000
+    } elapsed
+    assert {[approx $elapsed 1000]}
+    assert {$msg_received == 3}
+    assert {[array size ${conn}::requests] == 0} 1
 } -cleanup {
     # will stop all 3 responders
     stopResponder $conn
 }
 
 test extra_opts-10 "Send 2 sync requests in coroutines" -setup {
-    startResponder
+    startResponder $conn
 } -body {
     # prove that vwait in "request" is coroutine-aware
     set results [list]

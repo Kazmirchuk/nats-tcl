@@ -39,7 +39,7 @@ set ::nats::option_syntax {
     { user.list ""                      "Default username"}
     { password.list ""                  "Default password"}
     { token.arg ""                      "Default authentication token"}
-    { secure.boolean false              "Indicate to the server if the client wants a TLS connection"}
+    { secure.boolean false              "If secure=true, connection will fail if a server can't provide a TLS connection"}
     { check_subjects.boolean true       "Enable client-side checking of subjects when publishing or subscribing"}
     { dictmsg.boolean false             "Return messages from subscribe&request as dicts by default" }
 }
@@ -432,13 +432,19 @@ oo::class create ::nats::connection {
                     set header $val
                 }
                 -max_msgs {
-                    # for internal use only by JetStream!
                     set maxMsgs $val
+                    if {! ([string is integer -strict $maxMsgs] && $maxMsgs > 0)} {
+                        throw {NATS ErrInvalidArg} "Invalid max_msgs $maxMsgs"
+                    }
                 }
                 default {
                     throw {NATS ErrInvalidArg} "Unknown option $opt"
                 }
             }
+        }
+        
+        if {$maxMsgs > 1 && $callback eq ""} {
+            throw {NATS ErrInvalidArg} "-max_msgs>1 can be used only in async request"
         }
         
         set reqID [incr counters(request)]
@@ -545,17 +551,12 @@ oo::class create ::nats::connection {
         return "_INBOX.[binary encode hex [read $randomChan 10]]"
     }
     
-    method RequestCallback { {reqID -1} {subj ""} {msg ""} {reply ""} } {
+    method RequestCallback { reqID {subj ""} {msg ""} {reply ""} } {
         if {$subj eq "" && $reqID != -1} {
             # request timed out
             set callback [nats::get_default $requests($reqID) callback ""]
             if {$callback ne ""} {
                 after 0 [list {*}$callback 1 ""]
-                set subID [dict get $requests($reqID) subID]
-                if {$subID ne ""} {
-                    unset subscriptions($subID)
-                }
-                # basically, it means that in case of -max_msgs>1, -timeout applies only to the first message
                 unset requests($reqID)
             } else {
                 #sync request - exit from vwait in "method request"
@@ -582,12 +583,10 @@ oo::class create ::nats::connection {
             return
         }
         # handle the async request
-        after cancel [dict get $requests($reqID) timer]
-        
-        # no-responders is equivalent to timedOut=1
         set timedOut 0
         set in_hdr [dict get $msg header]
         if {[nats::get_default $in_hdr Status 0] == 503} {
+            # no-responders is equivalent to timedOut=1
             set timedOut 1
         }
         if {![dict get $requests($reqID) isDictMsg]} {
@@ -597,7 +596,8 @@ oo::class create ::nats::connection {
         after 0 [list {*}$callback $timedOut $msg]
         set subID [dict get $requests($reqID) subID]
         if {$subID eq ""} {
-            # in new style requests, maxMsgs = 1
+            # new-style request - we expect only one message
+            after cancel [dict get $requests($reqID) timer]
             unset requests($reqID)
         } else {
             # important! I can't simply check for [info exists subscriptions] here, because the subscription might have already been deleted,
@@ -607,6 +607,7 @@ oo::class create ::nats::connection {
             set recMsgs [dict get $requests($reqID) recMsgs]
             incr recMsgs
             if {$maxMsgs > 0 && $maxMsgs == $recMsgs} {
+                after cancel [dict get $requests($reqID) timer] ;# in this case the timer applies to all $maxMsgs messages
                 unset requests($reqID)
             } else {
                 dict set requests($reqID) recMsgs $recMsgs

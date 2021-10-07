@@ -47,7 +47,7 @@ set ::nats::option_syntax {
 oo::class create ::nats::connection {
     # "private" variables
     variable config sock coro timers counters subscriptions requests serverInfo serverPool \
-             subjectRegex outBuffer randomChan requestsInboxPrefix jetStream pong logger
+             subjectRegex outBuffer randomChan requestsInboxPrefix jetStream pong logger consumers
     
     # "public" variables, so that users can set up traces if needed
     variable status last_error
@@ -97,6 +97,7 @@ oo::class create ::nats::connection {
         set randomChan [tcl::chan::random [tcl::randomseed]] ;# generate inboxes
         set requestsInboxPrefix ""
         set jetStream ""
+        set consumers ""
         set pong 1 ;# sync variable for vwait in "ping". Set to 1 to avoid a check for existing timer in "ping"
     }
     
@@ -107,6 +108,12 @@ oo::class create ::nats::connection {
         ${logger}::delete
         if {$jetStream ne ""} {
             $jetStream destroy
+        }
+
+        foreach {stream_name consumer_data} $consumers {
+            foreach {consumer_name object_handler} $consumer_data {
+                $object_handler destroy
+            }
         }
     }
     
@@ -544,6 +551,45 @@ oo::class create ::nats::connection {
             set jetStream [::nats::jet_stream new [self]]
         }
         return $jetStream
+    }
+
+    # get consumer object
+    method add_consumer {stream consumer args} {
+        if {![dict exists $consumers $stream $consumer]} {
+            set consumer_obj [::nats::consumer new [self] $stream $consumer {*}$args]
+            dict set consumers $stream $consumer $consumer_obj
+        } else {
+            set consumer_obj [dict get $consumers $stream $consumer]
+        }
+
+        return $consumer_obj
+    }
+
+    method consumer_info {{stream ""} {consumer ""}} {
+        set output [dict create]
+        if {$stream eq ""} {
+            foreach {stream consumer_data} $consumers {
+                foreach {consumer consumer_obj} $consumer_data {
+                    dict set output $stream $consumer [$consumer_obj info]
+                }
+            }
+        } else {
+            if {$consumer eq ""} {
+                foreach {consumer consumer_obj} [dict get $consumers $stream] {
+                    dict set output $consumer [$consumer_obj info]
+                }                
+            } else {
+                set output [[dict get $consumers $stream $consumer] info]
+            }
+        }
+
+        return $output
+    }
+
+    method removeConsumer {stream consumer} {
+        if {[dict exists $consumers $stream $consumer]} {
+            dict unset consumers $stream $consumer
+        }
     }
     
     method inbox {} {

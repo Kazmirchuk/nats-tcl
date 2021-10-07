@@ -86,6 +86,35 @@ $conn request service "I need help" -timeout 1000 -callback asyncReqCallback
 # All pending outgoing messages will be flushed, and the TCP socket will be closed.
 $conn destroy
 ```
+Add consumer example:
+```Tcl
+
+# Adding a consumer can be done by calling the add_consumer method. Providing -callback argument is required
+# because to this procedure will be returned the result of the operation.
+proc consumerCallback {timedOut msg} {
+    # do sth...
+}
+
+# adding pull consumer with minimum argument list
+set pull_consumer [$conn add_consumer my_stream pull_cons_1 -mode "pull" -ack_policy explicit -deliver_policy all \
+    -replay_policy instant -callback consumerCallback]
+
+# adding push consumer with minimum argument list
+set push_consumer [$conn add_consumer my_stream push_cons_1 -mode "push" -ack_policy explicit -deliver_policy all \
+    -replay_policy instant -callback consumerCallback]
+
+# checking consumer configuration can be done by calling method info
+$pull_consumer info
+
+# checking all created consumers can be done by calling method consumer_info
+$conn consumer_info
+
+# deleting consumer can be done by calling method remove
+$pull_consumer remove -callback consumerCallback
+
+# after deleting consumer don;t forget to delete consumer object
+$pull_consumer destroy
+```
 JetStream example:
 ```Tcl
 set jet_stream [$conn jet_stream]

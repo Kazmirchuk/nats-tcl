@@ -86,38 +86,36 @@ $conn request service "I need help" -timeout 1000 -callback asyncReqCallback
 # All pending outgoing messages will be flushed, and the TCP socket will be closed.
 $conn destroy
 ```
-Add consumer example:
-```Tcl
-
-# Adding a consumer can be done by calling the add_consumer method. Providing -callback argument is required
-# because to this procedure will be returned the result of the operation.
-proc consumerCallback {timedOut msg} {
-    # do sth...
-}
-
-# adding pull consumer with minimum argument list
-set pull_consumer [$conn add_consumer my_stream pull_cons_1 -mode "pull" -ack_policy explicit -deliver_policy all \
-    -replay_policy instant -callback consumerCallback]
-
-# adding push consumer with minimum argument list
-set push_consumer [$conn add_consumer my_stream push_cons_1 -mode "push" -ack_policy explicit -deliver_policy all \
-    -replay_policy instant -callback consumerCallback]
-
-# checking consumer configuration can be done by calling method info
-$pull_consumer info
-
-# checking all created consumers can be done by calling method consumer_info
-$conn consumer_info
-
-# deleting consumer can be done by calling method remove
-$pull_consumer remove -callback consumerCallback
-
-# after deleting consumer don;t forget to delete consumer object
-$pull_consumer destroy
-```
 JetStream example:
 ```Tcl
 set jet_stream [$conn jet_stream]
+
+# Adding a consumer can be done by calling the consumer_add method.
+$jet_stream consumer_add my_stream my_consumer_pull -mode pull -ack_policy "explicit"
+
+# It is possible to provide all agruments supported by NATS
+# By method consumer_add you can also add push consumers durable and ephemeral
+# Adding durable push consumer:
+$jet_stream consumer_add my_stream my_consumer_push_durable -mode push -durable_name my_consumer_push_durable
+
+# Adding ephemeral pull consumer:
+$jet_stream consumer_add my_stream my_consumer_push_ephemeral -mode push
+
+# Deleting consumer can be done by calling method consumer_remove
+$jet_stream consumer_remove my_stream my_consumer_push_durable
+
+# Checking all exisiting consumer names for stream can be done by method consumer_names:
+$jet_stream consumer_names my_stream
+
+# Checking consumer info for all stream consumers or selected one can be done by method consumer_info:
+$jet_stream consumer_info my_stream my_consumer_push_durable
+
+# All above consumer methods can be used in the asynchronous manner by providing argument callback:
+proc addConsumerCallback {timedOut msg error} {
+    # if "error" is not empty it is a dict containing decoded JSON from NATS server
+    # if "error" is empty, publish was successfull and "pubAck" is a dict containing action result e.g. added consumer configuration
+}
+
 # Having created a stream and a durable consumer, you can pull messages using 
 # the "consume" method in the sync or async form:
 set msg [$jet_stream consume my_stream my_consumer]
@@ -147,7 +145,6 @@ proc pubAsyncCallback {timedOut pubAck error} {
 
 $jet_stream publish test.1 "msg 1" -callback pubAsyncCallback -timeout 1000
 ```
-
 ## Missing features (in comparison to official NATS clients)
 - The new authentication mechanism using NKey & [JWT](https://docs.nats.io/developing-with-nats/security/creds). This one will be difficult to do, because it requires support for _ed25519_ cryptography that is missing in Tcl AFAIK. Please let me know if you need it.
 

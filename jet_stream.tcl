@@ -80,12 +80,9 @@ oo::class create ::nats::jet_stream {
         return [my ParsePublishResponse $result]
     }
 
-    method consumer_add {stream consumer args} {
+    method add_consumer {stream args} {
         if {![${conn}::my CheckSubject $stream]} {
             throw {NATS ErrInvalidArg} "Invalid stream name $stream"
-        }
-        if {![${conn}::my CheckSubject $consumer]} {
-            throw {NATS ErrInvalidArg} "Invalid consumer name $consumer"
         }
         
         set batch_size 1
@@ -94,47 +91,23 @@ oo::class create ::nats::jet_stream {
         set config_dict [dict create] ;# variable with formatted arguments
 
         # supported arguments
-        set arguments_list [list mode description deliver_group deliver_policy opt_start_seq \
+        set arguments_list [list description deliver_group deliver_policy opt_start_seq \
             opt_start_time ack_policy ack_wait max_deliver filter_subject replay_policy \
             rate_limit_bps sample_freq max_waiting max_ack_pending idle_heartbeat flow_control \
             deliver_subject durable_name]
 
-        # check required args
-        foreach req_arg [list -mode] {
-            if {![dict exists $args $req_arg]} {
-                throw {NATS ErrInvalidArg} "Argument: $req_arg is required"
-            }
-        }
-
-        set mode [dict get $args -mode]
 
         foreach {opt val} $args {
             switch -- $opt {
-                -mode {
-                    # only pull/push value is supported
-                    if {$val ni [list pull push]} {
-                        throw {NATS ErrInvalidArg} "Wrong mode value, must be: pull or push"
+                -durable_name {
+                    if {![${conn}::my CheckSubject $val]} {
+                        throw {NATS ErrInvalidArg} "Invalid durable consumer name $val"
                     }
 
-                    if {$val eq "push"} {
-                        # deliver subject is required if you want to create push consumer
-                        # if you select mode push and don't provide deliver_subject it will be set equal to consumer name
-                        if {![dict exists $args deliver_subject]} {
-                            dict set config_dict deliver_subject $consumer
-                        }                 
-                    } elseif {$val eq "pull"} {
-                        # durable name is required for pull consumer
-                        # if you select mode pull and don't provide durable_name it will be set equal to consumer name
-                        if {![dict exists $args durable_name]} {
-                            dict set config_dict durable_name $consumer
-                        }                               
-                    }
+                    dict set config_dict durable_name $val
+                    set durable_consumer_name $val
                 }
-                -flow_control {
-                    # argument flow_control in pull mode is forbidden
-                    if {$mode eq "pull"} {
-                        throw {NATS ErrInvalidArg} "Argument flow_control is forbbiden for mode pull"
-                    }          
+                -flow_control {       
                     # flow control must be boolean          
                     if {![string is boolean $val]} {
                         throw {NATS ErrInvalidArg} "Argument flow_control should be boolean"
@@ -169,17 +142,6 @@ oo::class create ::nats::jet_stream {
                 }
                 default {
                     set opt_raw [string range $opt 1 end] ;# remove flag
-
-                    # pull validation
-                    if {$opt_raw in [list "idle_heartbeat" "deliver_subject"] && $mode eq "pull"} {
-                        throw {NATS ErrInvalidArg} "Argument $opt_raw is forbbiden for mode pull"
-                    }
-
-                    # push validation
-                    if {$opt_raw in [list "max_waiting"] && $mode eq "push"} {
-                        throw {NATS ErrInvalidArg} "Argument $opt_raw is forbbiden for mode push"
-                    }                    
-
                     # duration args - provided in milliseconds should be formatted to nanoseconds 
                     if {$opt_raw in [list "idle_heartbeat" "ack_wait"]} {
                         if {![string is double -strict $val]} {
@@ -198,12 +160,22 @@ oo::class create ::nats::jet_stream {
             }
         }
 
-        # create durable or ephemeral consumers
-        if {[dict exists $config_dict durable_name]} {
-            set subject "\$JS.API.CONSUMER.DURABLE.CREATE.$stream.$consumer"
+        # pull/push consumers validation
+        if {[dict exists $config_dict deliver_subject]} {
+            # push consumer
+            foreach forbidden_arg [list max_waiting] {
+                if {[dict exists $config_dict $forbidden_arg]} {
+                    throw {NATS ErrInvalidArg} "Argument $forbidden_arg is forbbiden for push consumer"
+                }
+            }
         } else {
-            set subject "\$JS.API.CONSUMER.CREATE.$stream"
-        }        
+            # pull consumer
+            foreach forbidden_arg [list idle_heartbeat flow_control] {
+                if {[dict exists $config_dict $forbidden_arg]} {
+                    throw {NATS ErrInvalidArg} "Argument $forbidden_arg is forbbiden for pull consumer"
+                }
+            }            
+        }
 
         # string arguments need to be within quotation marks ""
         dict for {key value} $config_dict {
@@ -211,16 +183,24 @@ oo::class create ::nats::jet_stream {
                 dict set config_dict $key \"$value\"
             }            
         }
+        
+        # create durable or ephemeral consumers
+        if {[info exists durable_consumer_name]} {
+            set subject "\$JS.API.CONSUMER.DURABLE.CREATE.$stream.$durable_consumer_name"
+            set settings_dict [dict create stream_name \"$stream\"  name \"$durable_consumer_name\" config [::json::dict2json $config_dict]]
+        } else {
+            set subject "\$JS.API.CONSUMER.CREATE.$stream"
+            set settings_dict [dict create stream_name \"$stream\" config [::json::dict2json $config_dict]]
+        }
 
         # creating arguments dictionary and converting it to json 
-        set settings_dict [dict create stream_name \"$stream\"  name \"$consumer\" config [::json::dict2json $config_dict]]
         set settings_json [::json::dict2json $settings_dict]
 
         try {
             set result [$conn request $subject $settings_json -dictmsg true -timeout $timeout -callback $callback -max_msgs $batch_size]
         } trap {NATS ErrTimeout} err {
-            throw {NATS ErrTimeout} "Creating consumer $stream $consumer timed out"
-        }      
+            throw {NATS ErrTimeout} "Creating consumer for $stream timed out"
+        }
         if {$callback ne ""} {
             return
         }
@@ -229,7 +209,7 @@ oo::class create ::nats::jet_stream {
         return [my ParsePublishResponse $result]                 
     }
 
-    method consumer_remove {stream consumer args} {
+    method delete_consumer {stream consumer args} {
         set subject "\$JS.API.CONSUMER.DELETE.$stream.$consumer"
         set batch_size 1
         set timeout -1 ;# ms

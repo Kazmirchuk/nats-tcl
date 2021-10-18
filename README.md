@@ -90,19 +90,21 @@ JetStream example:
 ```Tcl
 set jet_stream [$conn jet_stream]
 
-# Adding a consumer can be done by calling the consumer_add method.
-$jet_stream consumer_add my_stream my_consumer_pull -mode pull -ack_policy "explicit"
+# Adding a consumer can be done by calling the add_consumer method.
+# Adding a pull consumer requires durable_name argument.
+$jet_stream add_consumer my_stream -durable_name my_consumer_pull -ack_policy explicit 
 
-# It is possible to provide all agruments supported by NATS
-# By method consumer_add you can also add push consumers durable and ephemeral
-# Adding durable push consumer:
-$jet_stream consumer_add my_stream my_consumer_push_durable -mode push -durable_name my_consumer_push_durable
+# It is possible to provide all agruments supported by NATS.
+# By method add_consumer you can also add a push consumers durable and ephemeral.
+# To add a push consumer you need to provide deliver_subject.
+# Adding a durable push consumer:
+$jet_stream add_consumer my_stream -deliver_subject my_consumer_push_durable -durable_name my_consumer_push_durable
 
-# Adding ephemeral pull consumer:
-$jet_stream consumer_add my_stream my_consumer_push_ephemeral -mode push
+# Adding an ephemeral push consumer:
+$jet_stream add_consumer my_stream -deliver_subject ephemeral_consumer
 
-# Deleting consumer can be done by calling method consumer_remove
-$jet_stream consumer_remove my_stream my_consumer_push_durable
+# Deleting a consumer can be done by calling method delete_consumer:
+$jet_stream delete_consumer my_stream my_consumer_push_durable
 
 # Checking all exisiting consumer names for stream can be done by method consumer_names:
 $jet_stream consumer_names my_stream

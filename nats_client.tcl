@@ -257,7 +257,7 @@ oo::class create ::nats::connection {
         set replySubj ""
         set header ""
         if {[llength $args] == 1} {
-            set replySubj $args
+            set replySubj [lindex $args 0]
         } else {
             foreach {opt val} $args {
                 switch -- $opt {

@@ -125,6 +125,16 @@ set msg [$jet_stream consume my_stream my_consumer]
 # and don't forget to acknowlege the consumed message:
 $jet_stream ack $msg
 
+# It is possible to use all types of acknowledgements available in golang library.
+# AckNak type tells the server to redeliver the message. 
+$jet_stream nak $msg
+
+# AckProgress tells the server that this message is being worked on. It resets the redelivery timer on the server.
+$jet_stream in_progress $msg
+
+# AckTerm tells the server to not redeliver this message.
+$jet_stream term $msg
+
 # consume can also be used in the asynchronous manner using the same callback as asyncReqCallback:
 proc consumeAsyncCallback {timedOut msg} {
     # do sth...

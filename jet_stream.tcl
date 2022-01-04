@@ -56,8 +56,29 @@ oo::class create ::nats::jet_stream {
         }
     }
 
+    # Ack acknowledges a message. This tells the server that the message was
+    # successfully processed and it can move on to the next message.
     method ack {message} {
         $conn publish [dict get $message reply] ""
+    }
+
+    # Nak negatively acknowledges a message. This tells the server to redeliver
+    # the message. You can configure the number of redeliveries by passing
+    # nats.MaxDeliver when you Subscribe. The default is infinite redeliveries.
+    method nak {message} {
+        $conn publish [dict get $message reply] "-NAK"
+    }
+
+    # Term tells the server to not redeliver this message, regardless of the value
+    # of nats.MaxDeliver.
+    method term {message} {
+        $conn publish [dict get $message reply] "+TERM"
+    }
+
+    # InProgress tells the server that this message is being worked on. It resets
+    # the redelivery timer on the server.
+    method in_progress {message} {
+        $conn publish [dict get $message reply] "+WPI"
     }
 
     method publish {subject message args} {

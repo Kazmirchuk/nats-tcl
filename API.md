@@ -24,6 +24,12 @@ package require nats
 [*objectName* **destroy**](#objectName-destroy)
 
 [*objectName* **jet_stream**](#objectName-jet_stream) <br/>
+[*jetStreamObject* **add_stream** *stream ?-timeout ms? ?-callback cmdPrefix? ?-subjects subjects? ?-retention retention? ?-max_consumers max_consumers? ?-max_msgs max_msgs? ?-max_bytes max_bytes? ?-max_age max_age? ?-max_msgs_per_subject max_msgs_per_subject? ?-max_msg_size max_msg_size? ?-discard discard? ?-storage storage? ?-num_replicas num_replicas? ?-duplicate_window duplicate_window? ?-sealed sealed? ?-deny_delete deny_delete? ?-deny_purge deny_purge? ?-allow_rollup_hdrs allow_rollup_hdrs?*](#jetstreamobject-add_stream-stream--timeout-ms--callback-cmdprefix--subjects-subjects--retention-retention--max_consumers-max_consumers--max_msgs-max_msgs--max_bytes-max_bytes--max_age-max_age--max_msgs_per_subject-max_msgs_per_subject--max_msg_size-max_msg_size--discard-discard--storage-storage--num_replicas-num_replicas--duplicate_window-duplicate_window--sealed-sealed--deny_delete-deny_delete--deny_purge-deny_purge--allow_rollup_hdrs-allow_rollup_hdrs) <br/>
+[*jetStreamObject* **delete_stream** *stream ?-timeout ms? ?-callback cmdPrefix?*](#jetstreamobject-delete_stream-stream--timeout-ms--callback-cmdprefix) <br/>
+[*jetStreamObject* **stream_names** *?-timeout ms? ?-callback cmdPrefix?*](#jetstreamobject-stream_names--timeout-ms--callback-cmdprefix) <br/>
+[*jetStreamObject* **stream_info** *?stream? ?-timeout ms? ?-callback cmdPrefix?*](#jetstreamobject-stream_info-stream--timeout-ms--callback-cmdprefix) <br/>
+[*jetStreamObject* **stream_msg_get** *stream ?-last_by_subj subject? ?-seq sequence? ?-timeout ms? ?-callback cmdPrefix?*](#jetstreamobject-stream_msg_get-stream--last_by_subj-subject--seq-sequence--timeout-ms--callback-cmdprefix) <br/>
+[*jetStreamObject* **stream_msg_delete** *stream -seq sequence ?-timeout ms? ?-callback cmdPrefix?*](#jetstreamobject-stream_msg_delete-stream--seq-sequence--timeout-ms--callback-cmdprefix) <br/>
 [*jetStreamObject* **consume** *stream consumer ?-timeout ms? ?-callback cmdPrefix? ?-batch_size batch_size?*](#jetStreamObject-consume-stream-consumer--timeout-ms--callback-cmdPrefix--batch_size-batch_size) <br/>
 [*jetStreamObject* **ack** *message*](#jetStreamObject-ack-message) <br/>
 [*jetStreamObject* **publish** *subject message ?-timeout ms? ?-callback cmdPrefix? ?-header header?*](#jetStreamObject-publish-subject-message--timeout-ms--callback-cmdPrefix--header-header) <br/>
@@ -175,6 +181,24 @@ TclOO destructor. It calls `disconnect` and then destroys the object.
 
 ### objectName jet_stream
 Returns `jetStreamObject` TclOO object to work with [JetStream](https://docs.nats.io/jetstream/jetstream).
+
+### jetStreamObject add_stream stream ?-timeout ms? ?-callback cmdPrefix? ?-subjects subjects? ?-retention retention? ?-max_consumers max_consumers? ?-max_msgs max_msgs? ?-max_bytes max_bytes? ?-max_age max_age? ?-max_msgs_per_subject max_msgs_per_subject? ?-max_msg_size max_msg_size? ?-discard discard? ?-storage storage? ?-num_replicas num_replicas? ?-duplicate_window duplicate_window? ?-sealed sealed? ?-deny_delete deny_delete? ?-deny_purge deny_purge? ?-allow_rollup_hdrs allow_rollup_hdrs?
+Add stream `stream` with spedified properties. `subjects` properties is a list of subjects, `duplicate_window` and `max_age` are duration which should be given in milliseconds unit.
+
+### jetStreamObject delete_stream stream ?-timeout ms? ?-callback cmdPrefix?
+Delete stream `stream`.
+
+### jetStreamObject stream_names ?-timeout ms? ?-callback cmdPrefix?
+Get available stream names existing on server.
+
+### jetStreamObject stream_info ?stream? ?-timeout ms? ?-callback cmdPrefix?
+Get info about stream `stream` or if `stream` is empty - get information about all streams.
+
+### jetStreamObject stream_msg_get stream ?-last_by_subj subject? ?-seq sequence? ?-timeout ms? ?-callback cmdPrefix?
+Get message from stream `stream` by given `subject` or `sequence`.
+
+### jetStreamObject stream_msg_delete stream -seq sequence ?-timeout ms? ?-callback cmdPrefix?
+Delete message from stream `stream` with given `sequence`.
 
 ### jetStreamObject consume stream consumer ?-timeout ms? ?-callback cmdPrefix? ?-batch_size batch_size?
 Consume a message or `batch_size` number of messages from a [consumer](https://docs.nats.io/jetstream/concepts/consumers) defined on a [stream](https://docs.nats.io/jetstream/concepts/streams). Similarly to the `request` method:

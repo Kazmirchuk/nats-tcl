@@ -719,10 +719,6 @@ oo::class create ::nats::connection {
     
     method SendConnect {tls_done} {
         try {
-            # I guess I should preserve this stupid global variable
-            set ind [json::write::indented]
-            json::write::indented false
-            
             # tls_required=true in CONNECT seems unnecessary to me, because TLS handshake has already happened
             # but nats.go does this
             set connectParams [list verbose [nats::bool2json $config(verbose)] \
@@ -740,13 +736,11 @@ oo::class create ::nats::connection {
             if {[info exists serverInfo(auth_required)] && $serverInfo(auth_required)} {
                 lappend connectParams {*}[$serverPool format_credentials]
             } 
-            set jsonMsg [json::write::object {*}$connectParams]
+            set jsonMsg [::nats::json_write_object {*}$connectParams]
         } trap {NATS ErrAuthorization} err {
             # no credentials could be found for this server, try next one
             my AsyncError ErrAuthorization $err 1
             return
-        } finally {
-            json::write::indented $ind
         }
         
         # do NOT use outBuffer here! it may have pending messages from a previous connection
@@ -1223,6 +1217,25 @@ proc ::nats::bool2json {val} {
     } else {
         return false
     }
+}
+
+# preserve json::write variables
+proc ::nats::json_write_object {args} {
+    if {[llength $args] %2 == 1} {
+	    return -code error {wrong # args, expected an even number of arguments}
+    }
+    
+    set ind [json::write::indented]
+    set ali [json::write::aligned]
+
+    json::write::indented false
+    json::write::aligned false
+    set result [json::write::object {*}$args]
+
+    json::write::indented $ind
+    json::write::aligned $ali
+
+    return $result
 }
 
 # pending TIP 342 in Tcl 8.7

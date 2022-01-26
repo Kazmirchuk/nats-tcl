@@ -370,6 +370,11 @@ oo::class create ::nats::jet_stream {
         return [my SimpleRequest $subject $args "Deleting stream $stream timed out"]         
     }
 
+    method purge_stream {stream args} {
+        set subject "\$JS.API.STREAM.PURGE.$stream"
+        return [my SimpleRequest $subject $args "Purging stream $stream timed out"]         
+    }
+
     method stream_info {{stream ""} args} {
         if {$stream eq ""} {
             set subject "\$JS.API.STREAM.LIST"

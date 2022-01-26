@@ -26,6 +26,7 @@ package require nats
 [*objectName* **jet_stream**](#objectName-jet_stream) <br/>
 [*jetStreamObject* **add_stream** *stream ?-timeout ms? ?-callback cmdPrefix? ?-subjects subjects? ?-retention retention? ?-max_consumers max_consumers? ?-max_msgs max_msgs? ?-max_bytes max_bytes? ?-max_age max_age? ?-max_msgs_per_subject max_msgs_per_subject? ?-max_msg_size max_msg_size? ?-discard discard? ?-storage storage? ?-num_replicas num_replicas? ?-duplicate_window duplicate_window? ?-sealed sealed? ?-deny_delete deny_delete? ?-deny_purge deny_purge? ?-allow_rollup_hdrs allow_rollup_hdrs?*](#jetstreamobject-add_stream-stream--timeout-ms--callback-cmdprefix--subjects-subjects--retention-retention--max_consumers-max_consumers--max_msgs-max_msgs--max_bytes-max_bytes--max_age-max_age--max_msgs_per_subject-max_msgs_per_subject--max_msg_size-max_msg_size--discard-discard--storage-storage--num_replicas-num_replicas--duplicate_window-duplicate_window--sealed-sealed--deny_delete-deny_delete--deny_purge-deny_purge--allow_rollup_hdrs-allow_rollup_hdrs) <br/>
 [*jetStreamObject* **delete_stream** *stream ?-timeout ms? ?-callback cmdPrefix?*](#jetstreamobject-delete_stream-stream--timeout-ms--callback-cmdprefix) <br/>
+[*jetStreamObject* **purge_stream** *stream ?-timeout ms? ?-callback cmdPrefix?*](#jetstreamobject-purge_stream-stream--timeout-ms--callback-cmdprefix) <br/>
 [*jetStreamObject* **stream_names** *?-timeout ms? ?-callback cmdPrefix?*](#jetstreamobject-stream_names--timeout-ms--callback-cmdprefix) <br/>
 [*jetStreamObject* **stream_info** *?stream? ?-timeout ms? ?-callback cmdPrefix?*](#jetstreamobject-stream_info-stream--timeout-ms--callback-cmdprefix) <br/>
 [*jetStreamObject* **stream_msg_get** *stream ?-last_by_subj subject? ?-seq sequence? ?-timeout ms? ?-callback cmdPrefix?*](#jetstreamobject-stream_msg_get-stream--last_by_subj-subject--seq-sequence--timeout-ms--callback-cmdprefix) <br/>
@@ -187,6 +188,9 @@ Add stream `stream` with spedified properties. `subjects` properties is a list o
 
 ### jetStreamObject delete_stream stream ?-timeout ms? ?-callback cmdPrefix?
 Delete stream `stream`.
+
+### jetStreamObject purge_stream stream ?-timeout ms? ?-callback cmdPrefix?
+Purge stream `stream`.
 
 ### jetStreamObject stream_names ?-timeout ms? ?-callback cmdPrefix?
 Get available stream names existing on server.

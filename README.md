@@ -18,7 +18,7 @@ Simply clone the repository in some place where Tcl will be able to find it, e.g
 ## Supported features
 - Publish and subscribe to messages, also with headers (NATS version 2.2+)
 - Synchronous and asynchronous requests (optimized: under the hood a single wildcard subscription is used for all requests)
-- JetStream support: adding/deleting/getting/listing streams and consumers, getting/deleting messages from stream by sequence or subject, publish and consume messages from a stream in sync and async manners
+- JetStream support: adding/deleting/purging/getting/listing streams and consumers, getting/deleting messages from stream by sequence or subject, publish and consume messages from a stream in sync and async manners
 - Queue groups
 - Gather multiple responses to a request
 - Client-side validation of subjects
@@ -96,6 +96,9 @@ $jet_stream add_stream my_stream -subjects [list "subject1.*" "subject2.*"] -ret
 
 # Deleting a stream can be done by calling method delete_stream:
 $jet_stream delete_stream my_stream
+
+# Purge stream (delete all messages) can be done by calling method purge_stream:
+$jet_stream purge_stream my_stream
 
 # Checking all exisiting stream names can be done by method stream_names:
 $jet_stream stream_names

@@ -74,11 +74,12 @@ If you have received a message with a header, but have *not* used `-dictmsg true
 Note that the JetStream API **always** returns messages as dicts.
 
 ## Public variables
-The connection object exposes 2 "public" read-only variables:
+The connection object exposes 3 "public" read-only variables:
 - `last_error` - used to deliver asynchronous errors, e.g. if the network fails. It is a dict with 2 keys similar to the arguments for `throw`:
   - code: error code 
   - errorMessage: error message
-- `status` - connection status, one of `$nats::status_closed`, `$nats::status_connecting`, `$nats::status_connected` or `$nats::status_reconnecting`.
+- `status` - connection status, one of `$nats::status_closed`, `$nats::status_connecting`, `$nats::status_connected` or `$nats::status_reconnecting`,
+- `last_flush` - time in milliseconds when last successful flush was done.
 
 You can set up traces on these variables to get notified e.g. when a connection status changes.
 
@@ -136,11 +137,12 @@ objectName publish subject message ?reply?
 ```
 and if you need extra options:
 ```Tcl
-objectName publish subject message ?-header header? ?-reply reply?
+objectName publish subject message ?-header header? ?-reply reply? ?-check_connection check_connection?
 ```
 Publishes a message to the specified subject. See the NATS [documentation](https://docs.nats.io/nats-concepts/subjects) for more details about subjects and wildcards. The client will check subject's validity before sending. Allowed characters are Latin-1 characters, digits, dot, dash and underscore. <br/>
 `message` is sent as is, and it can be a binary string. If you specify a `reply` subject, a responder will know where to send a reply. You can use the `inbox` method to generate a transient [subject name](https://docs.nats.io/developing-with-nats/sending/replyto) starting with _INBOX. However, using asynchronous requests might accomplish the same task in an easier manner - see below.<br/>
 When using NATS server version 2.2 and later, you can provide a `header` with the message. 
+Providing boolean `check_connection` set to false (default is true) can add messages to buffor even if connection with server has not been established - they will be send after successful connection. So it does not throw error if there is no connection and because of that - it also does not chceck if server supports headers or its `max_payload` size.
 
 ### objectName subscribe subject ?-queue queueGroup? ?-callback cmdPrefix? ?-max_msgs maxMsgs? ?-dictmsg dictmsg?
 Subscribes to a subject (possibly with wildcards) and returns a subscription ID. Whenever a message arrives, the command prefix will be invoked from the event loop with 3 additional arguments: `subject`, `message` and `replyTo` (might be empty). If you use the [-queue option](https://docs.nats.io/developing-with-nats/receiving/queues), only one subscriber in a given queueGroup will receive each message (useful for load balancing). When given `-max_msgs`, the client will automatically unsubscribe after `maxMsgs` messages have been received.<br />

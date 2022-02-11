@@ -50,7 +50,7 @@ oo::class create ::nats::connection {
              subjectRegex outBuffer randomChan requestsInboxPrefix jetStream pong logger
     
     # "public" variables, so that users can set up traces if needed
-    variable status last_error
+    variable status last_error last_flush
 
     constructor { { conn_name "" } } {
         set status $nats::status_closed
@@ -94,6 +94,7 @@ oo::class create ::nats::connection {
         # all outgoing messages are put in this list before being flushed to the socket,
         # so that even when we are reconnecting, messages can still be sent
         set outBuffer [list]
+        set last_flush ""
         set randomChan [tcl::chan::random [tcl::randomseed]] ;# generate inboxes
         set requestsInboxPrefix ""
         set jetStream ""
@@ -256,6 +257,7 @@ oo::class create ::nats::connection {
     method publish {subject message args} {
         set replySubj ""
         set header ""
+        set checkConnection 1
         if {[llength $args] == 1} {
             set replySubj [lindex $args 0]
         } else {
@@ -267,19 +269,25 @@ oo::class create ::nats::connection {
                     -reply {
                         set replySubj $val
                     }
+                    -check_connection {
+                        set checkConnection $val
+                    }
                     default {
                         throw {NATS ErrInvalidArg} "Unknown option $opt"
                     }
                 }
             }
         }
-        my CheckConnection
+        
         set msgLen [string length $message]
-        if {$msgLen > $serverInfo(max_payload)} {
-            throw {NATS ErrMaxPayload} "Maximum size of NATS message is $serverInfo(max_payload)"
-        }
-        if {$header ne "" && ![info exists serverInfo(headers)]} {
-            throw {NATS ErrHeadersNotSupported} "Headers are not supported by this server"
+        if {$checkConnection || $status == $nats::status_connected || $status == $nats::status_reconnecting} {
+            my CheckConnection
+            if {$msgLen > $serverInfo(max_payload)} {
+                throw {NATS ErrMaxPayload} "Maximum size of NATS message is $serverInfo(max_payload)"
+            }
+            if {$header ne "" && ![info exists serverInfo(headers)]} {
+                throw {NATS ErrHeadersNotSupported} "Headers are not supported by this server"
+            }
         }
         
         if {![my CheckSubject $subject]} {
@@ -642,6 +650,7 @@ oo::class create ::nats::connection {
                 puts -nonewline $sock $msg
             }
             set outBuffer [list]
+            set last_flush [clock milliseconds]
         }
         close $sock ;# all buffered input is discarded, all buffered output is flushed
         set sock ""
@@ -696,6 +705,7 @@ oo::class create ::nats::connection {
         }
         # do NOT clear the buffer unless we had a successful flush!
         set outBuffer [list]
+        set last_flush [clock milliseconds]
     }
     
     method CoroVwait {var} {

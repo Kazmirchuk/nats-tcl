@@ -365,13 +365,14 @@ oo::class create ::nats::connection {
         set subID [incr counters(subscription)]
         set subscriptions($subID) [dict create subj $subject queue $queue cmd $callback maxMsgs $maxMsgs recMsgs 0 dictmsg $dictmsg]
         
-        #the format is SUB <subject> [queue group] <sid>
-        lappend outBuffer "SUB $subject $queue $subID"
-        if {$maxMsgs > 0} {
-            lappend outBuffer "UNSUB $subID $maxMsgs"
+        if {$status == $nats::status_connected} {
+            # it will be sent anyway when we reconnect
+            lappend outBuffer "SUB $subject $queue $subID"
+            if {$maxMsgs > 0} {
+                lappend outBuffer "UNSUB $subID $maxMsgs"
+            }
+            my ScheduleFlush
         }
-
-        my ScheduleFlush
         return $subID
     }
     
@@ -407,9 +408,11 @@ oo::class create ::nats::connection {
             dict set subscriptions($subID) maxMsgs $maxMsgs
             set data "UNSUB $subID $maxMsgs"
         }
-        lappend outBuffer $data
-
-        my ScheduleFlush
+        if {$status == $nats::status_connected} {
+            # it will be sent anyway when we reconnect
+            lappend outBuffer $data
+            my ScheduleFlush
+        }
         return
     }
     

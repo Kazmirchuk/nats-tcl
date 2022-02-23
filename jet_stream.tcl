@@ -453,7 +453,7 @@ oo::class create ::nats::jet_stream {
         try {
             set responseDict [::json::json2dict [dict get $response data]]
 
-            if {[string match "*stream_msg_get_response" [dict get $responseDict type]]} {
+            if {[dict exists $responseDict type] && [string match "*stream_msg_get_response" [dict get $responseDict type]]} {
                 if {[dict exists $responseDict message data]} {
                     dict set responseDict message data [binary decode base64 [dict get $responseDict message data]]
                 }

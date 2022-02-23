@@ -106,6 +106,7 @@ The **configure** method accepts the following options. Make sure to set them *b
 | -token | string | | Default authentication token|
 | -secure | boolean | false | If secure=true, connection will fail if a server can't provide a TLS connection |
 | -check_subjects | boolean | true | Enable client-side checking of subjects when publishing or subscribing |
+| -check_connection | boolean | true | Check connection with server while publishing/subscribing (default) and throw error if connection is not established |
 | -dictmsg | boolean | false | Return messages from `subscribe` and `request` as dicts by default |
 | -? | | | Provides interactive help with all options|
 

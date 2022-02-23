@@ -41,6 +41,7 @@ set ::nats::option_syntax {
     { token.arg ""                      "Default authentication token"}
     { secure.boolean false              "If secure=true, connection will fail if a server can't provide a TLS connection"}
     { check_subjects.boolean true       "Enable client-side checking of subjects when publishing or subscribing"}
+    { check_connection.boolean true     "Check connection with server while publishing/subscribing (default) and throw error if connection is not established"}
     { dictmsg.boolean false             "Return messages from subscribe&request as dicts by default" }
 }
 
@@ -273,13 +274,16 @@ oo::class create ::nats::connection {
                 }
             }
         }
-        my CheckConnection
+        
         set msgLen [string length $message]
-        if {$msgLen > $serverInfo(max_payload)} {
-            throw {NATS ErrMaxPayload} "Maximum size of NATS message is $serverInfo(max_payload)"
-        }
-        if {$header ne "" && ![info exists serverInfo(headers)]} {
-            throw {NATS ErrHeadersNotSupported} "Headers are not supported by this server"
+        if {$config(check_connection) || $status == $nats::status_connected || $status == $nats::status_reconnecting} {
+            my CheckConnection
+            if {$msgLen > $serverInfo(max_payload)} {
+                throw {NATS ErrMaxPayload} "Maximum size of NATS message is $serverInfo(max_payload)"
+            }
+            if {$header ne "" && ![info exists serverInfo(headers)]} {
+                throw {NATS ErrHeadersNotSupported} "Headers are not supported by this server"
+            }
         }
         
         if {![my CheckSubject $subject]} {
@@ -307,8 +311,10 @@ oo::class create ::nats::connection {
         return
     }
     
-    method subscribe {subject args } {
-        my CheckConnection
+    method subscribe {subject args} {
+        if {$config(check_connection)} {
+            my CheckConnection
+        }
         set queue ""
         set callback ""
         set maxMsgs 0 ;# unlimited by default
@@ -359,8 +365,7 @@ oo::class create ::nats::connection {
         set subID [incr counters(subscription)]
         set subscriptions($subID) [dict create subj $subject queue $queue cmd $callback maxMsgs $maxMsgs recMsgs 0 dictmsg $dictmsg]
         
-        #the format is SUB <subject> [queue group] <sid>
-        if {$status != $nats::status_reconnecting} {
+        if {$status == $nats::status_connected} {
             # it will be sent anyway when we reconnect
             lappend outBuffer "SUB $subject $queue $subID"
             if {$maxMsgs > 0} {
@@ -372,7 +377,9 @@ oo::class create ::nats::connection {
     }
     
     method unsubscribe {subID args} {
-        my CheckConnection
+        if {$config(check_connection)} {
+            my CheckConnection
+        }
         set maxMsgs 0 ;# unlimited by default
         foreach {opt val} $args {
             switch -- $opt {
@@ -401,7 +408,7 @@ oo::class create ::nats::connection {
             dict set subscriptions($subID) maxMsgs $maxMsgs
             set data "UNSUB $subID $maxMsgs"
         }
-        if {$status != $nats::status_reconnecting} {
+        if {$status == $nats::status_connected} {
             # it will be sent anyway when we reconnect
             lappend outBuffer $data
             my ScheduleFlush

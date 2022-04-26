@@ -1271,7 +1271,7 @@ proc ::nats::get_default {dict_val key def} {
 # so I end up with the same message logged twice. Let's suppress stderr altogether
 proc ::nats::tls_callback {args} { }
 
-package provide NatsTest 1.0
+package provide nats 1.0
 
 # Let me respectfully remind you:
 # Birth and death are of supreme importance.

@@ -163,6 +163,13 @@ proc consumeAsyncCallback {timedOut msg} {
     # do sth...
     $jet_stream ack $msg
 }
+
+# It is possible to provide all agruments supported by NATS server for consuming:
+#-expires
+#-idle_heartbeat
+#-no_wait
+#-batch_size
+
 # consume a batch of 100 messages within the next 10 seconds
 # the callback will be invoked once for each message
 $jet_stream consume my_stream my_consumer -callback consumeAsyncCallback -timeout 10000 -batch_size 100

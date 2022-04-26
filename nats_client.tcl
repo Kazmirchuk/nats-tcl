@@ -444,6 +444,9 @@ oo::class create ::nats::connection {
                         throw {NATS ErrInvalidArg} "Invalid max_msgs $maxMsgs"
                     }
                 }
+                -custom_reqID {
+                    set custom_reqID $val
+                }
                 default {
                     throw {NATS ErrInvalidArg} "Unknown option $opt"
                 }
@@ -454,7 +457,11 @@ oo::class create ::nats::connection {
             throw {NATS ErrInvalidArg} "-max_msgs>1 can be used only in async request"
         }
         
-        set reqID [incr counters(request)]
+        if {[info exists custom_reqID]} {
+            set reqID $custom_reqID
+        } else {
+            set reqID [incr counters(request)]
+        }
         
         if {$requestsInboxPrefix eq ""} {
             set requestsInboxPrefix [my inbox]
@@ -596,6 +603,12 @@ oo::class create ::nats::connection {
             # no-responders is equivalent to timedOut=1
             set timedOut 1
         }
+
+        # handle the nats timeout e.q. for pull consumers
+        if {[nats::get_default $in_hdr Status 0] == 408} {
+            set timedOut 1
+        }
+
         if {![dict get $requests($reqID) isDictMsg]} {
             set msg [dict get $msg data]
         }

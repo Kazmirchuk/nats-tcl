@@ -87,6 +87,8 @@ oo::class create ::nats::jet_stream {
         set batch_size 1 ;# by default, get only one message at a time from a consumer
         set timeout -1 ;# ms
         set callback ""
+        set config_dict [dict create]
+        set additonal_args [list]
         
         foreach {opt val} $args {
             switch -- $opt {
@@ -99,6 +101,31 @@ oo::class create ::nats::jet_stream {
                 }
                 -batch_size {
                     set batch_size $val
+                    dict set config_dict batch $batch_size
+                }
+                -expires -
+                -idle_heartbeat {
+                    set opt_raw [string range $opt 1 end] ;# remove flag
+                    # duration args - provided in milliseconds should be formatted to nanoseconds 
+                    if {![string is double -strict $val]} {
+                        throw {NATS ErrInvalidArg} "Wrong duration value for argument $opt_raw it must be in milliseconds"
+                    }
+                    set val [expr {entier($val*1000*1000)}] ;#conversion milliseconds to nanoseconds
+
+                    dict set config_dict $opt_raw $val
+                }
+                -no_wait {
+                    if {![string is boolean $val]} {
+                        throw {NATS ErrInvalidArg} "Argument no_wait should be boolean"
+                    }
+                    if {$val} {
+                        dict set config_dict no_wait true
+                    } else {
+                        dict set config_dict no_wait false
+                    }
+                }
+                -custom_reqID {
+                    lappend additonal_args -custom_reqID $val
                 }
                 default {
                     throw {NATS ErrInvalidArg} "Unknown option $opt"
@@ -109,8 +136,15 @@ oo::class create ::nats::jet_stream {
         if {$batch_size > 1 && $callback eq ""} {
             throw {NATS ErrInvalidArg} "batch_size > 1 can be done only with an async consumer"
         }
+
+        if {[dict size $config_dict] == 0} {
+            set message $batch_size
+        } else {
+            set message [::nats::json_write_object {*}$config_dict]
+        }
+
         try {
-            return [$conn request $subject $batch_size -dictmsg true -timeout $timeout -callback $callback -max_msgs $batch_size]
+            return [$conn request $subject $message -dictmsg true -timeout $timeout -callback $callback -max_msgs $batch_size {*}$additonal_args]
         } trap {NATS ErrTimeout} err {
             throw {NATS ErrTimeout} "Consume $stream.$consumer timed out"
         }

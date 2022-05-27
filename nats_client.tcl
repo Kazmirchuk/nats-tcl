@@ -43,6 +43,7 @@ set ::nats::option_syntax {
     { check_subjects.boolean true       "Enable client-side checking of subjects when publishing or subscribing"}
     { check_connection.boolean true     "Check connection with server while publishing/subscribing (default) and throw error if connection is not established"}
     { dictmsg.boolean false             "Return messages from subscribe&request as dicts by default" }
+    { utf8_convert.boolean false        "Convert messages to UTF-8 before sending and after receiving." }    
 }
 
 oo::class create ::nats::connection {
@@ -274,6 +275,11 @@ oo::class create ::nats::connection {
                 }
             }
         }
+
+        #convert to utf-8
+        if {$config(utf8_convert)} {
+            set message [encoding convertto utf-8 $message]
+        }        
         
         set msgLen [string length $message]
         if {$config(check_connection) || $status == $nats::status_connected || $status == $nats::status_reconnecting} {
@@ -906,6 +912,12 @@ oo::class create ::nats::connection {
                 }
             }
             set body [string range $payload $expHdrLength end-2] ;# discard \r\n at the end
+
+            #convert from utf-8
+            if {$config(utf8_convert)} {
+                set body [encoding convertfrom utf-8 $body]
+            }
+
             if {[dict get $subscriptions($subID) dictmsg]} {
                 # deliver the message as a dict, including headers, if any
                 # even though replyTo is passed to the callback, let's include it in the dict too

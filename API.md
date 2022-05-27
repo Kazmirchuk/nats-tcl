@@ -108,6 +108,7 @@ The **configure** method accepts the following options. Make sure to set them *b
 | -check_subjects | boolean | true | Enable client-side checking of subjects when publishing or subscribing |
 | -check_connection | boolean | true | Check connection with server while publishing/subscribing (default) and throw error if connection is not established |
 | -dictmsg | boolean | false | Return messages from `subscribe` and `request` as dicts by default |
+| -utf8_convert | boolean | false | Adds the ability to send messages with non-ASCII characters by converting them to UTF-8 before sending to NATS and back-converting them after receiving |
 | -? | | | Provides interactive help with all options|
 
 ## Description

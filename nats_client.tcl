@@ -507,7 +507,7 @@ oo::class create ::nats::connection {
         unset requests($reqID)
         if {[dict get $sync_req timedOut]} {
             if {$subID ne ""} {
-                unset subscriptions($subID)
+                unset -nocomplain subscriptions($subID)
             }
             throw {NATS ErrTimeout} "Request to $subject timed out"
         }

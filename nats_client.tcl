@@ -220,7 +220,10 @@ oo::class create ::nats::connection {
         if {!$async} {
             ${logger}::debug "Waiting for connection"
             my CoroVwait [self object]::status
-            if {$status != $nats::status_connected} {
+           if {$status != $nats::status_connected} {
+                if {[dict exists $last_error code]} {
+                    throw [dict get $last_error code] [dict get $last_error errorMessage]
+                }
                 throw {NATS ErrNoServers} "No servers available for connection"
             }
             ${logger}::debug "Finished waiting for connection"
@@ -739,8 +742,14 @@ oo::class create ::nats::connection {
         # we must stop the coroutine, so let the error propagate
         lassign [$serverPool next_server] host port ;# it may wait for reconnect_time_wait ms!
         ${logger}::info "Connecting to the server at $host:$port"
-        set sock [socket -async $host $port]
-        chan event $sock writable [list $coro connected]
+        try {
+            set sock [socket -async $host $port]
+            chan event $sock writable [list $coro connected]
+        } on error {
+            $serverPool current_server_connected false
+            my AsyncError ErrConnectionRefused "Failed to connect to $host:$port: $msg"
+            after idle [list set [self object]::status $nats::status_closed]
+        }
     }
     
     method SendConnect {tls_done} {

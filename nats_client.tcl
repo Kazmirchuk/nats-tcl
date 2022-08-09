@@ -745,7 +745,7 @@ oo::class create ::nats::connection {
         try {
             set sock [socket -async $host $port]
             chan event $sock writable [list $coro connected]
-        } on error {
+        } on error {msg opt} {
             $serverPool current_server_connected false
             my AsyncError ErrConnectionRefused "Failed to connect to $host:$port: $msg"
             after idle [list set [self object]::status $nats::status_closed]

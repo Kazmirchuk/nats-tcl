@@ -212,11 +212,10 @@ oo::class create ::nats::connection {
         # until the NATS connection is completely closed
         $serverPool reset_counters
         
+        set status $nats::status_connecting
         # this coroutine will handle all work to connect and read from the socket
         coroutine coro {*}[mymethod CoroMain]
-        # now try connecting to the first server
-        set status $nats::status_connecting
-        $coro connect
+        
         if {!$async} {
             ${logger}::debug "Waiting for connection"
             my CoroVwait [self object]::status
@@ -690,10 +689,8 @@ oo::class create ::nats::connection {
         set timers(ping) [after $config(ping_interval) [mymethod Pinger]]
         
         if {$counters(pendingPings) >= $config(max_outstanding_pings)} {
-            my AsyncError ErrStaleConnection "The server did not respond on $counters(pendingPings) PINGs"
-            my CloseSocket 1
+            my AsyncError ErrStaleConnection "The server did not respond to $counters(pendingPings) PINGs" 1
             set counters(pendingPings) 0
-            $coro connect
             return
         }
         
@@ -719,9 +716,7 @@ oo::class create ::nats::connection {
             flush $sock
         } on error err {
             lassign [my current_server] host port
-            my AsyncError ErrBrokenSocket "Failed to send data to $host:$port: $err"
-            my CloseSocket 1
-            $coro connect
+            my AsyncError ErrBrokenSocket "Failed to send data to $host:$port: $err" 1
             return
         }
         # do NOT clear the buffer unless we had a successful flush!
@@ -1028,16 +1023,13 @@ oo::class create ::nats::connection {
         set coro [info coroutine]
         ${logger}::debug "Started coroutine $coro"
         try {
+            my ConnectNextServer
             while {1} {
                 set reason [yield]
                 if {$reason eq "stop"} {
                     break
                 }
-                if {$reason in [list connect connected connect_timeout readable]} {
-                    my ProcessEvent $reason
-                } else {
-                    ${logger}::error "CoroMain: unknown reason $reason"
-                }
+                my ProcessEvent $reason
             }
         } trap {NATS STOP_CORO} {msg opts} {
             # we get here after call to "disconnect" during MSG or next_server; the socket has been already closed,
@@ -1055,9 +1047,6 @@ oo::class create ::nats::connection {
     
     method ProcessEvent {reason} {
         switch -- $reason {
-            connect {
-                my ConnectNextServer
-            }
             connected {
                 # this event will arrive again and again if we don't disable it
                 chan event $sock writable {}
@@ -1130,6 +1119,9 @@ oo::class create ::nats::connection {
                 } else {
                     ${logger}::warn "Invalid protocol $protocol_op $protocol_arg"
                 }
+            }
+            default {
+                ${logger}::error "CoroMain: unknown reason $reason"
             }
         }
     }

@@ -31,11 +31,11 @@ test server_pool-4 "Parse URL with a port number" -body {
 
 test server_pool-5.1 "Parse URL without a hostname" -body {
     $sp parse nats://:2020
-} -result {Invalid URL nats://:2020} -returnCodes error
+} -result {Invalid URL nats://:2020} -errorCode {NATS ErrInvalidArg}
 
 test server_pool-5.2 "Parse URL with invalid port number" -body {
     $sp parse nats://localhost:2a20
-} -result {Invalid URL nats://localhost:2a20} -returnCodes error
+} -result {Invalid URL nats://localhost:2a20} -errorCode {NATS ErrInvalidArg}
 
 test server_pool-6.1 "Configure multiple servers" -body {
     $conn configure -servers [list nats-server1.com nats://some_token@nats-server2.com tls://user:pass2@nats-server4.com:2020]
@@ -43,8 +43,10 @@ test server_pool-6.1 "Configure multiple servers" -body {
 } -result 3
 
 test server_pool-6.2 "Trying to configure an invalid server does not clear the pool" -body {
-    catch {$conn configure -servers [list nats-server1.com nats://:2020]} err errOpts
-    assert {[dict get $errOpts -errorcode] eq {NATS ErrInvalidArg}}
+    $conn configure -servers [list nats-server1.com nats://:2020]
+} -result {Invalid URL nats://:2020} -match glob -errorCode {NATS ErrInvalidArg}
+    
+test server_pool-6.3 "The server pool is still the same" -body {
     llength [$sp all_servers]
 } -result 3
 
@@ -84,7 +86,7 @@ test server_pool-12 "Connection fails immediately with an empty pool" -body {
     set err
 } -result "Server pool is empty"
 
-test server_pool-13 "Initial connection attempt goes through the server pool only once" -body {
+test server_pool-13.1 "Initial connection attempt goes through the server pool only once" -body {
     # remember that by default max_reconnect_attempts=60, but it matters only for reconnecting
     $conn configure -servers [list nats://localhost:4222 nats://localhost:4223]
     duration {

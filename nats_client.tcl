@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2021 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2020-2022 Petro Kazmirchuk https://github.com/Kazmirchuk
 # Copyright (c) 2021 ANT Solutions https://antsolutions.eu/
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
@@ -220,8 +220,9 @@ oo::class create ::nats::connection {
         if {!$async} {
             ${logger}::debug "Waiting for connection"
             my CoroVwait [self object]::status
-           if {$status != $nats::status_connected} {
-                if {[dict exists $last_error code]} {
+            if {$status != $nats::status_connected} {
+                # if there's only one server in the pool, it's more user-friendly to report the actual error
+                if {[dict exists $last_error code] && [llength [$serverPool all_servers]] == 1} {
                     throw [dict get $last_error code] [dict get $last_error errorMessage]
                 }
                 throw {NATS ErrNoServers} "No servers available for connection"
@@ -678,7 +679,7 @@ oo::class create ::nats::connection {
         after cancel $timers(flush)
         set timers(flush) ""
         
-        if {[info coroutine] eq ""} {
+        if {[info coroutine] ne $coro} {
             if {!$broken} {
                 $coro stop
             }
@@ -738,17 +739,20 @@ oo::class create ::nats::connection {
     # --------- these procs execute in the coroutine ---------------
     # connect to Nth server in the pool
     method ConnectNextServer {} {
-        # if it throws ErrNoServers, we have exhausted all servers in the pool
-        # we must stop the coroutine, so let the error propagate
-        lassign [$serverPool next_server] host port ;# it may wait for reconnect_time_wait ms!
-        ${logger}::info "Connecting to the server at $host:$port"
-        try {
-            set sock [socket -async $host $port]
-            chan event $sock writable [list $coro connected]
-        } on error {msg opt} {
-            $serverPool current_server_connected false
-            my AsyncError ErrConnectionRefused "Failed to connect to $host:$port: $msg"
-            after idle [list set [self object]::status $nats::status_closed]
+        while {1} {
+            # if it throws ErrNoServers, we have exhausted all servers in the pool
+            # we must stop the coroutine, so let the error propagate
+            lassign [$serverPool next_server] host port ;# it may wait for reconnect_time_wait ms!
+            ${logger}::info "Connecting to the server at $host:$port"
+            try {
+                # socket -async can throw e.g. in case of DNS resolution failure
+                set sock [socket -async $host $port]
+                chan event $sock writable [list $coro connected]
+                return
+            } on error {msg opt} {
+                $serverPool current_server_connected false
+                my AsyncError ErrConnectionRefused "Failed to connect to $host:$port: $msg"
+            }
         }
     }
     
@@ -807,6 +811,7 @@ oo::class create ::nats::connection {
             # example connect_urls : ["192.168.2.5:4222", "192.168.91.1:4222", "192.168.157.1:4223", "192.168.2.5:4223"]
             # by default each server will advertise IPs of all network interfaces, so the server pool may seem bigger than it really is
             # --client_advertise NATS option can be used to make it clearer
+            #TODO invoke callback - discovered servers/LDM
             set infoDict [json::json2dict $cmd]
             if {[dict exists $infoDict connect_urls]} {
                 ${logger}::debug "Got connect_urls: [dict get $infoDict connect_urls]"
@@ -1064,10 +1069,10 @@ oo::class create ::nats::connection {
                     $serverPool current_server_connected false
                     my AsyncError ErrConnectionRefused "Failed to connect to $host:$port: $errorMsg"
                     my ConnectNextServer
-                    return
                 }
                 # connection succeeded
                 # we want to call "flush" ourselves, so use -buffering full
+                # even though [socket] already had -async, I have to repeat -blocking 0 anyway =\
                 # NATS protocol uses crlf as a delimiter
                 # when reading from the socket, it's easier to let Tcl do EOL translation, unless we are in method MSG
                 # when writing to the socket, we need to turn off the translation when sending a message payload

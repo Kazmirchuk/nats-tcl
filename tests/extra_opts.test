@@ -9,8 +9,11 @@
 # - publishing and subscription to messages with headers
 # - treating a received message as a dict
 # - the no-responders feature
-# - request with -max_msgs option (for internal use only)
+# - request with -max_msgs option
 # - coroutine-aware sync request
+
+set nats_cli [catch {exec -ignorestderr nats --version}]
+tcltest::testConstraint nats_cli [expr !$nats_cli]
 
 startNats NATS
 
@@ -242,7 +245,7 @@ test extra_opts-6.2 "Send requests with headers" -setup {
     stopResponder $conn nats_2.2
 }
 
-test extra_opts-6.3 "Receive a message with a header from NATS CLI" -body {
+test extra_opts-6.3 "Receive a message with a header from NATS CLI" -constraints nats_cli -body {
     set msg_received 0
     $conn subscribe nats_cli -dictmsg true -callback [lambda {subject message replyTo} {
         assert {$subject eq "nats_cli"}
@@ -270,16 +273,17 @@ test extra_opts-7 "Receive no-responders from a subscription" -body {
     assert {[dict get $hdr Status] == 503} 1
 }
 
-test extra_opts-8 "Receive no-responders from a request" -body {
-    set msg_received 0
-    
+test extra_opts-8.1 "Receive no-responders from a sync request" -body {
     duration {
         catch {$conn request nats_2.2 "no response" -timeout 500} err errOpts
     } elapsed
     assert { $elapsed < 100 } ;# much lower than the timeout!
     assert {[dict get $errOpts -errorcode] eq {NATS ErrNoResponders}}
     assert {$err eq "No responders available for request" }
-    
+}
+
+test extra_opts-8.2 "Receive no-responders from an async request" -body {
+    set msg_received 0
     $conn request nats_2.2 "no response" -timeout 500 -callback [lambda {timedOut msg} {
         assert {[string is true -strict $timedOut]}
         set ::msg_received 1

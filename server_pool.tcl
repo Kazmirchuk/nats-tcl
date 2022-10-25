@@ -24,19 +24,19 @@ oo::class create ::nats::server_pool {
     # remember that it carries only IP:port, so no scheme etc
     method add {url} {
         try {
-            set result [my parse $url]
+            set newServer [my parse $url]
         } trap {NATS INVALID_ARG} err {
             [$conn logger]::warn $err ;# very unlikely
             return
         }
         foreach s $servers {
-            if {[dict get $s host] eq [dict get $result host] && [dict get $s port] == [dict get $result port]} {
+            if {[dict get $s host] eq [dict get $newServer host] && [dict get $s port] == [dict get $newServer port]} {
                 return ;# we already know this server
             }
         }
-        dict set result discovered true
-        set servers [linsert $servers 0 $result] ;# recall that current server is always at the end of the list
-        [$conn logger]::debug "Added $result to the server pool"
+        dict set newServer discovered true
+        set servers [linsert $servers 0 $newServer] ;# recall that current server is always at the end of the list
+        [$conn logger]::debug "Added $url to the server pool"
     }
     
     # used by "configure". All or nothing: if at least one URL is invalid, the old configuration stays intact
@@ -45,10 +45,11 @@ oo::class create ::nats::server_pool {
         foreach url $urls {
             lappend result [my parse $url] ;# will throw INVALID_ARG in case of invalid URL - let it propagate
         }
-        # interestingly, it seems that official NATS clients don't check the server list for duplicates
-        set result [lsort -unique $result]
         upvar #0 ${conn}::config config
         if {$config(randomize)} {
+            # ofc lsort will mess up the URL list if randomize=false
+            # interestingly, it seems that official NATS clients don't check the server list for duplicates
+            set result [lsort -unique $result]
             # IMHO official clients do shuffling too often, at least in 3 places! I do it only once 
             set result [struct::list shuffle $result]
         }

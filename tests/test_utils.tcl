@@ -23,7 +23,7 @@ namespace eval test_utils {
         after $delay [list set ::test_utils::sleepVar 1]
         vwait ::test_utils::sleepVar
     }
-    
+
     proc wait_for {var {timeout 300}} {
         set timer [after $timeout [list set $var "test_utils_timeout"]]
         vwait $var
@@ -269,7 +269,7 @@ namespace eval test_utils {
         if {![string is boolean -strict $res]} {
             return -code error "invalid boolean expression: $expression"
         }
-        if {$res} {return}
+        if {$res} return
         if {$subst_commands} {
             # useful for [binary encode hex] or [string length] etc
             set msg "assertion failed: [uplevel 1 [list subst $expression]]"

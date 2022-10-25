@@ -44,7 +44,7 @@ test server_pool-6.1 "Configure multiple servers" -body {
 
 test server_pool-6.2 "Trying to configure an invalid server does not clear the pool" -body {
     $conn configure -servers [list nats-server1.com nats://:2020]
-} -result {Invalid URL nats://:2020} -match glob -errorCode {NATS ErrInvalidArg}
+} -result {Invalid URL nats://:2020} -errorCode {NATS ErrInvalidArg}
     
 test server_pool-6.3 "The server pool is still the same" -body {
     llength [$sp all_servers]
@@ -97,6 +97,11 @@ test server_pool-13.1 "Initial connection attempt goes through the server pool o
     assert {[dict get $errOpts -errorcode] eq {NATS ErrNoServers}}    
     set err
 } -result "No servers available for connection"
+
+test server_pool-13.2 "DNS resolution failure" -body {
+    $conn configure -servers nats://unknown-host.gg
+    $conn connect
+} -result {Failed to connect*} -match glob -errorCode {NATS ErrConnectionRefused}
 
 test server_pool-14.1 "Reconnecting timings and counters" -body {
     startNats NATS1

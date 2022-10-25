@@ -61,7 +61,7 @@ test tls-3.1 "Connect to NATS without TLS" -constraints tls -setup {
     # or you can specify secure=true in "configure"
     $conn configure -servers tls://localhost:4222 -tls_opts [list -cafile rootCA.pem]
     $conn connect
-} -result {Server localhost:4222 does not provide TLS} -match glob -errorCode {NATS ErrSecureConnWanted} -cleanup {
+} -result {Server localhost:4222 does not provide TLS} -errorCode {NATS ErrSecureConnWanted} -cleanup {
     stopNats NATS
 }
 

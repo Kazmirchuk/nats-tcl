@@ -217,8 +217,14 @@ oo::class create ::nats::connection {
         coroutine coro {*}[mymethod CoroMain]
         
         if {!$async} {
-            ${logger}::debug "Waiting for connection"
-            my CoroVwait [self object]::status
+            # $status will become "closed" straightaway
+            # in case all calls to [socket] fail immediately and we exhaust the server pool
+            # so we shouldn't vwait in this case
+            if {$status == $nats::status_connecting} {
+                ${logger}::debug "Waiting for connection status"
+                my CoroVwait [self object]::status
+                ${logger}::debug "Finished waiting for connection status"
+            }
             if {$status != $nats::status_connected} {
                 # if there's only one server in the pool, it's more user-friendly to report the actual error
                 if {[dict exists $last_error code] && [llength [$serverPool all_servers]] == 1} {
@@ -226,7 +232,6 @@ oo::class create ::nats::connection {
                 }
                 throw {NATS ErrNoServers} "No servers available for connection"
             }
-            ${logger}::debug "Finished waiting for connection"
         }
         return
     }
@@ -740,7 +745,7 @@ oo::class create ::nats::connection {
             lassign [$serverPool next_server] host port ;# it may wait for reconnect_time_wait ms!
             ${logger}::info "Connecting to the server at $host:$port"
             try {
-                # socket -async can throw e.g. in case of DNS resolution failure
+                # socket -async can throw e.g. in case of a DNS resolution failure
                 set sock [socket -async $host $port]
                 chan event $sock writable [list $coro connected]
                 return
@@ -976,11 +981,11 @@ oo::class create ::nats::connection {
         }
     }
     
-    method OK {cmd} {
+    method +OK {cmd} {
         # nothing to do
     }
     
-    method ERR {cmd} {
+    method -ERR {cmd} {
         set errMsg [string tolower [string trim $cmd " '"]] ;# remove blanks and single quotes around the message
         if [string match "stale connection*" $errMsg] {
             my AsyncError ErrStaleConnection $errMsg 1
@@ -1058,6 +1063,7 @@ oo::class create ::nats::connection {
                     $serverPool current_server_connected false
                     my AsyncError ErrConnectionRefused "Failed to connect to $host:$port: $errorMsg"
                     my ConnectNextServer
+                    return
                 }
                 # connection succeeded
                 # we want to call "flush" ourselves, so use -buffering full
@@ -1108,13 +1114,11 @@ oo::class create ::nats::connection {
                 # extract the first word from the line (INFO, MSG etc)
                 # protocol_arg will be empty in case of PING/PONG/OK
                 set protocol_arg [lassign $line protocol_op]
-                # in case of -ERR or +OK
-                set protocol_op [string trimleft $protocol_op -+]
                 if {$protocol_op eq "HMSG"} {
                     my MSG $protocol_arg 1
                     return
                 }
-                if {$protocol_op in {MSG INFO ERR OK PING PONG}} {
+                if {$protocol_op in {MSG INFO -ERR +OK PING PONG}} {
                     my $protocol_op $protocol_arg
                 } else {
                     ${logger}::warn "Invalid protocol $protocol_op $protocol_arg"

@@ -581,7 +581,6 @@ oo::class create ::nats::connection {
         throw {NATS ErrTimeout} "PING timeout"
     }
 
-    # get jet stream object
     method jet_stream {} {
         if {$jetStream eq ""} {
             set jetStream [::nats::jet_stream new [self]]
@@ -857,6 +856,10 @@ oo::class create ::nats::connection {
                 my AsyncError ErrTLS "TLS package is not available" 1
                 return
             }
+            # there's no need to check for tls_verify in INFO
+            # a user needs to provide -certfile and -keyfile options to tls::import anyway
+            # and if they are not needed, NATS server will ignore them
+            
             # for simplicity, let's switch to the blocking mode just for the handshake
             chan configure $sock -blocking 1
             try {

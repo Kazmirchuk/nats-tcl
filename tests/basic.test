@@ -201,7 +201,7 @@ test basic-9 "Asynchronous request with timeout - success" -body {
     duration {
         $conn request service "0 async_req2" -timeout 600 -callback [lambda {timedOut msg} {
             # let's use lambda here for the sake of example
-            assert {[string is false -strict $timedOut]}
+            assert {!$timedOut}
             assert {$msg eq "async_req2"}
             set test_utils::simpleMsg ""
         }]
@@ -279,7 +279,7 @@ test basic-14 "Synchronous request with multiple responders" -body {
 test basic-15 "Asynchronous request with multiple responders" -body {
     set msg_count 0
     $conn request multi_subj "0 foobar2" -timeout 600 -callback [lambda {timedOut msg} {
-        assert {[string is false -strict $timedOut]}
+        assert {!$timedOut}
         assert {$msg eq "foobar2"}
         incr ::msg_count
     }]

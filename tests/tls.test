@@ -49,6 +49,7 @@ test tls-2.2 "Connect to NATS with client verification - failed" -constraints tl
     $conn configure -tls_opts [list -cafile rootCA.pem]
     $conn connect
     # I get ErrTLS on Windows and ErrBrokenSocket on Linux ??
+    # NATS server will log "client didn't provide a certificate"
 } -result {*alert bad certificate*} -match glob -errorCode {NATS ErrTLS} -cleanup {
     $conn reset -tls_opts
     stopNats NATS

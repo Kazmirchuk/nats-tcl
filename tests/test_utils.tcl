@@ -261,6 +261,8 @@ namespace eval test_utils {
     }
     
     # control:assert is garbage and doesn't perform substitution on failed expressions, so I can't even know a value of offending variable etc
+    # if assert is used in a callback and fails, it will not be reported as a failed test, because it runs in the global scope
+    # so it must always be followed by a change to a variable that is then checked/vwaited in the test itself
     proc assert {expression { subst_commands 0} } {
         set code [catch {uplevel 1 [list expr $expression]} res]
         if {$code} {

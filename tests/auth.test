@@ -83,7 +83,7 @@ test auth-2.1 "Connect to NATS using an authentication token in URL" -body {
     $conn publish subject1 "hello token"
     wait_for test_utils::simpleMsg
     
-    assert {[string is true -strict [set ${conn}::serverInfo(auth_required)]]}
+    assert {[dict get [$conn server_info] auth_required]}
     set connectDict [getConnectOpts [$obs getChanData]]
     assert {[dict get $connectDict auth_token] eq "12345"}
         

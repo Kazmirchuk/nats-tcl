@@ -48,7 +48,7 @@ test cluster-1.1 "Dynamic expansion of the server pool with INFO message" -body 
     set discovered_server [lindex [$conn all_servers] 0]
     assert {[dict get $discovered_server host] eq "localhost"} 1
     assert {[dict get $discovered_server port] == 5222} 1
-    assert {[string is true -strict [dict get $discovered_server discovered]]}
+    assert {[dict get $discovered_server discovered]}
 }
 
 test cluster-1.2 "Restore subscriptions after reconnecting to another server" -body {

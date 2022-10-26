@@ -20,6 +20,22 @@ namespace eval ::nats {
     variable status_connecting 1
     variable status_connected 2
     variable status_reconnecting 3
+    
+    # optional packages
+    variable available_pkg
+    set available_pkg(tls) 0
+    try {
+        package require tls
+        set available_pkg(tls) 1
+    } on error err {}
+    
+    set available_pkg(iocp) 0
+    if {$::tcl_platform(platform) eq "windows"} {
+        try {
+            package require iocp
+            set available_pkg(iocp) 1
+        } on error err {}
+    }
 }
 # all options for "configure"
 set ::nats::option_syntax {
@@ -35,7 +51,6 @@ set ::nats::option_syntax {
     { max_outstanding_pings.integer 2   "Max number of PINGs without a reply from a NATS server before closing the connection"}
     { echo.boolean true                 "If true, messages from this connection will be echoed back by the server if the connection has matching subscriptions"}
     { tls_opts.list ""                  "Additional options for tls::import"}
-    { default_tls_opts.list {-require 1 -command ::nats::tls_callback} "Default options for tls::import"}
     { user.list ""                      "Default username"}
     { password.list ""                  "Default password"}
     { token.arg ""                      "Default authentication token"}
@@ -48,11 +63,11 @@ set ::nats::option_syntax {
 
 oo::class create ::nats::connection {
     # "private" variables
-    variable config sock coro timers counters subscriptions requests serverInfo serverPool \
+    variable config sock coro timers counters subscriptions requests serverPool \
              subjectRegex outBuffer randomChan requestsInboxPrefix jetStream pong logger
     
     # "public" variables, so that users can set up traces if needed
-    variable status last_error
+    variable status last_error serverInfo
 
     constructor { { conn_name "" } } {
         set status $nats::status_closed
@@ -176,7 +191,7 @@ oo::class create ::nats::connection {
     }
     
     method current_server {} {
-        return [$serverPool current_server]
+        return [lrange [$serverPool current_server] 0 1]  ;# drop the last element - schema (nats/tls)
     }
     
     method all_servers {} {
@@ -746,7 +761,11 @@ oo::class create ::nats::connection {
             ${logger}::info "Connecting to the server at $host:$port"
             try {
                 # socket -async can throw e.g. in case of a DNS resolution failure
-                set sock [socket -async $host $port]
+                if {$nats::available_pkg(iocp)} {
+                    set sock [iocp::inet::socket -async $host $port]
+                } else {
+                    set sock [socket -async $host $port]
+                }
                 chan event $sock writable [list $coro connected]
                 return
             } on error {msg opt} {
@@ -760,14 +779,14 @@ oo::class create ::nats::connection {
         try {
             # tls_required=true in CONNECT seems unnecessary to me, because TLS handshake has already happened
             # but nats.go does this
-            set connectParams [list verbose [nats::bool2json $config(verbose)] \
-                                    pedantic [nats::bool2json $config(pedantic)] \
-                                    tls_required [nats::bool2json $tls_done] \
+            set connectParams [list verbose $config(verbose) \
+                                    pedantic $config(pedantic) \
+                                    tls_required $tls_done \
                                     name [json::write::string $config(name)] \
                                     lang [json::write::string Tcl] \
                                     version [json::write::string 1.0] \
                                     protocol 1 \
-                                    echo [nats::bool2json $config(echo)] ] 
+                                    echo $config(echo)]
             
             if {[info exists serverInfo(headers)] && $serverInfo(headers)} {
                 lappend connectParams headers true no_responders true
@@ -812,10 +831,11 @@ oo::class create ::nats::connection {
             # by default each server will advertise IPs of all network interfaces, so the server pool may seem bigger than it really is
             # --client_advertise NATS option can be used to make it clearer
             #TODO invoke callback - discovered servers/LDM
-            set infoDict [json::json2dict $cmd]
-            if {[dict exists $infoDict connect_urls]} {
-                ${logger}::debug "Got connect_urls: [dict get $infoDict connect_urls]"
-                foreach url [dict get $infoDict connect_urls] {
+            array set serverInfo [json::json2dict $cmd]
+            if {[info exists serverInfo(connect_urls)]} {
+                set urls $serverInfo(connect_urls)
+                ${logger}::debug "Got connect_urls: $urls"
+                foreach url $urls {
                     $serverPool add $url
                 }
             }
@@ -828,20 +848,21 @@ oo::class create ::nats::connection {
         array unset serverInfo ;# do not unset it in CloseSocket!
         # otherwise publishing messages while reconnecting does not work, due to the check for max_payload
         array set serverInfo [json::json2dict $cmd]
-        set tls_done 0
-        lassign [my current_server] host port
-        set scheme [dict get [lindex [$serverPool all_servers] end] scheme]
+        set tls_done false
+        lassign [$serverPool current_server] host port scheme
         if {[info exists serverInfo(tls_required)] && $serverInfo(tls_required)} {
             #NB! NATS server will never accept a TLS connection. Always start connecting with plain TCP,
             # and only after receiving INFO, we can upgrade to TLS if needed
-            package require tls
+            if {!$nats::available_pkg(tls)} {
+                my AsyncError ErrTLS "TLS package is not available" 1
+                return
+            }
             # for simplicity, let's switch to the blocking mode just for the handshake
             chan configure $sock -blocking 1
             try {
-                tls::import $sock {*}$config(default_tls_opts) {*}$config(tls_opts)
+                tls::import $sock -require 1 -command ::nats::tls_callback {*}$config(tls_opts)
                 tls::handshake $sock
-                set tls_done 1
-                # -errorcode will be NONE
+                set tls_done true
             } on error err {
                 my AsyncError ErrTLS "TLS handshake with server $host:$port failed: $err" 1
                 return
@@ -1072,6 +1093,7 @@ oo::class create ::nats::connection {
                 # when reading from the socket, it's easier to let Tcl do EOL translation, unless we are in method MSG
                 # when writing to the socket, we need to turn off the translation when sending a message payload
                 # but outBuffer doesn't know which element is a message, so it's easier to write CR+LF ourselves
+                # TODO: configure -buffersize?
                 chan configure $sock -translation {crlf binary} -blocking 0 -buffering full -encoding binary
                 chan event $sock readable [list $coro readable]
             }
@@ -1250,15 +1272,6 @@ proc ::nats::format_header { header } {
     # don't append one more \r\n here! the header is put into outBuffer as a separate element
     # so \r\n will be added when flushing
     return $result
-}
-
-# because there's no json::write::boolean
-proc ::nats::bool2json {val} {
-    if {[string is true -strict $val]} {
-        return true
-    } else {
-        return false
-    }
 }
 
 # preserve json::write variables

@@ -215,7 +215,7 @@ test basic-10 "Asynchronous request with timeout - failure" -body {
     duration {
         # timeout must be longer than flush_interval!
         $conn request service "1000 async_req3" -timeout 600 -callback [lambda {timedOut msg} {
-            assert {[string is true -strict $timedOut]}
+            assert {$timedOut}
             assert {$msg eq ""}
             set test_utils::simpleMsg ""
         }]

@@ -118,7 +118,7 @@ test jet_stream-8 "Publish message to JetStream async timeout" -body {
     duration {
         wait_for ::timedOut 1000
     } elapsed
-    string is true -strict $timedOut
+    set timedOut
 } -result {1}
 
 test jet_stream-9 "Consume messages in batches" -body {

@@ -285,7 +285,7 @@ test extra_opts-8.1 "Receive no-responders from a sync request" -body {
 test extra_opts-8.2 "Receive no-responders from an async request" -body {
     set msg_received 0
     $conn request nats_2.2 "no response" -timeout 500 -callback [lambda {timedOut msg} {
-        assert {[string is true -strict $timedOut]}
+        assert {$timedOut}
         set ::msg_received 1
     }]
     duration {

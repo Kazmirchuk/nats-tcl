@@ -56,7 +56,7 @@ set ::nats::option_syntax {
     { token.arg ""                      "Default authentication token"}
     { secure.boolean false              "If secure=true, connection will fail if a server can't provide a TLS connection"}
     { check_subjects.boolean true       "Enable client-side checking of subjects when publishing or subscribing"}
-    { check_connection.boolean true     "Check connection with server while publishing/subscribing (default) and throw error if connection is not established"}
+    { check_connection.boolean true     "Check the connection status before publishing/subscribing"}
     { dictmsg.boolean false             "Return messages from subscribe&request as dicts by default" }
     { utf8_convert.boolean false        "Convert messages to UTF-8 before sending and after receiving." }    
 }
@@ -299,14 +299,14 @@ oo::class create ::nats::connection {
             }
         }
 
-        #convert to utf-8
+        my CheckConnection
+        
         if {$config(utf8_convert)} {
             set message [encoding convertto utf-8 $message]
         }        
         
         set msgLen [string length $message]
-        if {$config(check_connection) || $status == $nats::status_connected || $status == $nats::status_reconnecting} {
-            my CheckConnection
+        if {[array size serverInfo]} {
             if {$msgLen > $serverInfo(max_payload)} {
                 throw {NATS ErrMaxPayload} "Maximum size of NATS message is $serverInfo(max_payload)"
             }
@@ -341,9 +341,7 @@ oo::class create ::nats::connection {
     }
     
     method subscribe {subject args} {
-        if {$config(check_connection)} {
-            my CheckConnection
-        }
+        my CheckConnection
         set queue ""
         set callback ""
         set maxMsgs 0 ;# unlimited by default
@@ -406,9 +404,7 @@ oo::class create ::nats::connection {
     }
     
     method unsubscribe {subID args} {
-        if {$config(check_connection)} {
-            my CheckConnection
-        }
+        my CheckConnection
         set maxMsgs 0 ;# unlimited by default
         foreach {opt val} $args {
             switch -- $opt {
@@ -1190,7 +1186,10 @@ oo::class create ::nats::connection {
     }
     
     method CheckConnection {} {
-        # allow PUB & SUB when connected or reconnecting, throw an error otherwise
+        if {!$config(check_connection)} {
+            return  ;# allow to buffer PUB/SUB/UNSUB even before the first connection to NATS
+        }
+        # allow PUB/SUB/UNSUB when connected or reconnecting, throw an error otherwise
         if {$status in [list $nats::status_closed $nats::status_connecting] } {
             throw {NATS ErrConnectionClosed} "No connection to NATS server"
         }

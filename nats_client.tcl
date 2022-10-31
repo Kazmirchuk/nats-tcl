@@ -58,7 +58,7 @@ set ::nats::option_syntax {
     { check_subjects.boolean true       "Enable client-side checking of subjects when publishing or subscribing"}
     { check_connection.boolean true     "Check the connection status before publishing/subscribing"}
     { dictmsg.boolean false             "Return messages from subscribe&request as dicts by default" }
-    { utf8_convert.boolean false        "Convert messages to UTF-8 before sending and after receiving." }    
+    { utf8_convert.boolean false        "Convert messages to/from UTF-8 before sending and after receiving" }
 }
 
 oo::class create ::nats::connection {
@@ -805,17 +805,20 @@ oo::class create ::nats::connection {
     }
     
     method RestoreSubs {} {
+        set subsBuffer [list]
         foreach subID [array names subscriptions] {
             set subject [dict get $subscriptions($subID) subj]
             set queue [dict get $subscriptions($subID) queue]
             set maxMsgs [dict get $subscriptions($subID) maxMsgs]
             set recMsgs [dict get $subscriptions($subID) recMsgs]
-            lappend outBuffer "SUB $subject $queue $subID"
+            lappend subsBuffer "SUB $subject $queue $subID"
             if {$maxMsgs > 0} {
                 set remainingMsgs [expr {$maxMsgs - $recMsgs}]
-                lappend outBuffer "UNSUB $subID $remainingMsgs"
+                lappend subsBuffer "UNSUB $subID $remainingMsgs"
             }
         }
+        # ensure SUBs are sent before any pending PUBs
+        set outBuffer [linsert $outBuffer 0 {*}$subsBuffer]
     }
     
     method INFO {cmd} {

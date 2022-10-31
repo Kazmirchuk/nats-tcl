@@ -6,6 +6,7 @@
 # Test summary:
 # - verbose, pedantic, no-echo options
 # - PING/PONG protocol and timeouts
+# - utf8_convert, check_connection
 
 startNats NATS
 
@@ -174,6 +175,42 @@ test extra_opts-5 "PING/PONG - no response from the server" -setup {
     $conn disconnect
     $conn reset -ping_interval
     stopFakeServer
+}
+
+startNats NATS
+# this is "Eivør Pálsdóttir" encoded in UTF-8
+set utf8_msg [encoding convertfrom utf-8 "\x45\x69\x76\xC3\xB8\x72\x20\x50\xC3\xA1\x6C\x73\x64\xC3\xB3\x74\x74\x69\x72"]
+test extra_opts-6 "Check the utf8_convert option" -body {
+    $conn configure -utf8_convert true
+    $conn connect
+    startResponder $conn
+    set response [$conn request service "0 $utf8_msg"]  ;# check that the message comes back uncorrupted
+    puts "Got UTF-8 response: $response"  ;# this should be readable in the terminal
+    set response
+} -result $utf8_msg -cleanup {
+    stopResponder $conn
+    $conn disconnect
+    $conn reset -utf8_convert
+}
+
+test extra_opts-7.1 "option check_connection=true (default)" -body {
+    $conn connect -async
+    $conn subscribe subject1 -callback test_utils::simpleCallback
+} -result "No connection to NATS server" -errorCode {NATS ErrConnectionClosed} -cleanup {
+    $conn disconnect
+    assert {[set ${conn}::status] == $nats::status_closed} 1
+}
+
+test extra_opts-7.2 "option check_connection=false" -body {
+    $conn configure -check_connection false
+    # due to -check_connection false, PUB/SUB/UNSUB are buffered and flushed after a connection is established
+    $conn connect -async
+    $conn subscribe subject1 -callback test_utils::simpleCallback
+    $conn publish subject1 "hello"
+    wait_for test_utils::simpleMsg 1000
+} -result "hello" -cleanup {
+    $conn disconnect
+    $conn reset -check_connection
 }
 
 $conn destroy

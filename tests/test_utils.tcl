@@ -32,6 +32,7 @@ namespace eval test_utils {
         } else {
             after cancel $timer
         }
+        return [set $var]
     }
     
     proc wait_flush {conn} {

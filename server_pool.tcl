@@ -10,12 +10,13 @@ package require struct::list
 namespace eval ::nats {}
 
 oo::class create ::nats::server_pool {
-    variable servers conn
+    variable servers conn config
     
     constructor {c} {
         set servers [list] ;# list of dicts working as FIFO queue
         # each dict contains: host port scheme discovered reconnects last_attempt (ms, mandatory), user password auth_token (optional)
         set conn $c
+        upvar #0 ${conn}::config [self object]::config
     }
     destructor {
     }
@@ -45,7 +46,7 @@ oo::class create ::nats::server_pool {
         foreach url $urls {
             lappend result [my parse $url] ;# will throw INVALID_ARG in case of invalid URL - let it propagate
         }
-        upvar #0 ${conn}::config config
+        
         if {$config(randomize)} {
             # ofc lsort will mess up the URL list if randomize=false
             # interestingly, it seems that official NATS clients don't check the server list for duplicates
@@ -96,11 +97,7 @@ oo::class create ::nats::server_pool {
         return $newServer
     }
     
-    method next_server {} {
-        upvar #0 ${conn}::config config
-        upvar #0 ${conn}::status status
-        upvar #0 ${conn}::timers timers
-        
+    method next_server {status} {
         while {1} {
             if { [llength $servers] == 0 } {
                 throw {NATS ErrNoServers} "Server pool is empty"
@@ -140,17 +137,12 @@ oo::class create ::nats::server_pool {
         
         # connect_timeout applies to a connect attempt to one server and includes not only TCP handshake, but also NATS-level handshake
         # and the first PING/PONG exchange to ensure successful authentication
-        set timers(connect) [after $config(connect_timeout) [list [info coroutine] connect_timeout]]
-        [$conn logger]::debug "Started connection timer $timers(connect)"
+        ${conn}::my StartConnectTimer
         return [my current_server]
     }
     
     method current_server_connected {ok} {
-        upvar #0 ${conn}::timers timers
-        after cancel $timers(connect)
-        [$conn logger]::debug "Cancelled connection timer $timers(connect)"
-        set timers(connect) ""
-        
+        ${conn}::my CancelConnectTimer
         set s [lindex $servers end]
         dict set s last_attempt [clock milliseconds]
         if {$ok} {
@@ -162,8 +154,6 @@ oo::class create ::nats::server_pool {
     }
     
     method format_credentials {} {
-        upvar #0 ${conn}::config config
-        
         set s [lindex $servers end]
         
         if {[dict exists $s user] && [dict exists $s password]} {

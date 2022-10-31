@@ -269,11 +269,7 @@ oo::class create ::nats::connection {
         }
         array unset requests
         set requestsInboxPrefix ""
-        if {$timers(connect) ne ""} {
-            after cancel $timers(connect)
-            ${logger}::debug "Cancelled connection timer $timers(connect)"
-        }
-        set timers(connect) ""
+        my CancelConnectTimer
         #CoroMain will set status to "closed"
         return
     }
@@ -729,13 +725,11 @@ oo::class create ::nats::connection {
                 puts -nonewline $sock $msg
             }
             flush $sock
+            set outBuffer [list] ;# do NOT clear the buffer unless we had a successful flush!
         } on error err {
             lassign [my current_server] host port
             my AsyncError ErrBrokenSocket "Failed to send data to $host:$port: $err" 1
-            return
         }
-        # do NOT clear the buffer unless we had a successful flush!
-        set outBuffer [list]
     }
     
     method CoroVwait {var} {
@@ -752,7 +746,7 @@ oo::class create ::nats::connection {
         while {1} {
             # if it throws ErrNoServers, we have exhausted all servers in the pool
             # we must stop the coroutine, so let the error propagate
-            lassign [$serverPool next_server] host port ;# it may wait for reconnect_time_wait ms!
+            lassign [$serverPool next_server $status] host port ;# it may wait for reconnect_time_wait ms!
             ${logger}::info "Connecting to the server at $host:$port"
             try {
                 # socket -async can throw e.g. in case of a DNS resolution failure
@@ -1206,6 +1200,20 @@ oo::class create ::nats::connection {
             my CloseSocket 1
             my ConnectNextServer ;# can be done only in the coro
         }
+    }
+    
+    method StartConnectTimer {} {
+        set timers(connect) [after $config(connect_timeout) [list [info coroutine] connect_timeout]]
+        ${logger}::debug "Started connection timer $timers(connect)"
+    }
+    
+    method CancelConnectTimer {} {
+        if {$timers(connect) eq ""} {
+            return
+        }
+        after cancel $timers(connect)
+        ${logger}::debug "Cancelled connection timer $timers(connect)"
+        set timers(connect) ""
     }
 }
 

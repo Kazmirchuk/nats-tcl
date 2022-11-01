@@ -177,12 +177,12 @@ namespace eval test_utils {
         [$conn logger]::setlevel debug
         trace add variable ${conn}::status write [lambda {var idx op } {
             upvar $var s
-            puts "[nats::timestamp] New status: $s"
+            puts "[nats::_timestamp] New status: $s"
         }]
         trace add variable ${conn}::last_error write [lambda {var idx op } {
             upvar $var e
             if {$e ne ""} {
-                puts "[nats::timestamp] Async error: $e"
+                puts "[nats::_timestamp] Async error: $e"
             }
         }]
     }
@@ -204,7 +204,7 @@ namespace eval test_utils {
     proc startNats {id args} {
         processman::spawn $id nats-server {*}$args
         sleep 500
-        puts "[nats::timestamp] Started $id"
+        puts "[nats::_timestamp] Started $id"
     }
     
     proc stopNats {id} {
@@ -219,12 +219,12 @@ namespace eval test_utils {
             catch {exec kill $pid}
             after 500
         }
-        puts "[nats::timestamp] Stopped $id"
+        puts "[nats::_timestamp] Stopped $id"
     }
 
     proc execNatsCmd {args} {
         exec -ignorestderr nats {*}$args
-        puts "[nats::timestamp] Executed: nats $args"
+        puts "[nats::_timestamp] Executed: nats $args"
     }
     
     proc startResponder {conn {subj "service"} {queue ""} {dictMsg 0}} {

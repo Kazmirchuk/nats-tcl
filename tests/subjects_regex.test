@@ -37,4 +37,31 @@ test regex-2 "Check subjects with wildcards" -body {
     assert {![${conn}::my CheckWildcard *foo.*]}
 } -result {}
 
+
+# seems like capture groups are broken in Tcl:
+# regexp -expanded {^_INBOX\.([[:alnum:]]+)$} _INBOX.abcABCabbbsdf -> v
+# v=abcABC123a
+# so I just split the inbox to get the generated part
+test regex-3 "Check inbox generation" -body {
+    for {set i 0} {$i < 10000} {incr i} {
+        set inbox [$conn inbox]
+        assert {[string length $inbox] == 29} 1
+        assert {[regexp {^_INBOX\.[[:alnum:]]+$} $inbox]}
+        
+        set random_portion [lindex [split $inbox .] 1]
+        foreach char [split $random_portion ""] {
+            if {[info exists char_stats($char)]} {
+                incr char_stats($char)
+            } else {
+                set char_stats($char) 1
+            }
+        }
+    }
+    # check that each character A-Za-z0-9 occurs at least 100 times
+    assert {[array size char_stats] == 26*2+10} 1
+    foreach char [array names char_stats] {
+        assert {$char_stats($char) > 100}
+    }
+}
+
 tcltest::cleanupTests

@@ -8,8 +8,6 @@ package require cmdline
 package require json
 package require json::write
 package require oo::util
-package require tcl::chan::random
-package require tcl::randomseed
 package require coroutine
 package require logger
 package require textutil::split
@@ -64,7 +62,7 @@ set ::nats::option_syntax {
 oo::class create ::nats::connection {
     # "private" variables
     variable config sock coro timers counters subscriptions requests serverPool \
-             subjectRegex outBuffer randomChan requestsInboxPrefix jetStream pong logger
+             subjectRegex outBuffer requestsInboxPrefix jetStream pong logger
     
     # "public" variables, so that users can set up traces if needed
     variable status last_error serverInfo
@@ -89,8 +87,8 @@ oo::class create ::nats::connection {
         set logger [logger::init $loggerName]
         # default timestamp of the logger looks like Tue Jul 13 15:16:58 CEST 2021, which is not very useful
         foreach lvl [logger::levels] {
-            interp alias {} ::nats::log_stdout_$lvl {} ::nats::log_stdout $loggerName $lvl
-            ${logger}::logproc $lvl ::nats::log_stdout_$lvl
+            interp alias {} ::nats::_log_stdout_$lvl {} ::nats::_log_stdout $loggerName $lvl
+            ${logger}::logproc $lvl ::nats::_log_stdout_$lvl
         }
         
         # default level in the logger is debug, it's too verbose
@@ -111,7 +109,6 @@ oo::class create ::nats::connection {
         # all outgoing messages are put in this list before being flushed to the socket,
         # so that even when we are reconnecting, messages can still be sent
         set outBuffer [list]
-        set randomChan [tcl::chan::random [tcl::randomseed]] ;# generate inboxes
         set requestsInboxPrefix ""
         set jetStream ""
         set pong 1 ;# sync variable for vwait in "ping". Set to 1 to avoid a check for existing timer in "ping"
@@ -119,7 +116,6 @@ oo::class create ::nats::connection {
     
     destructor {
         my disconnect
-        close $randomChan
         $serverPool destroy
         ${logger}::delete
         if {$jetStream ne ""} {
@@ -265,7 +261,7 @@ oo::class create ::nats::connection {
         array unset subscriptions ;# make sure we don't try to "restore" subscriptions when we connect next time
         foreach reqID [array names requests] {
             # cancel pending async timers
-            after cancel [nats::get_default $requests($reqID) timer ""]
+            after cancel [nats::_get_default $requests($reqID) timer ""]
         }
         array unset requests
         set requestsInboxPrefix ""
@@ -323,7 +319,7 @@ oo::class create ::nats::connection {
             lappend outBuffer $ctrl_line $message
         } else {
             try {
-                set hdr [nats::format_header $header]
+                set hdr [nats::_format_header $header]
             } trap {TCL VALUE DICTIONARY} err {
                 throw {NATS ErrInvalidArg} "header is not a valid dict"
             }
@@ -447,7 +443,7 @@ oo::class create ::nats::connection {
         foreach {opt val} $args {
             switch -- $opt {
                 -timeout {
-                    nats::check_timeout $val
+                    nats::_check_timeout $val
                     set timeout $val
                 }
                 -callback {
@@ -529,7 +525,7 @@ oo::class create ::nats::connection {
         after cancel $timerID
         set response [dict get $sync_req response]
         set in_hdr [dict get $response header]
-        if {[nats::get_default $in_hdr Status 0] == 503} {
+        if {[nats::_get_default $in_hdr Status 0] == 503} {
             throw {NATS ErrNoResponders} "No responders available for request"
         }
         if {$dictmsg} {
@@ -546,7 +542,7 @@ oo::class create ::nats::connection {
         foreach {opt val} $args {
             switch -- $opt {
                 -timeout {
-                    nats::check_timeout $val
+                    nats::_check_timeout $val
                     set timeout $val
                 }
                 default {
@@ -581,14 +577,14 @@ oo::class create ::nats::connection {
     }
     
     method inbox {} {
-        # very quick and dirty!
-        return "_INBOX.[binary encode hex [read $randomChan 10]]"
+        # resulting inboxes look the same as in official NATS clients, but use a much simpler RNG
+        return "_INBOX.[nats::_random_string]"
     }
     
     method RequestCallback { reqID {subj ""} {msg ""} {reply ""} } {
         if {$subj eq "" && $reqID != -1} {
             # request timed out
-            set callback [nats::get_default $requests($reqID) callback ""]
+            set callback [nats::_get_default $requests($reqID) callback ""]
             if {$callback ne ""} {
                 after 0 [list {*}$callback 1 ""]
                 unset requests($reqID)
@@ -610,7 +606,7 @@ oo::class create ::nats::connection {
             return
         }
         # most of these variables will be empty in case of a sync request
-        set callback [nats::get_default $requests($reqID) callback ""]
+        set callback [nats::_get_default $requests($reqID) callback ""]
         if {$callback eq ""} {
             # resume from vwait in "method request"; "requests" array will be cleaned up there
             set requests($reqID) [dict create timedOut 0 response $msg]
@@ -619,13 +615,13 @@ oo::class create ::nats::connection {
         # handle the async request
         set timedOut 0
         set in_hdr [dict get $msg header]
-        if {[nats::get_default $in_hdr Status 0] == 503} {
+        if {[nats::_get_default $in_hdr Status 0] == 503} {
             # no-responders is equivalent to timedOut=1
             set timedOut 1
         }
 
         # handle the nats timeout e.q. for pull consumers
-        if {[nats::get_default $in_hdr Status 0] == 408} {
+        if {[nats::_get_default $in_hdr Status 0] == 408} {
             set timedOut 1
         }
 
@@ -783,7 +779,7 @@ oo::class create ::nats::connection {
             if {[info exists serverInfo(auth_required)] && $serverInfo(auth_required)} {
                 lappend connectParams {*}[$serverPool format_credentials]
             } 
-            set jsonMsg [::nats::json_write_object {*}$connectParams]
+            set jsonMsg [::nats::_json_write_object {*}$connectParams]
         } trap {NATS ErrAuthorization} err {
             # no credentials could be found for this server, try next one
             my AsyncError ErrAuthorization $err 1
@@ -936,7 +932,7 @@ oo::class create ::nats::connection {
             set header ""
             if {$expHdrLength > 0} {
                 try {
-                    set header [nats::parse_header [string range $payload 0 $expHdrLength-1]]
+                    set header [nats::_parse_header [string range $payload 0 $expHdrLength-1]]
                 } trap {NATS ErrBadHeaderMsg} err {
                     # invalid header causes an async error, nevertheless the message is delivered, see nats.go, func processMsg
                     my AsyncError ErrBadHeaderMsg $err
@@ -1217,13 +1213,18 @@ oo::class create ::nats::connection {
     }
 }
 
+# by default, when a handshake fails, the TLS library reports it to stderr AND raises an error - see tls.c, function Tls_Error
+# so I end up with the same message logged twice. Let's suppress stderr altogether
+# keep this proc "public" in case a user needs to override it
+proc ::nats::tls_callback {args} { }
+
 # all following procs are private!
-proc ::nats::check_timeout {timeout} {
+proc ::nats::_check_timeout {timeout} {
     if {! ([string is integer -strict $timeout] && $timeout >= -1)} {
         throw {NATS ErrBadTimeout} "Invalid timeout $timeout"
     }
 }
-proc ::nats::timestamp {} {
+proc ::nats::_timestamp {} {
     # workaround for not being able to format current time with millisecond precision
     # should not be needed in Tcl 8.7, see https://core.tcl-lang.org/tips/doc/trunk/tip/423.md
     set t [clock milliseconds]
@@ -1232,12 +1233,13 @@ proc ::nats::timestamp {} {
                       [expr {$t % 1000}] ]
     return $timeStamp
 }
-proc ::nats::log_stdout {service level text} {
-    puts "\[[nats::timestamp] $service $level\] $text"
+
+proc ::nats::_log_stdout {service level text} {
+    puts "\[[nats::_timestamp] $service $level\] $text"
 }
 # returns a dict, where each key points to a list of values
 # NB! unlike HTTP headers, in NATS headers keys are case-sensitive
-proc ::nats::parse_header {header} {
+proc ::nats::_parse_header {header} {
     set result [dict create]
     set i 0
     foreach line [textutil::split::splitx $header {\r\n}] {
@@ -1272,7 +1274,7 @@ proc ::nats::parse_header {header} {
     }
     return $result
 }
-proc ::nats::format_header { header } {
+proc ::nats::_format_header { header } {
     # other official clients accept inline status & description in the first line when *parsing* headers
     # but when serializing headers, status & description are treated just like usual headers
     # so I will do the same, and it simplifies my job here
@@ -1288,7 +1290,7 @@ proc ::nats::format_header { header } {
 }
 
 # preserve json::write variables
-proc ::nats::json_write_object {args} {
+proc ::nats::_json_write_object {args} {
     if {[llength $args] %2 == 1} {
 	    return -code error {wrong # args, expected an even number of arguments}
     }
@@ -1307,7 +1309,7 @@ proc ::nats::json_write_object {args} {
 }
 
 # pending TIP 342 in Tcl 8.7
-proc ::nats::get_default {dict_val key def} {
+proc ::nats::_get_default {dict_val key def} {
     if {[dict exists $dict_val $key]} {
         return [dict get $dict_val $key]
     } else {
@@ -1315,9 +1317,17 @@ proc ::nats::get_default {dict_val key def} {
     }
 }
 
-# by default, when a handshake fails, the TLS library reports it to stderr AND raises an error - see tls.c, function Tls_Error
-# so I end up with the same message logged twice. Let's suppress stderr altogether
-proc ::nats::tls_callback {args} { }
+# official NATS clients use the sophisticated NUID algorithm, but this should be enough for the Tcl client
+proc ::nats::_random_string {} {
+    set allowed_chars "1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    set range [string length $allowed_chars]
+    set result ""
+    for {set i 0} {$i < 22} {incr i} {
+        set pos [expr {int(rand() * $range)}]
+        append result [string index $allowed_chars $pos]
+    }
+    return $result
+}
 
 package provide nats 1.0
 

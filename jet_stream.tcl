@@ -31,10 +31,10 @@ oo::class create ::nats::jet_stream {
         foreach {opt val} $args {
             switch -- $opt {
                 -last_by_subj {
-                    set msg [::nats::json_write_object "last_by_subj" [json::write::string $val]]
+                    set msg [::nats::_json_write_object "last_by_subj" [json::write::string $val]]
                 }
                 -seq {
-                    set msg [::nats::json_write_object "seq" $val]
+                    set msg [::nats::_json_write_object "seq" $val]
                 }
                 default {
                     if {$opt ni [list -timeout -callback]} {
@@ -61,7 +61,7 @@ oo::class create ::nats::jet_stream {
         foreach {opt val} $args {
             switch -- $opt {
                 -seq {
-                    set msg [::nats::json_write_object "seq" $val]
+                    set msg [::nats::_json_write_object "seq" $val]
                 }
                 default {
                     if {$opt ni [list -timeout -callback]} {
@@ -93,7 +93,7 @@ oo::class create ::nats::jet_stream {
         foreach {opt val} $args {
             switch -- $opt {
                 -timeout {
-                    nats::check_timeout $val
+                    nats::_check_timeout $val
                     set timeout $val
                 }
                 -callback {
@@ -140,7 +140,7 @@ oo::class create ::nats::jet_stream {
         if {[dict size $config_dict] == 0} {
             set message $batch_size
         } else {
-            set message [::nats::json_write_object {*}$config_dict]
+            set message [::nats::_json_write_object {*}$config_dict]
         }
 
         try {
@@ -252,7 +252,7 @@ oo::class create ::nats::jet_stream {
                     set callback [mymethod PublishCallback $val]
                 }
                 -timeout {
-                    nats::check_timeout $val
+                    nats::_check_timeout $val
                     set timeout $val
                 }
                 default {
@@ -306,16 +306,16 @@ oo::class create ::nats::jet_stream {
         # create durable or ephemeral consumers
         if {[info exists durable_consumer_name]} {
             set subject "\$JS.API.CONSUMER.DURABLE.CREATE.$stream.$durable_consumer_name"
-            set settings_json [::nats::json_write_object \
+            set settings_json [::nats::_json_write_object \
                 stream_name [json::write::string $stream] \
                 name [json::write::string $durable_consumer_name] \
-                config [::nats::json_write_object {*}$config_dict] \
+                config [::nats::_json_write_object {*}$config_dict] \
             ]
         } else {
             set subject "\$JS.API.CONSUMER.CREATE.$stream"
-            set settings_json [::nats::json_write_object \
+            set settings_json [::nats::_json_write_object \
                 stream_name [json::write::string $stream] \
-                config [::nats::json_write_object {*}$config_dict] \
+                config [::nats::_json_write_object {*}$config_dict] \
             ]
         }
 
@@ -394,7 +394,7 @@ oo::class create ::nats::jet_stream {
         
         set subject "\$JS.API.STREAM.CREATE.$stream"
         dict set config_dict name [::json::write string $stream]
-        set settings_json [::nats::json_write_object {*}$config_dict]
+        set settings_json [::nats::_json_write_object {*}$config_dict]
 
         return [my SimpleRequest $subject $common_arguments "Creating stream $stream timed out" $settings_json]
     }
@@ -441,7 +441,7 @@ oo::class create ::nats::jet_stream {
                     set callback [mymethod PublishCallback $val]
                 }
                 -timeout {
-                    nats::check_timeout $val
+                    nats::_check_timeout $val
                     set timeout $val
                 }
                 default {

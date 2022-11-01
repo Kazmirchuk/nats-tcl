@@ -74,13 +74,14 @@ If you have received a message with a header, but have *not* used `-dictmsg true
 Note that the JetStream API **always** returns messages as dicts.
 
 ## Public variables
-The connection object exposes 2 "public" read-only variables:
+The connection object exposes 3 "public" read-only variables:
 - `last_error` - used to deliver asynchronous errors, e.g. if the network fails. It is a dict with 2 keys similar to the arguments for `throw`:
   - code: error code 
   - errorMessage: error message
 - `status` - connection status, one of `$nats::status_closed`, `$nats::status_connecting`, `$nats::status_connected` or `$nats::status_reconnecting`.
+- `serverInfo` - array with INFO from the current server. 
 
-You can set up traces on these variables to get notified e.g. when a connection status changes.
+You can set up traces on these variables to get notified e.g. when a connection status changes or NATS server enters `ldm` - lame duck mode.
 
 ## Options
 
@@ -100,15 +101,14 @@ The **configure** method accepts the following options. Make sure to set them *b
 | -max_outstanding_pings | integer | 2 | Max number of PINGs without a reply from a NATS server before closing the connection |
 | -echo | boolean | true | If true, messages from this connection will be echoed back by the server, if the connection has matching subscriptions|
 | -tls_opts | list | | Additional options for `tls::import` - here you can provide `-cafile` etc |
-| -default_tls_opts | list | -require 1 <br /> -command nats::tls_callback | Default options for `tls::import` - rarely need to be changed; effective list of options for `tls::import` will be combination of default_tls_opts and tls_opts|
 | -user | string | | Default username|
 | -password | string |   | Default password|
 | -token | string | | Default authentication token|
 | -secure | boolean | false | If secure=true, connection will fail if a server can't provide a TLS connection |
 | -check_subjects | boolean | true | Enable client-side checking of subjects when publishing or subscribing |
-| -check_connection | boolean | true | Check connection with server while publishing/subscribing (default) and throw error if connection is not established |
+| -check_connection | boolean | true | By default, all calls to `publish`, `subscribe`, `request` etc will throw an error if the client is not connected yet. Setting this option to `false` allows to call these methods while the client is still establishing a connection. They will be buffered, and once the connection is ready, they will be flushed. |
 | -dictmsg | boolean | false | Return messages from `subscribe` and `request` as dicts by default |
-| -utf8_convert | boolean | false | Adds the ability to send messages with non-ASCII characters by converting them to UTF-8 before sending to NATS and back-converting them after receiving |
+| -utf8_convert | boolean | false | By default, the client does not change a message body when it is sent or received. Setting this option to `true` will encode outgoing messages to UTF-8 and decode incoming messages from UTF-8 |
 | -? | | | Provides interactive help with all options|
 
 ## Description
@@ -230,8 +230,10 @@ try {
   ...
 } trap {NATS ErrTimeout} {err opts} {
  # handle a request timeout  
-} trap {NATS} {err opts} {
+} trap NATS {err opts} {
   # handle other NATS errors
+} trap {} {err opts} {
+  # handle other (non-NATS) errors
 }
 ```
 | Error code        | Reason   | 
@@ -262,7 +264,7 @@ If the TCP connection fails, the client will try the next server from the pool.
 | ErrBrokenSocket | TCP socket failed |
 | ErrTLS | TLS handshake failed |
 | ErrStaleConnection | The client or server closed the connection, because the other party did not respond to PING on time |
-| ErrConnectionRefused | TCP connection to a NATS server was refused, possibly due to wrong port, or the server was not running;  |
+| ErrConnectionRefused | TCP connection to a NATS server was refused, possibly due to wrong port, or the server was not running |
 | ErrSecureConnWanted | Client requires TLS, but a NATS server does not provide TLS |
 | ErrConnectionTimeout | Connection to a server could not be established within connect_timeout ms |
 | ErrBadHeaderMsg | The client failed to parse message headers. Nevertheless, the message body is delivered |

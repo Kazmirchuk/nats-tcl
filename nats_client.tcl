@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2021 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2020-2022 Petro Kazmirchuk https://github.com/Kazmirchuk
 # Copyright (c) 2021 ANT Solutions https://antsolutions.eu/
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
@@ -8,8 +8,6 @@ package require cmdline
 package require json
 package require json::write
 package require oo::util
-package require tcl::chan::random
-package require tcl::randomseed
 package require coroutine
 package require logger
 package require textutil::split
@@ -20,6 +18,22 @@ namespace eval ::nats {
     variable status_connecting 1
     variable status_connected 2
     variable status_reconnecting 3
+    
+    # optional packages
+    variable available_pkg
+    set available_pkg(tls) 0
+    try {
+        package require tls
+        set available_pkg(tls) 1
+    } on error err {}
+    
+    set available_pkg(iocp) 0
+    if {$::tcl_platform(platform) eq "windows"} {
+        try {
+            package require iocp
+            set available_pkg(iocp) 1
+        } on error err {}
+    }
 }
 # all options for "configure"
 set ::nats::option_syntax {
@@ -35,24 +49,23 @@ set ::nats::option_syntax {
     { max_outstanding_pings.integer 2   "Max number of PINGs without a reply from a NATS server before closing the connection"}
     { echo.boolean true                 "If true, messages from this connection will be echoed back by the server if the connection has matching subscriptions"}
     { tls_opts.list ""                  "Additional options for tls::import"}
-    { default_tls_opts.list {-require 1 -command ::nats::tls_callback} "Default options for tls::import"}
     { user.list ""                      "Default username"}
     { password.list ""                  "Default password"}
     { token.arg ""                      "Default authentication token"}
     { secure.boolean false              "If secure=true, connection will fail if a server can't provide a TLS connection"}
     { check_subjects.boolean true       "Enable client-side checking of subjects when publishing or subscribing"}
-    { check_connection.boolean true     "Check connection with server while publishing/subscribing (default) and throw error if connection is not established"}
+    { check_connection.boolean true     "Check the connection status before publishing/subscribing"}
     { dictmsg.boolean false             "Return messages from subscribe&request as dicts by default" }
-    { utf8_convert.boolean false        "Convert messages to UTF-8 before sending and after receiving." }    
+    { utf8_convert.boolean false        "Convert messages to/from UTF-8 before sending and after receiving" }
 }
 
 oo::class create ::nats::connection {
     # "private" variables
-    variable config sock coro timers counters subscriptions requests serverInfo serverPool \
-             subjectRegex outBuffer randomChan requestsInboxPrefix jetStream pong logger
+    variable config sock coro timers counters subscriptions requests serverPool \
+             subjectRegex outBuffer requestsInboxPrefix jetStream pong logger
     
     # "public" variables, so that users can set up traces if needed
-    variable status last_error
+    variable status last_error serverInfo
 
     constructor { { conn_name "" } } {
         set status $nats::status_closed
@@ -74,8 +87,8 @@ oo::class create ::nats::connection {
         set logger [logger::init $loggerName]
         # default timestamp of the logger looks like Tue Jul 13 15:16:58 CEST 2021, which is not very useful
         foreach lvl [logger::levels] {
-            interp alias {} ::nats::log_stdout_$lvl {} ::nats::log_stdout $loggerName $lvl
-            ${logger}::logproc $lvl ::nats::log_stdout_$lvl
+            interp alias {} ::nats::_log_stdout_$lvl {} ::nats::_log_stdout $loggerName $lvl
+            ${logger}::logproc $lvl ::nats::_log_stdout_$lvl
         }
         
         # default level in the logger is debug, it's too verbose
@@ -96,7 +109,6 @@ oo::class create ::nats::connection {
         # all outgoing messages are put in this list before being flushed to the socket,
         # so that even when we are reconnecting, messages can still be sent
         set outBuffer [list]
-        set randomChan [tcl::chan::random [tcl::randomseed]] ;# generate inboxes
         set requestsInboxPrefix ""
         set jetStream ""
         set pong 1 ;# sync variable for vwait in "ping". Set to 1 to avoid a check for existing timer in "ping"
@@ -104,7 +116,6 @@ oo::class create ::nats::connection {
     
     destructor {
         my disconnect
-        close $randomChan
         $serverPool destroy
         ${logger}::delete
         if {$jetStream ne ""} {
@@ -176,7 +187,7 @@ oo::class create ::nats::connection {
     }
     
     method current_server {} {
-        return [$serverPool current_server]
+        return [lrange [$serverPool current_server] 0 1]  ;# drop the last element - schema (nats/tls)
     }
     
     method all_servers {} {
@@ -212,21 +223,26 @@ oo::class create ::nats::connection {
         # until the NATS connection is completely closed
         $serverPool reset_counters
         
+        set status $nats::status_connecting
         # this coroutine will handle all work to connect and read from the socket
         coroutine coro {*}[mymethod CoroMain]
-        # now try connecting to the first server
-        set status $nats::status_connecting
-        $coro connect
+        
         if {!$async} {
-            ${logger}::debug "Waiting for connection"
-            my CoroVwait [self object]::status
-           if {$status != $nats::status_connected} {
-                if {[dict exists $last_error code]} {
+            # $status will become "closed" straightaway
+            # in case all calls to [socket] fail immediately and we exhaust the server pool
+            # so we shouldn't vwait in this case
+            if {$status == $nats::status_connecting} {
+                ${logger}::debug "Waiting for connection status"
+                my CoroVwait [self object]::status
+                ${logger}::debug "Finished waiting for connection status"
+            }
+            if {$status != $nats::status_connected} {
+                # if there's only one server in the pool, it's more user-friendly to report the actual error
+                if {[dict exists $last_error code] && [llength [$serverPool all_servers]] == 1} {
                     throw [dict get $last_error code] [dict get $last_error errorMessage]
                 }
                 throw {NATS ErrNoServers} "No servers available for connection"
             }
-            ${logger}::debug "Finished waiting for connection"
         }
         return
     }
@@ -245,15 +261,11 @@ oo::class create ::nats::connection {
         array unset subscriptions ;# make sure we don't try to "restore" subscriptions when we connect next time
         foreach reqID [array names requests] {
             # cancel pending async timers
-            after cancel [nats::get_default $requests($reqID) timer ""]
+            after cancel [nats::_get_default $requests($reqID) timer ""]
         }
         array unset requests
         set requestsInboxPrefix ""
-        if {$timers(connect) ne ""} {
-            after cancel $timers(connect)
-            ${logger}::debug "Cancelled connection timer $timers(connect)"
-        }
-        set timers(connect) ""
+        my CancelConnectTimer
         #CoroMain will set status to "closed"
         return
     }
@@ -279,14 +291,14 @@ oo::class create ::nats::connection {
             }
         }
 
-        #convert to utf-8
+        my CheckConnection
+        
         if {$config(utf8_convert)} {
             set message [encoding convertto utf-8 $message]
         }        
         
         set msgLen [string length $message]
-        if {$config(check_connection) || $status == $nats::status_connected || $status == $nats::status_reconnecting} {
-            my CheckConnection
+        if {[array size serverInfo]} {
             if {$msgLen > $serverInfo(max_payload)} {
                 throw {NATS ErrMaxPayload} "Maximum size of NATS message is $serverInfo(max_payload)"
             }
@@ -307,7 +319,7 @@ oo::class create ::nats::connection {
             lappend outBuffer $ctrl_line $message
         } else {
             try {
-                set hdr [nats::format_header $header]
+                set hdr [nats::_format_header $header]
             } trap {TCL VALUE DICTIONARY} err {
                 throw {NATS ErrInvalidArg} "header is not a valid dict"
             }
@@ -321,9 +333,7 @@ oo::class create ::nats::connection {
     }
     
     method subscribe {subject args} {
-        if {$config(check_connection)} {
-            my CheckConnection
-        }
+        my CheckConnection
         set queue ""
         set callback ""
         set maxMsgs 0 ;# unlimited by default
@@ -386,9 +396,7 @@ oo::class create ::nats::connection {
     }
     
     method unsubscribe {subID args} {
-        if {$config(check_connection)} {
-            my CheckConnection
-        }
+        my CheckConnection
         set maxMsgs 0 ;# unlimited by default
         foreach {opt val} $args {
             switch -- $opt {
@@ -435,7 +443,7 @@ oo::class create ::nats::connection {
         foreach {opt val} $args {
             switch -- $opt {
                 -timeout {
-                    nats::check_timeout $val
+                    nats::_check_timeout $val
                     set timeout $val
                 }
                 -callback {
@@ -517,7 +525,7 @@ oo::class create ::nats::connection {
         after cancel $timerID
         set response [dict get $sync_req response]
         set in_hdr [dict get $response header]
-        if {[nats::get_default $in_hdr Status 0] == 503} {
+        if {[nats::_get_default $in_hdr Status 0] == 503} {
             throw {NATS ErrNoResponders} "No responders available for request"
         }
         if {$dictmsg} {
@@ -534,7 +542,7 @@ oo::class create ::nats::connection {
         foreach {opt val} $args {
             switch -- $opt {
                 -timeout {
-                    nats::check_timeout $val
+                    nats::_check_timeout $val
                     set timeout $val
                 }
                 default {
@@ -561,7 +569,6 @@ oo::class create ::nats::connection {
         throw {NATS ErrTimeout} "PING timeout"
     }
 
-    # get jet stream object
     method jet_stream {} {
         if {$jetStream eq ""} {
             set jetStream [::nats::jet_stream new [self]]
@@ -570,14 +577,14 @@ oo::class create ::nats::connection {
     }
     
     method inbox {} {
-        # very quick and dirty!
-        return "_INBOX.[binary encode hex [read $randomChan 10]]"
+        # resulting inboxes look the same as in official NATS clients, but use a much simpler RNG
+        return "_INBOX.[nats::_random_string]"
     }
     
     method RequestCallback { reqID {subj ""} {msg ""} {reply ""} } {
         if {$subj eq "" && $reqID != -1} {
             # request timed out
-            set callback [nats::get_default $requests($reqID) callback ""]
+            set callback [nats::_get_default $requests($reqID) callback ""]
             if {$callback ne ""} {
                 after 0 [list {*}$callback 1 ""]
                 unset requests($reqID)
@@ -599,7 +606,7 @@ oo::class create ::nats::connection {
             return
         }
         # most of these variables will be empty in case of a sync request
-        set callback [nats::get_default $requests($reqID) callback ""]
+        set callback [nats::_get_default $requests($reqID) callback ""]
         if {$callback eq ""} {
             # resume from vwait in "method request"; "requests" array will be cleaned up there
             set requests($reqID) [dict create timedOut 0 response $msg]
@@ -608,13 +615,13 @@ oo::class create ::nats::connection {
         # handle the async request
         set timedOut 0
         set in_hdr [dict get $msg header]
-        if {[nats::get_default $in_hdr Status 0] == 503} {
+        if {[nats::_get_default $in_hdr Status 0] == 503} {
             # no-responders is equivalent to timedOut=1
             set timedOut 1
         }
 
         # handle the nats timeout e.q. for pull consumers
-        if {[nats::get_default $in_hdr Status 0] == 408} {
+        if {[nats::_get_default $in_hdr Status 0] == 408} {
             set timedOut 1
         }
 
@@ -678,7 +685,7 @@ oo::class create ::nats::connection {
         after cancel $timers(flush)
         set timers(flush) ""
         
-        if {[info coroutine] eq ""} {
+        if {[info coroutine] ne $coro} {
             if {!$broken} {
                 $coro stop
             }
@@ -689,10 +696,8 @@ oo::class create ::nats::connection {
         set timers(ping) [after $config(ping_interval) [mymethod Pinger]]
         
         if {$counters(pendingPings) >= $config(max_outstanding_pings)} {
-            my AsyncError ErrStaleConnection "The server did not respond on $counters(pendingPings) PINGs"
-            my CloseSocket 1
+            my AsyncError ErrStaleConnection "The server did not respond to $counters(pendingPings) PINGs" 1
             set counters(pendingPings) 0
-            $coro connect
             return
         }
         
@@ -716,15 +721,11 @@ oo::class create ::nats::connection {
                 puts -nonewline $sock $msg
             }
             flush $sock
+            set outBuffer [list] ;# do NOT clear the buffer unless we had a successful flush!
         } on error err {
             lassign [my current_server] host port
-            my AsyncError ErrBrokenSocket "Failed to send data to $host:$port: $err"
-            my CloseSocket 1
-            $coro connect
-            return
+            my AsyncError ErrBrokenSocket "Failed to send data to $host:$port: $err" 1
         }
-        # do NOT clear the buffer unless we had a successful flush!
-        set outBuffer [list]
     }
     
     method CoroVwait {var} {
@@ -738,17 +739,24 @@ oo::class create ::nats::connection {
     # --------- these procs execute in the coroutine ---------------
     # connect to Nth server in the pool
     method ConnectNextServer {} {
-        # if it throws ErrNoServers, we have exhausted all servers in the pool
-        # we must stop the coroutine, so let the error propagate
-        lassign [$serverPool next_server] host port ;# it may wait for reconnect_time_wait ms!
-        ${logger}::info "Connecting to the server at $host:$port"
-        try {
-            set sock [socket -async $host $port]
-            chan event $sock writable [list $coro connected]
-        } on error {msg opt} {
-            $serverPool current_server_connected false
-            my AsyncError ErrConnectionRefused "Failed to connect to $host:$port: $msg"
-            after idle [list set [self object]::status $nats::status_closed]
+        while {1} {
+            # if it throws ErrNoServers, we have exhausted all servers in the pool
+            # we must stop the coroutine, so let the error propagate
+            lassign [$serverPool next_server $status] host port ;# it may wait for reconnect_time_wait ms!
+            ${logger}::info "Connecting to the server at $host:$port"
+            try {
+                # socket -async can throw e.g. in case of a DNS resolution failure
+                if {$nats::available_pkg(iocp)} {
+                    set sock [iocp::inet::socket -async $host $port]
+                } else {
+                    set sock [socket -async $host $port]
+                }
+                chan event $sock writable [list $coro connected]
+                return
+            } on error {msg opt} {
+                $serverPool current_server_connected false
+                my AsyncError ErrConnectionRefused "Failed to connect to $host:$port: $msg"
+            }
         }
     }
     
@@ -756,14 +764,14 @@ oo::class create ::nats::connection {
         try {
             # tls_required=true in CONNECT seems unnecessary to me, because TLS handshake has already happened
             # but nats.go does this
-            set connectParams [list verbose [nats::bool2json $config(verbose)] \
-                                    pedantic [nats::bool2json $config(pedantic)] \
-                                    tls_required [nats::bool2json $tls_done] \
+            set connectParams [list verbose $config(verbose) \
+                                    pedantic $config(pedantic) \
+                                    tls_required $tls_done \
                                     name [json::write::string $config(name)] \
                                     lang [json::write::string Tcl] \
                                     version [json::write::string 1.0] \
                                     protocol 1 \
-                                    echo [nats::bool2json $config(echo)] ] 
+                                    echo $config(echo)]
             
             if {[info exists serverInfo(headers)] && $serverInfo(headers)} {
                 lappend connectParams headers true no_responders true
@@ -771,7 +779,7 @@ oo::class create ::nats::connection {
             if {[info exists serverInfo(auth_required)] && $serverInfo(auth_required)} {
                 lappend connectParams {*}[$serverPool format_credentials]
             } 
-            set jsonMsg [::nats::json_write_object {*}$connectParams]
+            set jsonMsg [::nats::_json_write_object {*}$connectParams]
         } trap {NATS ErrAuthorization} err {
             # no credentials could be found for this server, try next one
             my AsyncError ErrAuthorization $err 1
@@ -787,17 +795,20 @@ oo::class create ::nats::connection {
     }
     
     method RestoreSubs {} {
+        set subsBuffer [list]
         foreach subID [array names subscriptions] {
             set subject [dict get $subscriptions($subID) subj]
             set queue [dict get $subscriptions($subID) queue]
             set maxMsgs [dict get $subscriptions($subID) maxMsgs]
             set recMsgs [dict get $subscriptions($subID) recMsgs]
-            lappend outBuffer "SUB $subject $queue $subID"
+            lappend subsBuffer "SUB $subject $queue $subID"
             if {$maxMsgs > 0} {
                 set remainingMsgs [expr {$maxMsgs - $recMsgs}]
-                lappend outBuffer "UNSUB $subID $remainingMsgs"
+                lappend subsBuffer "UNSUB $subID $remainingMsgs"
             }
         }
+        # ensure SUBs are sent before any pending PUBs
+        set outBuffer [linsert $outBuffer 0 {*}$subsBuffer]
     }
     
     method INFO {cmd} {
@@ -807,10 +818,12 @@ oo::class create ::nats::connection {
             # example connect_urls : ["192.168.2.5:4222", "192.168.91.1:4222", "192.168.157.1:4223", "192.168.2.5:4223"]
             # by default each server will advertise IPs of all network interfaces, so the server pool may seem bigger than it really is
             # --client_advertise NATS option can be used to make it clearer
-            set infoDict [json::json2dict $cmd]
-            if {[dict exists $infoDict connect_urls]} {
-                ${logger}::debug "Got connect_urls: [dict get $infoDict connect_urls]"
-                foreach url [dict get $infoDict connect_urls] {
+            #TODO invoke callback - discovered servers/LDM
+            array set serverInfo [json::json2dict $cmd]
+            if {[info exists serverInfo(connect_urls)]} {
+                set urls $serverInfo(connect_urls)
+                ${logger}::debug "Got connect_urls: $urls"
+                foreach url $urls {
                     $serverPool add $url
                 }
             }
@@ -823,20 +836,25 @@ oo::class create ::nats::connection {
         array unset serverInfo ;# do not unset it in CloseSocket!
         # otherwise publishing messages while reconnecting does not work, due to the check for max_payload
         array set serverInfo [json::json2dict $cmd]
-        set tls_done 0
-        lassign [my current_server] host port
-        set scheme [dict get [lindex [$serverPool all_servers] end] scheme]
+        set tls_done false
+        lassign [$serverPool current_server] host port scheme
         if {[info exists serverInfo(tls_required)] && $serverInfo(tls_required)} {
             #NB! NATS server will never accept a TLS connection. Always start connecting with plain TCP,
             # and only after receiving INFO, we can upgrade to TLS if needed
-            package require tls
+            if {!$nats::available_pkg(tls)} {
+                my AsyncError ErrTLS "TLS package is not available" 1
+                return
+            }
+            # there's no need to check for tls_verify in INFO
+            # a user needs to provide -certfile and -keyfile options to tls::import anyway
+            # and if they are not needed, NATS server will ignore them
+            
             # for simplicity, let's switch to the blocking mode just for the handshake
             chan configure $sock -blocking 1
             try {
-                tls::import $sock {*}$config(default_tls_opts) {*}$config(tls_opts)
+                tls::import $sock -require 1 -command ::nats::tls_callback {*}$config(tls_opts)
                 tls::handshake $sock
-                set tls_done 1
-                # -errorcode will be NONE
+                set tls_done true
             } on error err {
                 my AsyncError ErrTLS "TLS handshake with server $host:$port failed: $err" 1
                 return
@@ -914,7 +932,7 @@ oo::class create ::nats::connection {
             set header ""
             if {$expHdrLength > 0} {
                 try {
-                    set header [nats::parse_header [string range $payload 0 $expHdrLength-1]]
+                    set header [nats::_parse_header [string range $payload 0 $expHdrLength-1]]
                 } trap {NATS ErrBadHeaderMsg} err {
                     # invalid header causes an async error, nevertheless the message is delivered, see nats.go, func processMsg
                     my AsyncError ErrBadHeaderMsg $err
@@ -976,11 +994,11 @@ oo::class create ::nats::connection {
         }
     }
     
-    method OK {cmd} {
+    method +OK {cmd} {
         # nothing to do
     }
     
-    method ERR {cmd} {
+    method -ERR {cmd} {
         set errMsg [string tolower [string trim $cmd " '"]] ;# remove blanks and single quotes around the message
         if [string match "stale connection*" $errMsg] {
             my AsyncError ErrStaleConnection $errMsg 1
@@ -1023,16 +1041,13 @@ oo::class create ::nats::connection {
         set coro [info coroutine]
         ${logger}::debug "Started coroutine $coro"
         try {
+            my ConnectNextServer
             while {1} {
                 set reason [yield]
                 if {$reason eq "stop"} {
                     break
                 }
-                if {$reason in [list connect connected connect_timeout readable]} {
-                    my ProcessEvent $reason
-                } else {
-                    ${logger}::error "CoroMain: unknown reason $reason"
-                }
+                my ProcessEvent $reason
             }
         } trap {NATS STOP_CORO} {msg opts} {
             # we get here after call to "disconnect" during MSG or next_server; the socket has been already closed,
@@ -1050,9 +1065,6 @@ oo::class create ::nats::connection {
     
     method ProcessEvent {reason} {
         switch -- $reason {
-            connect {
-                my ConnectNextServer
-            }
             connected {
                 # this event will arrive again and again if we don't disable it
                 chan event $sock writable {}
@@ -1068,10 +1080,12 @@ oo::class create ::nats::connection {
                 }
                 # connection succeeded
                 # we want to call "flush" ourselves, so use -buffering full
+                # even though [socket] already had -async, I have to repeat -blocking 0 anyway =\
                 # NATS protocol uses crlf as a delimiter
                 # when reading from the socket, it's easier to let Tcl do EOL translation, unless we are in method MSG
                 # when writing to the socket, we need to turn off the translation when sending a message payload
                 # but outBuffer doesn't know which element is a message, so it's easier to write CR+LF ourselves
+                # TODO: configure -buffersize?
                 chan configure $sock -translation {crlf binary} -blocking 0 -buffering full -encoding binary
                 chan event $sock readable [list $coro readable]
             }
@@ -1114,17 +1128,18 @@ oo::class create ::nats::connection {
                 # extract the first word from the line (INFO, MSG etc)
                 # protocol_arg will be empty in case of PING/PONG/OK
                 set protocol_arg [lassign $line protocol_op]
-                # in case of -ERR or +OK
-                set protocol_op [string trimleft $protocol_op -+]
                 if {$protocol_op eq "HMSG"} {
                     my MSG $protocol_arg 1
                     return
                 }
-                if {$protocol_op in {MSG INFO ERR OK PING PONG}} {
+                if {$protocol_op in {MSG INFO -ERR +OK PING PONG}} {
                     my $protocol_op $protocol_arg
                 } else {
                     ${logger}::warn "Invalid protocol $protocol_op $protocol_arg"
                 }
+            }
+            default {
+                ${logger}::error "CoroMain: unknown reason $reason"
             }
         }
     }
@@ -1164,7 +1179,10 @@ oo::class create ::nats::connection {
     }
     
     method CheckConnection {} {
-        # allow PUB & SUB when connected or reconnecting, throw an error otherwise
+        if {!$config(check_connection)} {
+            return  ;# allow to buffer PUB/SUB/UNSUB even before the first connection to NATS
+        }
+        # allow PUB/SUB/UNSUB when connected or reconnecting, throw an error otherwise
         if {$status in [list $nats::status_closed $nats::status_connecting] } {
             throw {NATS ErrConnectionClosed} "No connection to NATS server"
         }
@@ -1179,15 +1197,34 @@ oo::class create ::nats::connection {
             my ConnectNextServer ;# can be done only in the coro
         }
     }
+    
+    method StartConnectTimer {} {
+        set timers(connect) [after $config(connect_timeout) [list [info coroutine] connect_timeout]]
+        ${logger}::debug "Started connection timer $timers(connect)"
+    }
+    
+    method CancelConnectTimer {} {
+        if {$timers(connect) eq ""} {
+            return
+        }
+        after cancel $timers(connect)
+        ${logger}::debug "Cancelled connection timer $timers(connect)"
+        set timers(connect) ""
+    }
 }
 
+# by default, when a handshake fails, the TLS library reports it to stderr AND raises an error - see tls.c, function Tls_Error
+# so I end up with the same message logged twice. Let's suppress stderr altogether
+# keep this proc "public" in case a user needs to override it
+proc ::nats::tls_callback {args} { }
+
 # all following procs are private!
-proc ::nats::check_timeout {timeout} {
+proc ::nats::_check_timeout {timeout} {
     if {! ([string is integer -strict $timeout] && $timeout >= -1)} {
         throw {NATS ErrBadTimeout} "Invalid timeout $timeout"
     }
 }
-proc ::nats::timestamp {} {
+proc ::nats::_timestamp {} {
     # workaround for not being able to format current time with millisecond precision
     # should not be needed in Tcl 8.7, see https://core.tcl-lang.org/tips/doc/trunk/tip/423.md
     set t [clock milliseconds]
@@ -1196,12 +1233,13 @@ proc ::nats::timestamp {} {
                       [expr {$t % 1000}] ]
     return $timeStamp
 }
-proc ::nats::log_stdout {service level text} {
-    puts "\[[nats::timestamp] $service $level\] $text"
+
+proc ::nats::_log_stdout {service level text} {
+    puts "\[[nats::_timestamp] $service $level\] $text"
 }
 # returns a dict, where each key points to a list of values
 # NB! unlike HTTP headers, in NATS headers keys are case-sensitive
-proc ::nats::parse_header {header} {
+proc ::nats::_parse_header {header} {
     set result [dict create]
     set i 0
     foreach line [textutil::split::splitx $header {\r\n}] {
@@ -1236,7 +1274,7 @@ proc ::nats::parse_header {header} {
     }
     return $result
 }
-proc ::nats::format_header { header } {
+proc ::nats::_format_header { header } {
     # other official clients accept inline status & description in the first line when *parsing* headers
     # but when serializing headers, status & description are treated just like usual headers
     # so I will do the same, and it simplifies my job here
@@ -1251,17 +1289,8 @@ proc ::nats::format_header { header } {
     return $result
 }
 
-# because there's no json::write::boolean
-proc ::nats::bool2json {val} {
-    if {[string is true -strict $val]} {
-        return true
-    } else {
-        return false
-    }
-}
-
 # preserve json::write variables
-proc ::nats::json_write_object {args} {
+proc ::nats::_json_write_object {args} {
     if {[llength $args] %2 == 1} {
 	    return -code error {wrong # args, expected an even number of arguments}
     }
@@ -1280,7 +1309,7 @@ proc ::nats::json_write_object {args} {
 }
 
 # pending TIP 342 in Tcl 8.7
-proc ::nats::get_default {dict_val key def} {
+proc ::nats::_get_default {dict_val key def} {
     if {[dict exists $dict_val $key]} {
         return [dict get $dict_val $key]
     } else {
@@ -1288,9 +1317,17 @@ proc ::nats::get_default {dict_val key def} {
     }
 }
 
-# by default, when a handshake fails, the TLS library reports it to stderr AND raises an error - see tls.c, function Tls_Error
-# so I end up with the same message logged twice. Let's suppress stderr altogether
-proc ::nats::tls_callback {args} { }
+# official NATS clients use the sophisticated NUID algorithm, but this should be enough for the Tcl client
+proc ::nats::_random_string {} {
+    set allowed_chars "1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    set range [string length $allowed_chars]
+    set result ""
+    for {set i 0} {$i < 22} {incr i} {
+        set pos [expr {int(rand() * $range)}]
+        append result [string index $allowed_chars $pos]
+    }
+    return $result
+}
 
 package provide nats 1.0
 

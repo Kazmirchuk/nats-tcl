@@ -1,4 +1,4 @@
-# Copyright (c) 2021 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2021-2022 Petro Kazmirchuk https://github.com/Kazmirchuk
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
@@ -10,12 +10,13 @@ package require struct::list
 namespace eval ::nats {}
 
 oo::class create ::nats::server_pool {
-    variable servers conn
+    variable servers conn config
     
     constructor {c} {
         set servers [list] ;# list of dicts working as FIFO queue
         # each dict contains: host port scheme discovered reconnects last_attempt (ms, mandatory), user password auth_token (optional)
         set conn $c
+        upvar #0 ${conn}::config [self object]::config
     }
     destructor {
     }
@@ -24,19 +25,19 @@ oo::class create ::nats::server_pool {
     # remember that it carries only IP:port, so no scheme etc
     method add {url} {
         try {
-            set result [my parse $url]
+            set newServer [my parse $url]
         } trap {NATS INVALID_ARG} err {
             [$conn logger]::warn $err ;# very unlikely
             return
         }
         foreach s $servers {
-            if {[dict get $s host] eq [dict get $result host] && [dict get $s port] == [dict get $result port]} {
+            if {[dict get $s host] eq [dict get $newServer host] && [dict get $s port] == [dict get $newServer port]} {
                 return ;# we already know this server
             }
         }
-        dict set result discovered true
-        set servers [linsert $servers 0 $result] ;# recall that current server is always at the end of the list
-        [$conn logger]::debug "Added $result to the server pool"
+        dict set newServer discovered true
+        set servers [linsert $servers 0 $newServer] ;# recall that current server is always at the end of the list
+        [$conn logger]::debug "Added $url to the server pool"
     }
     
     # used by "configure". All or nothing: if at least one URL is invalid, the old configuration stays intact
@@ -45,10 +46,11 @@ oo::class create ::nats::server_pool {
         foreach url $urls {
             lappend result [my parse $url] ;# will throw INVALID_ARG in case of invalid URL - let it propagate
         }
-        # interestingly, it seems that official NATS clients don't check the server list for duplicates
-        set result [lsort -unique $result]
-        upvar #0 ${conn}::config config
+        
         if {$config(randomize)} {
+            # ofc lsort will mess up the URL list if randomize=false
+            # interestingly, it seems that official NATS clients don't check the server list for duplicates
+            set result [lsort -unique $result]
             # IMHO official clients do shuffling too often, at least in 3 places! I do it only once 
             set result [struct::list shuffle $result]
         }
@@ -95,11 +97,7 @@ oo::class create ::nats::server_pool {
         return $newServer
     }
     
-    method next_server {} {
-        upvar #0 ${conn}::config config
-        upvar #0 ${conn}::status status
-        upvar #0 ${conn}::timers timers
-        
+    method next_server {status} {
         while {1} {
             if { [llength $servers] == 0 } {
                 throw {NATS ErrNoServers} "Server pool is empty"
@@ -139,17 +137,12 @@ oo::class create ::nats::server_pool {
         
         # connect_timeout applies to a connect attempt to one server and includes not only TCP handshake, but also NATS-level handshake
         # and the first PING/PONG exchange to ensure successful authentication
-        set timers(connect) [after $config(connect_timeout) [list [info coroutine] connect_timeout]]
-        [$conn logger]::debug "Started connection timer $timers(connect)"
+        ${conn}::my StartConnectTimer
         return [my current_server]
     }
     
     method current_server_connected {ok} {
-        upvar #0 ${conn}::timers timers
-        after cancel $timers(connect)
-        [$conn logger]::debug "Cancelled connection timer $timers(connect)"
-        set timers(connect) ""
-        
+        ${conn}::my CancelConnectTimer
         set s [lindex $servers end]
         dict set s last_attempt [clock milliseconds]
         if {$ok} {
@@ -161,8 +154,6 @@ oo::class create ::nats::server_pool {
     }
     
     method format_credentials {} {
-        upvar #0 ${conn}::config config
-        
         set s [lindex $servers end]
         
         if {[dict exists $s user] && [dict exists $s password]} {
@@ -180,9 +171,10 @@ oo::class create ::nats::server_pool {
         throw {NATS ErrAuthorization} "No credentials known for NATS server at [dict get $s host]:[dict get $s port]"
     }
     
+    # returns a list of {host port scheme}
     method current_server {} {
         set s [lindex $servers end]
-        return [list [dict get $s host] [dict get $s port]]
+        return [list [dict get $s host] [dict get $s port] [dict get $s scheme]]
     }
     
     method all_servers {} {

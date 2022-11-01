@@ -98,11 +98,9 @@ test basic-3.1 "Subscribe to a limited number of messages" -body {
 }  -result 10
 
 test basic-3.2 "SubID has expired after -max_msgs" -body {
-    catch {$conn unsubscribe $sub_id} err errOpts
-    assert {[dict get $errOpts -errorcode] eq {NATS ErrBadSubscription}}
-    set err
-} -match glob -result {Invalid subscription ID*}
-
+    $conn unsubscribe $sub_id
+} -result {Invalid subscription ID*} -match glob -errorCode {NATS ErrBadSubscription}
+    
 test basic-4.1 "Subscribe and unsubscribe with -max_msgs" -body {
     set msg_count 0
     set sub_id [$conn subscribe subj_max_msgs2 -callback [lambda {subject message replyTo} {
@@ -203,7 +201,7 @@ test basic-9 "Asynchronous request with timeout - success" -body {
     duration {
         $conn request service "0 async_req2" -timeout 600 -callback [lambda {timedOut msg} {
             # let's use lambda here for the sake of example
-            assert {[string is false -strict $timedOut]}
+            assert {!$timedOut}
             assert {$msg eq "async_req2"}
             set test_utils::simpleMsg ""
         }]
@@ -217,7 +215,7 @@ test basic-10 "Asynchronous request with timeout - failure" -body {
     duration {
         # timeout must be longer than flush_interval!
         $conn request service "1000 async_req3" -timeout 600 -callback [lambda {timedOut msg} {
-            assert {[string is true -strict $timedOut]}
+            assert {$timedOut}
             assert {$msg eq ""}
             set test_utils::simpleMsg ""
         }]
@@ -281,9 +279,9 @@ test basic-14 "Synchronous request with multiple responders" -body {
 test basic-15 "Asynchronous request with multiple responders" -body {
     set msg_count 0
     $conn request multi_subj "0 foobar2" -timeout 600 -callback [lambda {timedOut msg} {
-        incr ::msg_count
-        assert {[string is false -strict $timedOut]}
+        assert {!$timedOut}
         assert {$msg eq "foobar2"}
+        incr ::msg_count
     }]
     duration {
         wait_for ::msg_count

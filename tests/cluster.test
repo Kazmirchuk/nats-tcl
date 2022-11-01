@@ -48,7 +48,7 @@ test cluster-1.1 "Dynamic expansion of the server pool with INFO message" -body 
     set discovered_server [lindex [$conn all_servers] 0]
     assert {[dict get $discovered_server host] eq "localhost"} 1
     assert {[dict get $discovered_server port] == 5222} 1
-    assert {[string is true -strict [dict get $discovered_server discovered]]}
+    assert {[dict get $discovered_server discovered]}
 }
 
 test cluster-1.2 "Restore subscriptions after reconnecting to another server" -body {
@@ -87,8 +87,7 @@ test cluster-1.2 "Restore subscriptions after reconnecting to another server" -b
     assert {$port == 5222}
 
     $conn publish eupnea "back online"
-    sleep 300
-    set test_utils::simpleMsg
+    wait_for test_utils::simpleMsg
 } -result "back online" -cleanup {
     trace remove variable ${conn}::status write $status_trace
     trace remove variable ${conn}::last_error write $error_trace
@@ -103,19 +102,21 @@ test cluster-2 "Outgoing messages are buffered while reconnecting" -body {
 
     $conn configure -servers [list nats://localhost:4222 nats://localhost:5222] -randomize false
     $conn connect
-    set sock1 [set ${conn}::sock]
-    $conn subscribe subj -callback test_utils::simpleCallback
+    $conn subscribe subj -callback test_utils::simpleCallback -max_msgs 1
+    wait_flush $conn
     stopNats NATS1
     after 500 ;# let the server quit, but do not process events yet
     
     $conn publish subj "Buffered message"
-    assert {[set ${conn}::sock] eq $sock1 } 1 ;# we still have the socket open to NATS1
     sleep 1000 ;# reconnect to NATS2, restore the subscription and publish the message
-    # now we have a new socket
     assert {[set ${conn}::status] == $nats::status_connected} 1
     lassign [$conn current_server] host port
     assert {$host eq "localhost"}
     assert {$port == 5222}
+    assert {$test_utils::simpleMsg eq "Buffered message"}
+    $conn publish subj "Buffered message 2"
+    sleep 500
+    # check that UNSUB worked too
     set test_utils::simpleMsg
 } -result "Buffered message" -cleanup {
     $conn disconnect

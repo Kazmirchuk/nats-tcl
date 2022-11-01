@@ -23,7 +23,7 @@ namespace eval test_utils {
         after $delay [list set ::test_utils::sleepVar 1]
         vwait ::test_utils::sleepVar
     }
-    
+
     proc wait_for {var {timeout 300}} {
         set timer [after $timeout [list set $var "test_utils_timeout"]]
         vwait $var
@@ -32,6 +32,7 @@ namespace eval test_utils {
         } else {
             after cancel $timer
         }
+        return [set $var]
     }
     
     proc wait_flush {conn} {
@@ -176,12 +177,12 @@ namespace eval test_utils {
         [$conn logger]::setlevel debug
         trace add variable ${conn}::status write [lambda {var idx op } {
             upvar $var s
-            puts "[nats::timestamp] New status: $s"
+            puts "[nats::_timestamp] New status: $s"
         }]
         trace add variable ${conn}::last_error write [lambda {var idx op } {
             upvar $var e
             if {$e ne ""} {
-                puts "[nats::timestamp] Async error: $e"
+                puts "[nats::_timestamp] Async error: $e"
             }
         }]
     }
@@ -203,7 +204,7 @@ namespace eval test_utils {
     proc startNats {id args} {
         processman::spawn $id nats-server {*}$args
         sleep 500
-        puts "[nats::timestamp] Started $id"
+        puts "[nats::_timestamp] Started $id"
     }
     
     proc stopNats {id} {
@@ -218,12 +219,12 @@ namespace eval test_utils {
             catch {exec kill $pid}
             after 500
         }
-        puts "[nats::timestamp] Stopped $id"
+        puts "[nats::_timestamp] Stopped $id"
     }
 
     proc execNatsCmd {args} {
         exec -ignorestderr nats {*}$args
-        puts "[nats::timestamp] Executed: nats $args"
+        puts "[nats::_timestamp] Executed: nats $args"
     }
     
     proc startResponder {conn {subj "service"} {queue ""} {dictMsg 0}} {
@@ -261,6 +262,8 @@ namespace eval test_utils {
     }
     
     # control:assert is garbage and doesn't perform substitution on failed expressions, so I can't even know a value of offending variable etc
+    # if assert is used in a callback and fails, it will not be reported as a failed test, because it runs in the global scope
+    # so it must always be followed by a change to a variable that is then checked/vwaited in the test itself
     proc assert {expression { subst_commands 0} } {
         set code [catch {uplevel 1 [list expr $expression]} res]
         if {$code} {
@@ -269,7 +272,7 @@ namespace eval test_utils {
         if {![string is boolean -strict $res]} {
             return -code error "invalid boolean expression: $expression"
         }
-        if {$res} {return}
+        if {$res} return
         if {$subst_commands} {
             # useful for [binary encode hex] or [string length] etc
             set msg "assertion failed: [uplevel 1 [list subst $expression]]"

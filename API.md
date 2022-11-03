@@ -81,7 +81,15 @@ The connection object exposes 3 "public" read-only variables:
 - `status` - connection status, one of `$nats::status_closed`, `$nats::status_connecting`, `$nats::status_connected` or `$nats::status_reconnecting`.
 - `serverInfo` - array with INFO from the current server. 
 
-You can set up traces on these variables to get notified e.g. when a connection status changes or NATS server enters `ldm` - lame duck mode.
+You can set up traces on these variables to get notified e.g. when a connection status changes or NATS server enters `ldm` - lame duck mode. For example:
+```Tcl
+package require lambda
+set conn [nats::connection new]
+trace add variable ${conn}::status write [lambda {var idx op } {
+    upvar $var s
+    puts "New status: $s"
+}]
+```
 
 ## Options
 
@@ -236,7 +244,7 @@ try {
   # handle other (non-NATS) errors
 }
 ```
-| Error code        | Reason   | 
+| Synchronous errors     | Reason   | 
 | ------------- |--------|
 | ErrConnectionClosed | Attempt to subscribe or send a message before calling `connect` |
 | ErrNoServers | No NATS servers available|
@@ -259,7 +267,7 @@ puts "Error code: [dict get $err code]"
 puts "Error text: [dict get $err errorMessage]"
 ```
 If the TCP connection fails, the client will try the next server from the pool.
-| Error type        | Reason   | 
+| Async errors     | Reason   | 
 | ------------- |--------|
 | ErrBrokenSocket | TCP socket failed |
 | ErrTLS | TLS handshake failed |

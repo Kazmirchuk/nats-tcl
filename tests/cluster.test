@@ -79,8 +79,7 @@ test cluster-1.2 "Restore subscriptions after reconnecting to another server" -b
     
     assert {[llength $all_errors] == 1} 1
     assert {[dict get [lindex $all_errors 0] code] eq {NATS ErrBrokenSocket}} 1
-    # status changed to reconnecting, then connected
-    assert {$all_statuses eq [list 3 2]} 1
+    assert {$all_statuses eq [list "reconnecting" "connected"]} 1
     
     lassign [$conn current_server] host port
     assert {$host eq "localhost"}

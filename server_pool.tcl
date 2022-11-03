@@ -10,13 +10,12 @@ package require struct::list
 namespace eval ::nats {}
 
 oo::class create ::nats::server_pool {
-    variable servers conn config
+    variable servers conn
     
     constructor {c} {
         set servers [list] ;# list of dicts working as FIFO queue
         # each dict contains: host port scheme discovered reconnects last_attempt (ms, mandatory), user password auth_token (optional)
         set conn $c
-        upvar #0 ${conn}::config [self object]::config
     }
     destructor {
     }
@@ -47,7 +46,7 @@ oo::class create ::nats::server_pool {
             lappend result [my parse $url] ;# will throw INVALID_ARG in case of invalid URL - let it propagate
         }
         
-        if {$config(randomize)} {
+        if {[$conn cget randomize]} {
             # ofc lsort will mess up the URL list if randomize=false
             # interestingly, it seems that official NATS clients don't check the server list for duplicates
             set result [lsort -unique $result]
@@ -102,7 +101,8 @@ oo::class create ::nats::server_pool {
             if { [llength $servers] == 0 } {
                 throw {NATS ErrNoServers} "Server pool is empty"
             }
-            
+            set attempts [$conn cget max_reconnect_attempts]
+            set wait [$conn cget reconnect_time_wait]
             #"pop" a server; using struct::queue seems like an overkill for such a small list
             set s [lindex $servers 0]
             # during initial connecting process we go through the pool only once
@@ -111,16 +111,16 @@ oo::class create ::nats::server_pool {
             }
             set servers [lreplace $servers 0 0]
             # max_reconnect_attempts == -1 means "unlimited". See also selectNextServer in nats.go
-            if {$config(max_reconnect_attempts) >= 0 && [dict get $s reconnects] >= $config(max_reconnect_attempts)} {
+            if {$attempts >= 0 && [dict get $s reconnects] >= $attempts} {
                 [$conn logger]::debug "Removed [dict get $s host]:[dict get $s port] from the server pool"
                 continue
             }
             
             set now [clock milliseconds]
             set last_attempt [dict get $s last_attempt]
-            if {$now < $last_attempt + $config(reconnect_time_wait)} {
+            if {$now < $last_attempt + $wait} {
                 # other clients simply wait for reconnect_time_wait, but this approach is more precise
-                set waiting_time [expr {$config(reconnect_time_wait) - ($now - $last_attempt)}]
+                set waiting_time [expr {$wait - ($now - $last_attempt)}]
                 [$conn logger]::debug "Waiting for $waiting_time before connecting to the next server"
                 set timer [after $waiting_time [info coroutine]]
                 set reason [yield] ;# may be interrupted by a user calling disconnect
@@ -156,17 +156,21 @@ oo::class create ::nats::server_pool {
     method format_credentials {} {
         set s [lindex $servers end]
         
+        set def_user [$conn cget user]
+        set def_pass [$conn cget password]
+        set def_token [$conn cget token]
+        
         if {[dict exists $s user] && [dict exists $s password]} {
             return [list user [json::write::string [dict get $s user]] pass [json::write::string [dict get $s password]]]
         }
         if {[dict exists $s auth_token]} {
             return [list auth_token [json::write::string [dict get $s auth_token]]]
         }
-        if {$config(user) ne "" && $config(password) ne ""} {
-            return [list user [json::write::string $config(user)] pass [json::write::string $config(password)]]
+        if {$def_user ne "" && $def_pass ne ""} {
+            return [list user [json::write::string $def_user] pass [json::write::string $def_pass]]
         }
-        if {$config(token) ne ""} {
-            return [list auth_token [json::write::string $config(token)]]
+        if {$def_token ne ""} {
+            return [list auth_token [json::write::string $def_token]]
         }
         throw {NATS ErrAuthorization} "No credentials known for NATS server at [dict get $s host]:[dict get $s port]"
     }

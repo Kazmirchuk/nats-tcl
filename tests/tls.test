@@ -9,7 +9,7 @@
 
 set tls_failed [catch {package require tls}]
 set certs_present [file isdirectory cert]
-tcltest::testConstraint tls [expr {$nats::available_pkg(tls) && $certs_present}]
+tcltest::testConstraint tls [expr {!$tls_failed && $certs_present}]
 
 # my certificates are self-signed and not known by the system, so Tcl should reject them
 test tls-1.1 "Try connecting to NATS without CA" -constraints tls -setup {

@@ -247,6 +247,11 @@ oo::class create ::nats::connection {
         return
     }
     
+    method publish_msg {msg} {
+        my publish [dict get $msg subject] [dict get $msg data] \
+                   -header [dict get $msg header] -reply [dict get $msg reply]
+    }
+    
     method publish {subject message args} {
         if {[llength $args] == 1} {
             set reply [lindex $args 0]
@@ -351,6 +356,21 @@ oo::class create ::nats::connection {
             my ScheduleFlush
         }
         return
+    }
+    
+    method request_msg {msg args} {
+        nats::_parse_args $args {
+            timeout timeout 0
+            callback str ""
+            dictmsg bool true
+        }
+        set reply [dict get $msg reply]
+        if {$reply ne ""} {
+            ${logger}::warn "request_msg: the reply $reply will be ignored"
+        }
+        return [my request [dict get $msg subject] [dict get $msg data] \
+                   -header [dict get $msg header] \
+                   -timeout $timeout -callback $callback -dictmsg $dictmsg]
     }
     
     method request {subject message args} {
@@ -1110,6 +1130,19 @@ namespace eval ::nats::msg {
         }
         return [dict create header "" data $data subject $subject reply $reply sub_id ""]
     }
+    proc set {msgVar field value} {
+        switch -- $field {
+            -data - -subject - -reply {
+                upvar 1 $msgVar msg
+                dict set msg [string trimleft $field -] $value
+                return
+            }
+            default {
+                # do not allow changing the header or sub_id
+                throw {NATS ErrInvalidArg} "Invalid field $field"
+            }
+        }
+    }
     proc subject {msg} {
         return [dict get $msg subject]
     }
@@ -1119,7 +1152,6 @@ namespace eval ::nats::msg {
     proc reply {msg} {
         return [dict get $msg reply]
     }
-    
     proc no_responders {msg} {
         return [expr {[dict lookup [dict get $msg header] Status 0] == 503}]
     }
@@ -1134,20 +1166,20 @@ namespace eval ::nats::header {
                 lappend $key $value
             }
         } else {
-            dict set msg header $key $value
+            dict set msg header $key [list $value]
         }
         return
     }
     # args may give more key-value pairs
     proc set {msgVar key value args} {
         upvar $msgVar msg
-        dict set msg header $key $value
+        dict set msg header $key [list $value]
         if {[llength $args]} {
             if {![llength $args] % 2} {
                 throw {NATS ErrInvalidArg} "Missing a value for a key"
             }
             foreach {k v} $args {
-                dict set msg header $k $v
+                dict set msg header $k [list $v]
             }
         }
         return

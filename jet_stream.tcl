@@ -4,8 +4,6 @@
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
-namespace eval ::nats {}
-
 oo::class create ::nats::jet_stream {
     variable conn
     
@@ -85,7 +83,7 @@ oo::class create ::nats::jet_stream {
 
         set subject "\$JS.API.CONSUMER.MSG.NEXT.$stream.$consumer"
         set batch_size 1 ;# by default, get only one message at a time from a consumer
-        set timeout -1 ;# ms
+        set timeout 0 ;# ms
         set callback ""
         set config_dict [dict create]
         set additonal_args [list]
@@ -432,7 +430,7 @@ oo::class create ::nats::jet_stream {
             throw {NATS ErrInvalidArg} "Invalid stream or consumer name (target subject: $subject)"
         }
 
-        set timeout -1 ;# ms
+        set timeout 0 ;# ms
         set callback ""
         foreach {opt val} $common_arguments {
             switch -- $opt {

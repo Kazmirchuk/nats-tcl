@@ -4,7 +4,6 @@
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
 package require uri
-package require json::write
 package require struct::list
 
 namespace eval ::nats {}
@@ -96,7 +95,7 @@ oo::class create ::nats::server_pool {
         return $newServer
     }
     
-    method next_server {status} {
+    method next_server {} {
         while {1} {
             if { [llength $servers] == 0 } {
                 throw {NATS ErrNoServers} "Server pool is empty"
@@ -106,6 +105,7 @@ oo::class create ::nats::server_pool {
             #"pop" a server; using struct::queue seems like an overkill for such a small list
             set s [lindex $servers 0]
             # during initial connecting process we go through the pool only once
+            set status [set ${conn}::status]
             if {$status == $nats::status_connecting && [dict get $s reconnects]}  {
                 throw {NATS ErrNoServers} "No servers available for connection"
             }

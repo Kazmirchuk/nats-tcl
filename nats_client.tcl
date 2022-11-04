@@ -4,7 +4,6 @@
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
-package require cmdline
 package require json
 package require json::write
 package require oo::util
@@ -26,27 +25,27 @@ namespace eval ::nats {
     }
 }
 # all options for "configure"
-set ::nats::option_syntax {
-    { servers.list ""                   "URLs of NATS servers"}
-    { name.arg ""                       "Client name sent to NATS server when connecting"}
-    { pedantic.boolean false            "Pedantic protocol mode. If true some extra checks will be performed by the server"}
-    { verbose.boolean false             "If true, every protocol message is echoed by the server with +OK" }
-    { randomize.boolean true            "Shuffle server addresses passed to 'configure'" }
-    { connect_timeout.integer 2000      "Connection timeout (ms)"}
-    { reconnect_time_wait.integer 2000  "How long to wait between two reconnect attempts to the same server (ms)"}
-    { max_reconnect_attempts.integer 60 "Maximum number of reconnect attempts per server"}
-    { ping_interval.integer 120000      "Interval (ms) to send PING messages to a NATS server"}
-    { max_outstanding_pings.integer 2   "Max number of PINGs without a reply from a NATS server before closing the connection"}
-    { echo.boolean true                 "If true, messages from this connection will be echoed back by the server if the connection has matching subscriptions"}
-    { tls_opts.list ""                  "Additional options for tls::import"}
-    { user.list ""                      "Default username"}
-    { password.list ""                  "Default password"}
-    { token.arg ""                      "Default authentication token"}
-    { secure.boolean false              "If secure=true, connection will fail if a server can't provide a TLS connection"}
-    { check_subjects.boolean true       "Enable client-side checking of subjects when publishing or subscribing"}
-    { check_connection.boolean true     "Check the connection status before publishing/subscribing"}
-    { dictmsg.boolean false             "Return messages from subscribe&request as dicts by default" }
-    { utf8_convert.boolean false        "Convert messages to/from UTF-8 before sending and after receiving" }
+set ::nats::_option_spec {
+    servers valid_str ""
+    name valid_str ""
+    pedantic bool false
+    verbose bool false
+    randomize bool true
+    connect_timeout timeout 2000
+    reconnect_time_wait timeout 2000
+    max_reconnect_attempts pos_int 60
+    ping_interval timeout 120000
+    max_outstanding_pings pos_int 2
+    echo bool true
+    tls_opts str ""
+    user str ""
+    password str ""
+    token str ""
+    secure bool false
+    check_subjects bool true
+    check_connection bool true
+    dictmsg bool false
+    utf8_convert bool false
 }
 
 oo::class create ::nats::connection {
@@ -62,11 +61,8 @@ oo::class create ::nats::connection {
         set last_error ""
 
         # initialise default configuration
-        foreach option $nats::option_syntax {
-            lassign $option optName defValue comment
-            #drop everything after dot
-            set optName [lindex [split $optName .] 0]
-            set config($optName) $defValue
+        foreach {name type def} $nats::_option_spec {
+            set config($name) $def
         }
         set config(name) $conn_name
         # create a logger with a unique name, smth like Obj58
@@ -126,43 +122,34 @@ oo::class create ::nats::connection {
             return [array get config]
         } 
         if {[llength $args] == 1} {
-            if {$args ni {-help -?}} {
-                return [my cget $args]
-            }
+            return [my cget $args]
         } 
-        set args_copy $args ;# typedGetoptions will remove all known options from $args
-        set usage "Usage: configure ?-option value?...\nValid options:"
-        try {
-            # basically I'm using cmdline only for argument validation and built-in help
-            cmdline::typedGetoptions args $nats::option_syntax $usage
-        } trap {CMDLINE USAGE} msg {
-            # -help also leads here
-            throw {NATS ErrInvalidArg} $msg
-            # could be a bit nicer to check for $tcl_interactive, but in Komodo's shell it's 0 anyway :(
+        
+        # cmdline::typedGetoptions is garbage
+        nats::_parse_args $args $nats::_option_spec 1
+
+        set servers_opt [lsearch -exact $args "-servers"]
+        if {$servers_opt == -1} {
+            return
         }
-        # -randomize may be one of the options, so process them *before* -servers
-        foreach {opt val} $args_copy {
-            set opt [string trimleft $opt -]
-            set config($opt) $val
+        incr servers_opt
+        if {$status != $nats::status_closed} {
+            # in principle, most other config options can be changed on the fly
+            # allowing this to be changed when connected is possible, but a bit tricky
+            throw {NATS ErrInvalidArg} "Cannot configure servers when already connected"
         }
-        if {[dict exists $args_copy -servers]} {
-            if {$status != $nats::status_closed} {
-                # in principle, most other config options can be changed on the fly
-                # allowing this to be changed when connected is possible, but a bit tricky
-                throw {NATS ErrInvalidArg} "Cannot configure servers when already connected"
-            }
-            # if any URL is invalid, this function will throw an error - let it propagate
-            $serverPool set_servers [dict get $args_copy -servers]
-        }
+        # if any URL is invalid, this function will throw an error - let it propagate
+        $serverPool set_servers [lindex $args $servers_opt]
         return
     }
 
     method reset {args} {
         foreach option $args {
             set opt [string trimleft $option -]
-            set pos [lsearch -glob -index 0 $nats::option_syntax "$opt.*"]
+            set pos [lsearch -exact $nats::_option_spec $opt]
             if {$pos != -1} {
-                set config($opt) [lindex $nats::option_syntax $pos 1]
+                incr pos 2
+                set config($opt) [lindex $nats::_option_spec $pos]
                 if {$opt eq "servers"} {
                     $serverPool clear
                 }
@@ -370,7 +357,7 @@ oo::class create ::nats::connection {
         set dictmsg $config(dictmsg)
         nats::_parse_args $args {
             timeout timeout 0
-            callback valid_str ""
+            callback str ""
             dictmsg bool null
             header dict ""
             max_msgs pos_int 0
@@ -387,13 +374,13 @@ oo::class create ::nats::connection {
             set reqID [incr counters(request)]
         }
         set subID ""
+        if {$requestsInboxPrefix eq ""} {
+            set requestsInboxPrefix [my inbox]
+            my subscribe "$requestsInboxPrefix.*" -dictmsg 1 -callback [mymethod RequestCallback -1]
+        }
         if {$max_msgs == 0} {
             # "new-style" request with one wildcard subscription
             # only the first response is delivered
-            if {$requestsInboxPrefix eq ""} {
-                set requestsInboxPrefix [my inbox]
-                my subscribe "$requestsInboxPrefix.*" -dictmsg 1 -callback [mymethod RequestCallback -1]
-            }
             # will perform more argument checking, so it may raise an error
             my publish $subject $message -reply "$requestsInboxPrefix.$reqID" -header $header
         } else {
@@ -637,7 +624,7 @@ oo::class create ::nats::connection {
         while {1} {
             # if it throws ErrNoServers, we have exhausted all servers in the pool
             # we must stop the coroutine, so let the error propagate
-            lassign [$serverPool next_server $status] host port ;# it may wait for reconnect_time_wait ms!
+            lassign [$serverPool next_server] host port ;# it may wait for reconnect_time_wait ms!
             ${logger}::info "Connecting to the server at $host:$port"
             try {
                 # socket -async can throw e.g. in case of a DNS resolution failure
@@ -1115,11 +1102,77 @@ oo::class create ::nats::connection {
 proc ::nats::tls_callback {args} { }
 
 namespace eval ::nats::msg {
-    proc create {} {
-        # set msg [dict create header $header data $body subject $subject reply $replyTo sub_id $subID]
+    proc create {args} {
+        nats::_parse_args $args {
+            subject valid_str null
+            data str ""
+            reply str ""
+        }
+        return [dict create header "" data $data subject $subject reply $reply sub_id ""]
     }
-    proc add_header {} {
-        #puts add_header 
+    proc subject {msg} {
+        return [dict get $msg subject]
+    }
+    proc data {msg} {
+        return [dict get $msg data]
+    }
+    proc reply {msg} {
+        return [dict get $msg reply]
+    }
+    
+    proc no_responders {msg} {
+        return [expr {[dict lookup [dict get $msg header] Status 0] == 503}]
+    }
+    namespace export *
+    namespace ensemble create
+}
+namespace eval ::nats::header {
+    proc add {msgVar key value} {
+        upvar $msgVar msg
+        if {[dict exists $msg header $key]} {
+            dict with msg header {
+                lappend $key $value
+            }
+        } else {
+            dict set msg header $key $value
+        }
+        return
+    }
+    # args may give more key-value pairs
+    proc set {msgVar key value args} {
+        upvar $msgVar msg
+        dict set msg header $key $value
+        if {[llength $args]} {
+            if {![llength $args] % 2} {
+                throw {NATS ErrInvalidArg} "Missing a value for a key"
+            }
+            foreach {k v} $args {
+                dict set msg header $k $v
+            }
+        }
+        return
+    }
+    proc delete {msgVar key} {
+        upvar $msgVar msg
+        dict unset msg header $key
+        return
+    }
+    # get only the first value
+    proc get {msg key} {
+        ::set all_values [dict get [dict get $msg header] $key]
+        return [lindex $all_values 0]
+    }
+    # get all values for a key
+    proc values {msg key} {
+        return [dict get [dict get $msg header] $key]
+    }
+    # get all keys
+    proc keys {msg {pattern ""} } {
+        if {$pattern eq ""} {
+            return [dict keys [dict get $msg header]]
+        } else {
+            return [dict keys [dict get $msg header] $pattern]
+        }
     }
     namespace export *
     namespace ensemble create
@@ -1283,12 +1336,16 @@ proc ::nats::_validate {name val type} {
 # args_list is always a list of option-value pairs; there are no "flag" options
 # $spec contains rows of: option-name option-type default-value
 # this proc initializes local vars in the upper stack (unless its default value is "null" in the spec)
-proc ::nats::_parse_args {args_list spec} {
+# or elements in the configure array
+proc ::nats::_parse_args {args_list spec {doConfig 0}} {
     if {[llength $args_list] % 2 != 0} {
         throw {NATS ErrInvalidArg} "Missing value for option [lindex $args_list end]"
     }
     foreach {k v} $args_list {
         set args_arr([string trimleft $k -]) $v
+    }
+    if {$doConfig} {
+        upvar config config
     }
     # validate only those arguments that were received from the user
     foreach {name type def} $spec {
@@ -1298,7 +1355,11 @@ proc ::nats::_parse_args {args_list spec} {
                 set errCode [expr {$type eq "timeout" ? "ErrBadTimeout" : "ErrInvalidArg"}]
                 throw "NATS $errCode" "Invalid value for the $type option $name : $val"
             }
-            upvar $name $name
+            if {$doConfig} {
+                upvar config($name) $name
+            } else {
+                upvar $name $name
+            }
             if {$type eq "bool"} {
                 # normalized bools can be written directly to JSON
                 set $name [expr $val? "true" : "false"]
@@ -1307,6 +1368,10 @@ proc ::nats::_parse_args {args_list spec} {
             }
             unset args_arr($name)
         } else {
+            if {$doConfig} {
+                # do NOT initialise defaults when in "configure"
+                continue
+            }
             if {$def ne "null"} {
                 upvar $name $name
                 set $name $def

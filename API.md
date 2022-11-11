@@ -79,7 +79,7 @@ The connection object exposes 3 "public" read-only variables:
   - code: error code 
   - errorMessage: error message
 - `status` - connection status, one of `$nats::status_closed`, `$nats::status_connecting`, `$nats::status_connected` or `$nats::status_reconnecting`.
-- `serverInfo` - array with INFO from the current server. 
+- `serverInfo` - array with INFO from the current server. Intended only for tracing. Note there is `server_info` method that returns a dict with the same data.
 
 You can set up traces on these variables to get notified e.g. when a connection status changes or NATS server enters `ldm` - lame duck mode. For example:
 ```Tcl

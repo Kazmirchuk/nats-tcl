@@ -21,7 +21,7 @@ namespace eval ::nats {
     # optional packages
     catch {package require tls}
     if {$::tcl_platform(platform) eq "windows"} {
-        catch {package require iocp}
+        catch {package require iocp_inet}
     }
 }
 # all options for "configure"
@@ -648,7 +648,7 @@ oo::class create ::nats::connection {
             ${logger}::info "Connecting to the server at $host:$port"
             try {
                 # socket -async can throw e.g. in case of a DNS resolution failure
-                if {![catch {package present iocp}]} {
+                if {![catch {package present iocp_inet}]} {
                     set sock [iocp::inet::socket -async $host $port]
                     ${logger}::debug "Created IOCP socket"
                 } else {
@@ -1333,7 +1333,7 @@ proc ::nats::_validate {name val type} {
             }
         }
         pos_int - timeout {
-            if {![string is integer -strict $val]} {
+            if {![string is entier -strict $val]} {
                 return false
             }
             # 0 is reserved for "N/A" or "unlimited"

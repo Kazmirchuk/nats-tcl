@@ -1,0 +1,87 @@
+# Copyright (c) 2022 Petro Kazmirchuk https://github.com/Kazmirchuk
+
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
+
+# Test summary:
+# -
+
+startNats NATS_JS -js
+set conn [nats::connection new]
+
+#debugLogging $conn
+
+# TODO check duplicate_window, ack_wait conversion ms->ns can't compare
+set expected_config [dict create \
+                     -subjects [list test.*] \
+                     -max_msg_size 1000000 \
+                     -storage memory \
+                     -num_replicas 1 \
+                     -discard new \
+                     -max_consumers 100 \
+                     -max_msgs 1000 \
+                     -max_msgs_per_subject 1000 \
+                     -max_bytes 1000000 \
+                     -retention workqueue]
+    
+test js_mgmt-1 "Create a stream" -setup {
+    $conn configure -servers nats://localhost:4222
+    $conn connect
+    set js [$conn jet_stream]
+} -body {
+        
+    
+    $js add_stream MY_STREAM {*}$expected_config ;# return state?
+    set actual_config [dict get [json::json2dict [execNatsCmd stream info -j MY_STREAM]] config]
+    
+    dict for {k v} $expected_config {
+        dict set exp [string trimleft $k -] $v
+    }
+    assert {[test_utils::dict_in $exp $actual_config]}
+    
+}
+
+test js_mgmt-2 "Check stream config" -body {
+    set actual_config [dict get [$js stream_info MY_STREAM] config]
+    assert {[dict_in $exp $actual_config]}
+} -cleanup {
+    unset exp
+}
+
+test js_mgmt-3 "List streams" -body {
+    dict set expected_config -subjects [list test2.*]
+    $js add_stream MY_STREAM2 {*}$expected_config
+    
+    set stream_list [dict get [$js stream_names] streams]
+} -result {MY_STREAM MY_STREAM2}
+
+set exp_consumer_config [dict create \
+                         -description "dummy pull consumer" \
+                         -deliver_policy all \
+                         -opt_start_seq 0 \
+                         -ack_policy explicit \
+                         -max_deliver -1 \
+                         -replay_policy instant \
+                         -max_waiting 100 \
+                         -max_ack_pending 1000 \
+                         -durable_name PULL_CONSUMER]
+
+#TODO try -idle_heartbeat 60000000000, -flow_control false  for pull consumer - should fail
+
+test js_mgmt-4 "Add a pull consumer" -body {
+    $js add_consumer MY_STREAM {*}$exp_consumer_config
+    set actual_config [dict get [json::json2dict [execNatsCmd consumer info -j MY_STREAM PULL_CONSUMER]] config]
+    
+    dict for {k v} $exp_consumer_config {
+        dict set exp [string trimleft $k -] $v
+    }
+    
+    # missing opt_start_seq
+    dict unset exp opt_start_seq
+    assert {[dict_in $exp $actual_config]}
+}
+
+
+$conn destroy
+stopNats NATS_JS
+tcltest::cleanupTests

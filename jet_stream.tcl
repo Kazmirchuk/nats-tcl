@@ -5,10 +5,12 @@
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
 oo::class create ::nats::jet_stream {
-    variable conn
+    variable conn timeout
     
-    constructor {c} {
+    # do NOT call directly! instead use connection::jet_stream
+    constructor {c t} {
         set conn $c
+        set timeout $t
     }
 
     ### MESSAGES ###
@@ -35,7 +37,7 @@ oo::class create ::nats::jet_stream {
                     set msg [::nats::_json_write_object "seq" $val]
                 }
                 default {
-                    if {$opt ni [list -timeout -callback]} {
+                    if {$opt ni [list -callback]} {
                         throw {NATS ErrInvalidArg} "Unknown option $opt"
                     }
                     dict set common_arguments $opt $val
@@ -62,7 +64,7 @@ oo::class create ::nats::jet_stream {
                     set msg [::nats::_json_write_object "seq" $val]
                 }
                 default {
-                    if {$opt ni [list -timeout -callback]} {
+                    if {$opt ni [list -callback]} {
                         throw {NATS ErrInvalidArg} "Unknown option $opt"
                     }
                     dict set common_arguments $opt $val
@@ -86,7 +88,7 @@ oo::class create ::nats::jet_stream {
         }
 
         set subject "\$JS.API.CONSUMER.MSG.NEXT.$stream.$consumer"
-        
+        # timeout will shadow the member var
         nats::_parse_args $args {
             timeout timeout 0
             callback str ""
@@ -246,12 +248,8 @@ oo::class create ::nats::jet_stream {
                     # receive status of adding consumer on callback proc
                     set callback [mymethod PublishCallback $val]
                 }
-                -timeout {
-                    nats::_check_timeout $val
-                    set timeout $val
-                }
                 default {
-                    if {$opt in [list -callback -timeout]} {
+                    if {$opt in [list -callback]} {
                         dict set common_arguments $opt $val
                         continue
                     }
@@ -360,7 +358,7 @@ oo::class create ::nats::jet_stream {
                     dict set config_dict subjects [::json::write array {*}[lmap subject $val {::json::write string $subject}]]
                 }
                 default {
-                    if {$opt in [list -callback -timeout]} {
+                    if {$opt in [list -callback ]} {
                         dict set common_arguments $opt $val
                         continue
                     }
@@ -426,17 +424,12 @@ oo::class create ::nats::jet_stream {
             throw {NATS ErrInvalidArg} "Invalid stream or consumer name (target subject: $subject)"
         }
 
-        set timeout 0 ;# ms
         set callback ""
         foreach {opt val} $common_arguments {
             switch -- $opt {
                 -callback {
                     # receive status of adding consumer on callback proc
                     set callback [mymethod PublishCallback $val]
-                }
-                -timeout {
-                    nats::_check_timeout $val
-                    set timeout $val
                 }
                 default {
                     throw {NATS ErrInvalidArg} "Unknown option $opt"        

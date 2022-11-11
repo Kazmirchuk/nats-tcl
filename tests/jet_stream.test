@@ -25,7 +25,7 @@ test jet_stream-1.1 "Publish and sync consume" -setup {
     $conn connect
 } -body {
     $conn publish test.1 "msg 1"
-    set jet_stream [$conn jet_stream]
+    set jet_stream [$conn jet_stream -timeout 1000]
     set msg [$jet_stream consume $stream_name $consumer_name]
     assert {[dict get $msg subject] eq "test.1"} 1
     dict get $msg data
@@ -103,18 +103,18 @@ test jet_stream-5.2 "Publish message to JetStream async" -body {
 }
 
 test jet_stream-5.3 "Publish message to JetStream sync - no such stream" -body {
-    $jet_stream publish not.exists "not.exists" -timeout 1000
+    $jet_stream publish not.exists "not.exists"
 } -result "No responders available for request" -errorCode {NATS ErrNoResponders} 
 
 test jet_stream-5.4 "Publish message to JetStream async - no such stream" -body {
     duration {
-        $jet_stream publish not.exists "not.exists" -timeout 500 -callback [lambda {timedOut pubAck pubError} {
+        $jet_stream publish not.exists "not.exists" -callback [lambda {timedOut pubAck pubError} {
             set ::timedOut $timedOut
         }]
     } elapsed
     assert {$elapsed < 50}
     duration {
-        wait_for ::timedOut 1000
+        wait_for ::timedOut 2000
     } elapsed
     puts "jet_stream-8 elapsed: $elapsed"
     set timedOut

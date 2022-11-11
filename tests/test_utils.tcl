@@ -238,10 +238,11 @@ namespace eval test_utils {
         wait_for test_utils::responderReady 1000
     }
     
-    # processman::kill doesn't work reliably with tclsh, so instead we send a NATS message to stop the responder gracefully
+    # send a NATS message to stop the responder gracefully
     proc stopResponder {conn {subj "service"}} {
         $conn publish $subj [list 0 exit]
         wait_flush $conn
+        sleep 500  ;# important when the next test begins with starting a new responder
     }
     
     # comm ID (port) is hard-coded to 4223

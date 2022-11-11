@@ -16,9 +16,9 @@ set conn [nats::connection new "AdvancedPubSub"]
 #debugLogging $conn
 
 $conn configure -servers nats://localhost:4222
+$conn connect
 
 test pubsub-1 "Publish and receive a message with a header" -body {
-    $conn connect
     set obs [test_utils::chanObserver new $conn b]
     set msg_received 0
     set sid [$conn subscribe nats_2.2 -callback test_utils::simpleCallback -dictmsg true]

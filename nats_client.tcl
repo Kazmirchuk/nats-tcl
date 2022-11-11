@@ -4,7 +4,6 @@
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
-package require cmdline
 package require json
 package require json::write
 package require oo::util
@@ -14,49 +13,39 @@ package require textutil::split
 
 namespace eval ::nats {
     # improvised enum
-    variable status_closed 0
-    variable status_connecting 1
-    variable status_connected 2
-    variable status_reconnecting 3
+    variable status_closed "closed"
+    variable status_connecting "connecting"
+    variable status_connected "connected"
+    variable status_reconnecting "reconnecting"
     
     # optional packages
-    variable available_pkg
-    set available_pkg(tls) 0
-    try {
-        package require tls
-        set available_pkg(tls) 1
-    } on error err {}
-    
-    set available_pkg(iocp) 0
+    catch {package require tls}
     if {$::tcl_platform(platform) eq "windows"} {
-        try {
-            package require iocp
-            set available_pkg(iocp) 1
-        } on error err {}
+        catch {package require iocp_inet}
     }
 }
 # all options for "configure"
-set ::nats::option_syntax {
-    { servers.list ""                   "URLs of NATS servers"}
-    { name.arg ""                       "Client name sent to NATS server when connecting"}
-    { pedantic.boolean false            "Pedantic protocol mode. If true some extra checks will be performed by the server"}
-    { verbose.boolean false             "If true, every protocol message is echoed by the server with +OK" }
-    { randomize.boolean true            "Shuffle server addresses passed to 'configure'" }
-    { connect_timeout.integer 2000      "Connection timeout (ms)"}
-    { reconnect_time_wait.integer 2000  "How long to wait between two reconnect attempts to the same server (ms)"}
-    { max_reconnect_attempts.integer 60 "Maximum number of reconnect attempts per server"}
-    { ping_interval.integer 120000      "Interval (ms) to send PING messages to a NATS server"}
-    { max_outstanding_pings.integer 2   "Max number of PINGs without a reply from a NATS server before closing the connection"}
-    { echo.boolean true                 "If true, messages from this connection will be echoed back by the server if the connection has matching subscriptions"}
-    { tls_opts.list ""                  "Additional options for tls::import"}
-    { user.list ""                      "Default username"}
-    { password.list ""                  "Default password"}
-    { token.arg ""                      "Default authentication token"}
-    { secure.boolean false              "If secure=true, connection will fail if a server can't provide a TLS connection"}
-    { check_subjects.boolean true       "Enable client-side checking of subjects when publishing or subscribing"}
-    { check_connection.boolean true     "Check the connection status before publishing/subscribing"}
-    { dictmsg.boolean false             "Return messages from subscribe&request as dicts by default" }
-    { utf8_convert.boolean false        "Convert messages to/from UTF-8 before sending and after receiving" }
+set ::nats::_option_spec {
+    servers valid_str ""
+    name valid_str ""
+    pedantic bool false
+    verbose bool false
+    randomize bool true
+    connect_timeout timeout 2000
+    reconnect_time_wait timeout 2000
+    max_reconnect_attempts pos_int 60
+    ping_interval timeout 120000
+    max_outstanding_pings pos_int 2
+    echo bool true
+    tls_opts str ""
+    user str ""
+    password str ""
+    token str ""
+    secure bool false
+    check_subjects bool true
+    check_connection bool true
+    dictmsg bool false
+    utf8_convert bool false
 }
 
 oo::class create ::nats::connection {
@@ -72,11 +61,8 @@ oo::class create ::nats::connection {
         set last_error ""
 
         # initialise default configuration
-        foreach option $nats::option_syntax {
-            lassign $option optName defValue comment
-            #drop everything after dot
-            set optName [lindex [split $optName .] 0]
-            set config($optName) $defValue
+        foreach {name type def} $nats::_option_spec {
+            set config($name) $def
         }
         set config(name) $conn_name
         # create a logger with a unique name, smth like Obj58
@@ -136,43 +122,34 @@ oo::class create ::nats::connection {
             return [array get config]
         } 
         if {[llength $args] == 1} {
-            if {$args ni {-help -?}} {
-                return [my cget $args]
-            }
+            return [my cget $args]
         } 
-        set args_copy $args ;# typedGetoptions will remove all known options from $args
-        set usage "Usage: configure ?-option value?...\nValid options:"
-        try {
-            # basically I'm using cmdline only for argument validation and built-in help
-            cmdline::typedGetoptions args $nats::option_syntax $usage
-        } trap {CMDLINE USAGE} msg {
-            # -help also leads here
-            throw {NATS ErrInvalidArg} $msg
-            # could be a bit nicer to check for $tcl_interactive, but in Komodo's shell it's 0 anyway :(
+        
+        # cmdline::typedGetoptions is garbage
+        nats::_parse_args $args $nats::_option_spec 1
+
+        set servers_opt [lsearch -exact $args "-servers"]
+        if {$servers_opt == -1} {
+            return
         }
-        # -randomize may be one of the options, so process them *before* -servers
-        foreach {opt val} $args_copy {
-            set opt [string trimleft $opt -]
-            set config($opt) $val
+        incr servers_opt
+        if {$status != $nats::status_closed} {
+            # in principle, most other config options can be changed on the fly
+            # allowing this to be changed when connected is possible, but a bit tricky
+            throw {NATS ErrInvalidArg} "Cannot configure servers when already connected"
         }
-        if {[dict exists $args_copy -servers]} {
-            if {$status != $nats::status_closed} {
-                # in principle, most other config options can be changed on the fly
-                # allowing this to be changed when connected is possible, but a bit tricky
-                throw {NATS ErrInvalidArg} "Cannot configure servers when already connected"
-            }
-            # if any URL is invalid, this function will throw an error - let it propagate
-            $serverPool set_servers [dict get $args_copy -servers]
-        }
+        # if any URL is invalid, this function will throw an error - let it propagate
+        $serverPool set_servers [lindex $args $servers_opt]
         return
     }
 
     method reset {args} {
         foreach option $args {
             set opt [string trimleft $option -]
-            set pos [lsearch -glob -index 0 $nats::option_syntax "$opt.*"]
+            set pos [lsearch -exact $nats::_option_spec $opt]
             if {$pos != -1} {
-                set config($opt) [lindex $nats::option_syntax $pos 1]
+                incr pos 2
+                set config($opt) [lindex $nats::_option_spec $pos]
                 if {$opt eq "servers"} {
                     $serverPool clear
                 }
@@ -261,7 +238,7 @@ oo::class create ::nats::connection {
         array unset subscriptions ;# make sure we don't try to "restore" subscriptions when we connect next time
         foreach reqID [array names requests] {
             # cancel pending async timers
-            after cancel [nats::_get_default $requests($reqID) timer ""]
+            after cancel [dict lookup $requests($reqID) timer]
         }
         array unset requests
         set requestsInboxPrefix ""
@@ -270,24 +247,19 @@ oo::class create ::nats::connection {
         return
     }
     
+    method publish_msg {msg} {
+        my publish [dict get $msg subject] [dict get $msg data] \
+                   -header [dict get $msg header] -reply [dict get $msg reply]
+    }
+    
     method publish {subject message args} {
-        set replySubj ""
-        set header ""
         if {[llength $args] == 1} {
-            set replySubj [lindex $args 0]
+            set reply [lindex $args 0]
+            set header ""
         } else {
-            foreach {opt val} $args {
-                switch -- $opt {
-                    -header {
-                        set header $val
-                    }
-                    -reply {
-                        set replySubj $val
-                    }
-                    default {
-                        throw {NATS ErrInvalidArg} "Unknown option $opt"
-                    }
-                }
+            nats::_parse_args $args {
+                header dict ""
+                reply str ""
             }
         }
 
@@ -310,21 +282,17 @@ oo::class create ::nats::connection {
         if {![my CheckSubject $subject]} {
             throw {NATS ErrBadSubject} "Invalid subject $subject"
         }
-        if {$replySubj ne "" && ![my CheckSubject $replySubj]} {
-            throw {NATS ErrBadSubject} "Invalid reply $replySubj"
+        if {$reply ne "" && ![my CheckSubject $reply]} {
+            throw {NATS ErrBadSubject} "Invalid reply $reply"
         }
         
         if {$header eq ""} {
-            set ctrl_line "PUB $subject $replySubj $msgLen"
+            set ctrl_line "PUB $subject $reply $msgLen"
             lappend outBuffer $ctrl_line $message
         } else {
-            try {
-                set hdr [nats::_format_header $header]
-            } trap {TCL VALUE DICTIONARY} err {
-                throw {NATS ErrInvalidArg} "header is not a valid dict"
-            }
+            set hdr [nats::_format_header $header]
             set hdr_len [expr {[string length $hdr] + 2}] ;# account for one more crlf that will be added when flushing
-            set ctrl_line "HPUB $subject $replySubj $hdr_len [expr {$msgLen+$hdr_len}]"
+            set ctrl_line "HPUB $subject $reply $hdr_len [expr {$msgLen+$hdr_len}]"
             lappend outBuffer $ctrl_line $hdr $message
         }
         
@@ -334,61 +302,27 @@ oo::class create ::nats::connection {
     
     method subscribe {subject args} {
         my CheckConnection
-        set queue ""
-        set callback ""
-        set maxMsgs 0 ;# unlimited by default
         set dictmsg $config(dictmsg)
         
-        foreach {opt val} $args {
-            switch -- $opt {
-                -queue {
-                    set queue $val
-                }
-                -callback {
-                    set callback $val
-                }
-                -max_msgs {
-                    set maxMsgs $val
-                }
-                -dictmsg {
-                    set dictmsg $val
-                }
-                default {
-                    throw {NATS ErrInvalidArg} "Unknown option $opt"
-                }
-            }
+        nats::_parse_args $args {
+            queue queue_group ""
+            callback valid_str ""
+            dictmsg bool null
+            max_msgs pos_int 0
         }
-        
+
         if {![my CheckWildcard $subject]} {
             throw {NATS ErrBadSubject} "Invalid subject $subject"
         }
-        
-        if {[string length $callback] == 0} {
-            throw {NATS ErrInvalidArg} "Invalid callback"
-        }
-        
-        if {! ([string is integer -strict $maxMsgs] && $maxMsgs >= 0)} {
-            throw {NATS ErrInvalidArg} "Invalid max_msgs $maxMsgs"
-        }
-        
-        if {![string is boolean -strict $dictmsg]} {
-            throw {NATS ErrInvalidArg} "Invalid dictmsg $dictmsg"
-        }
-        
-        #rules for queue names are more relaxed than for subjects
-        # badQueue in nats.go checks for whitespace
-        if {$queue ne "" && ![string is graph $queue]} {
-            throw {NATS ErrInvalidArg} "Invalid queue group $queue"
-        }
-                                   
+
         set subID [incr counters(subscription)]
-        set subscriptions($subID) [dict create subj $subject queue $queue cmd $callback maxMsgs $maxMsgs recMsgs 0 dictmsg $dictmsg]
+        set subscriptions($subID) [dict create subj $subject queue $queue cmd $callback maxMsgs $max_msgs recMsgs 0 dictmsg $dictmsg]
         
         if {$status == $nats::status_connected} {
             # it will be sent anyway when we reconnect
             lappend outBuffer "SUB $subject $queue $subID"
-            if {$maxMsgs > 0} {
-                lappend outBuffer "UNSUB $subID $maxMsgs"
+            if {$max_msgs > 0} {
+                lappend outBuffer "UNSUB $subID $max_msgs"
             }
             my ScheduleFlush
         }
@@ -397,33 +331,24 @@ oo::class create ::nats::connection {
     
     method unsubscribe {subID args} {
         my CheckConnection
-        set maxMsgs 0 ;# unlimited by default
-        foreach {opt val} $args {
-            switch -- $opt {
-                -max_msgs {
-                    set maxMsgs $val
-                }
-                default {
-                    throw {NATS ErrInvalidArg} "Unknown option $opt"
-                }
-            }
+        nats::_parse_args $args {
+            queue queue_group ""
+            callback valid_str ""
+            dictmsg bool null
+            max_msgs pos_int 0
         }
-        
-        if {! ([string is integer -strict $maxMsgs] && $maxMsgs >= 0)} {
-            throw {NATS ErrInvalidArg} "Invalid max_msgs $maxMsgs"
-        }
-        
+
         if {![info exists subscriptions($subID)]} {
             throw {NATS ErrBadSubscription} "Invalid subscription ID $subID"
         }
         
         #the format is UNSUB <sid> [max_msgs]
-        if {$maxMsgs == 0 || [dict get $subscriptions($subID) recMsgs] >= $maxMsgs} {
+        if {$max_msgs == 0 || [dict get $subscriptions($subID) recMsgs] >= $max_msgs} {
             unset subscriptions($subID)
             set data "UNSUB $subID"
         } else {
-            dict set subscriptions($subID) maxMsgs $maxMsgs
-            set data "UNSUB $subID $maxMsgs"
+            dict set subscriptions($subID) maxMsgs $max_msgs
+            set data "UNSUB $subID $max_msgs"
         }
         if {$status == $nats::status_connected} {
             # it will be sent anyway when we reconnect
@@ -433,61 +358,47 @@ oo::class create ::nats::connection {
         return
     }
     
-    method request {subject message args} {
-        set timeout -1 ;# ms
-        set callback ""
-        set dictmsg $config(dictmsg)
-        set header ""
-        set maxMsgs -1
-        
-        foreach {opt val} $args {
-            switch -- $opt {
-                -timeout {
-                    nats::_check_timeout $val
-                    set timeout $val
-                }
-                -callback {
-                    set callback $val
-                }
-                -dictmsg {
-                    set dictmsg $val
-                }
-                -header {
-                    set header $val
-                }
-                -max_msgs {
-                    set maxMsgs $val
-                    if {! ([string is integer -strict $maxMsgs] && $maxMsgs > 0)} {
-                        throw {NATS ErrInvalidArg} "Invalid max_msgs $maxMsgs"
-                    }
-                }
-                -custom_reqID {
-                    set custom_reqID $val
-                }
-                default {
-                    throw {NATS ErrInvalidArg} "Unknown option $opt"
-                }
-            }
+    method request_msg {msg args} {
+        nats::_parse_args $args {
+            timeout timeout 0
+            callback str ""
+            dictmsg bool true
         }
-        
-        if {$maxMsgs > 1 && $callback eq ""} {
+        set reply [dict get $msg reply]
+        if {$reply ne ""} {
+            ${logger}::warn "request_msg: the reply $reply will be ignored"
+        }
+        return [my request [dict get $msg subject] [dict get $msg data] \
+                   -header [dict get $msg header] \
+                   -timeout $timeout -callback $callback -dictmsg $dictmsg]
+    }
+    
+    method request {subject message args} {
+        set dictmsg $config(dictmsg)
+        nats::_parse_args $args {
+            timeout timeout 0
+            callback str ""
+            dictmsg bool null
+            header dict ""
+            max_msgs pos_int 0
+            _custom_reqID valid_str ""
+        }
+
+        if {$max_msgs > 1 && $callback eq ""} {
             throw {NATS ErrInvalidArg} "-max_msgs>1 can be used only in async request"
         }
         
-        if {[info exists custom_reqID]} {
+        if {$_custom_reqID ne ""} {
             set reqID $custom_reqID
         } else {
             set reqID [incr counters(request)]
         }
-        
+        set subID ""
         if {$requestsInboxPrefix eq ""} {
             set requestsInboxPrefix [my inbox]
             my subscribe "$requestsInboxPrefix.*" -dictmsg 1 -callback [mymethod RequestCallback -1]
         }
-        
-        set subID ""
-        
-        if {$maxMsgs == -1} {
+        if {$max_msgs == 0} {
             # "new-style" request with one wildcard subscription
             # only the first response is delivered
             # will perform more argument checking, so it may raise an error
@@ -495,19 +406,19 @@ oo::class create ::nats::connection {
         } else {
             # "old-style" request with a SUB per each request is needed for JetStream,
             # because messages received from a stream have a subject that differs from our reply-to
-            # $maxMsgs is always 1 for sync requests
-            set subID [my subscribe "$requestsInboxPrefix.JS.$reqID" -dictmsg 1 -callback [mymethod RequestCallback $reqID] -max_msgs $maxMsgs]
+            # $max_msgs is always 1 for sync requests
+            set subID [my subscribe "$requestsInboxPrefix.JS.$reqID" -dictmsg 1 -callback [mymethod RequestCallback $reqID] -max_msgs $max_msgs]
             my publish $subject $message -reply "$requestsInboxPrefix.JS.$reqID" -header $header
         }
         
         set timerID ""
-        if {$timeout != -1} {
+        if {$timeout != 0} {
             # RequestCallback is called in all cases: timeout/no timeout, sync/async request
             set timerID [after $timeout [mymethod RequestCallback $reqID]]
         }
         if {$callback ne ""} {
             # async request
-            set requests($reqID) [dict create timer $timerID callback $callback isDictMsg $dictmsg subID $subID maxMsgs $maxMsgs recMsgs 0]
+            set requests($reqID) [dict create timer $timerID callback $callback isDictMsg $dictmsg subID $subID maxMsgs $max_msgs recMsgs 0]
             return
         }
         # sync request
@@ -525,7 +436,7 @@ oo::class create ::nats::connection {
         after cancel $timerID
         set response [dict get $sync_req response]
         set in_hdr [dict get $response header]
-        if {[nats::_get_default $in_hdr Status 0] == 503} {
+        if {[dict lookup $in_hdr Status 0] == 503} {
             throw {NATS ErrNoResponders} "No responders available for request"
         }
         if {$dictmsg} {
@@ -538,19 +449,10 @@ oo::class create ::nats::connection {
     #this function is called "flush" in all other NATS clients, but I find it confusing
     # default timeout in nats.go is 10s
     method ping { args } {
-        set timeout 10000
-        foreach {opt val} $args {
-            switch -- $opt {
-                -timeout {
-                    nats::_check_timeout $val
-                    set timeout $val
-                }
-                default {
-                    throw {NATS ErrInvalidArg} "Unknown option $opt"
-                }
-            }
+        nats::_parse_args $args {
+            timeout timeout 10000
         }
-        
+
         if {$status != $nats::status_connected} {
             # unlike CheckConnection, here we want to raise the error also if the client is reconnecting, in line with cnats
             throw {NATS ErrConnectionClosed} "No connection to NATS server"
@@ -584,7 +486,7 @@ oo::class create ::nats::connection {
     method RequestCallback { reqID {subj ""} {msg ""} {reply ""} } {
         if {$subj eq "" && $reqID != -1} {
             # request timed out
-            set callback [nats::_get_default $requests($reqID) callback ""]
+            set callback [dict lookup $requests($reqID) callback]
             if {$callback ne ""} {
                 after 0 [list {*}$callback 1 ""]
                 unset requests($reqID)
@@ -606,7 +508,7 @@ oo::class create ::nats::connection {
             return
         }
         # most of these variables will be empty in case of a sync request
-        set callback [nats::_get_default $requests($reqID) callback ""]
+        set callback [dict lookup $requests($reqID) callback]
         if {$callback eq ""} {
             # resume from vwait in "method request"; "requests" array will be cleaned up there
             set requests($reqID) [dict create timedOut 0 response $msg]
@@ -615,13 +517,13 @@ oo::class create ::nats::connection {
         # handle the async request
         set timedOut 0
         set in_hdr [dict get $msg header]
-        if {[nats::_get_default $in_hdr Status 0] == 503} {
+        if {[dict lookup $in_hdr Status 0] == 503} {
             # no-responders is equivalent to timedOut=1
             set timedOut 1
         }
 
         # handle the nats timeout e.q. for pull consumers
-        if {[nats::_get_default $in_hdr Status 0] == 408} {
+        if {[dict lookup $in_hdr Status 0] == 408} {
             set timedOut 1
         }
 
@@ -742,12 +644,13 @@ oo::class create ::nats::connection {
         while {1} {
             # if it throws ErrNoServers, we have exhausted all servers in the pool
             # we must stop the coroutine, so let the error propagate
-            lassign [$serverPool next_server $status] host port ;# it may wait for reconnect_time_wait ms!
+            lassign [$serverPool next_server] host port ;# it may wait for reconnect_time_wait ms!
             ${logger}::info "Connecting to the server at $host:$port"
             try {
                 # socket -async can throw e.g. in case of a DNS resolution failure
-                if {$nats::available_pkg(iocp)} {
+                if {![catch {package present iocp_inet}]} {
                     set sock [iocp::inet::socket -async $host $port]
+                    ${logger}::debug "Created IOCP socket"
                 } else {
                     set sock [socket -async $host $port]
                 }
@@ -841,7 +744,7 @@ oo::class create ::nats::connection {
         if {[info exists serverInfo(tls_required)] && $serverInfo(tls_required)} {
             #NB! NATS server will never accept a TLS connection. Always start connecting with plain TCP,
             # and only after receiving INFO, we can upgrade to TLS if needed
-            if {!$nats::available_pkg(tls)} {
+            if {[catch {package present tls}]} {
                 my AsyncError ErrTLS "TLS package is not available" 1
                 return
             }
@@ -1218,12 +1121,96 @@ oo::class create ::nats::connection {
 # keep this proc "public" in case a user needs to override it
 proc ::nats::tls_callback {args} { }
 
-# all following procs are private!
-proc ::nats::_check_timeout {timeout} {
-    if {! ([string is integer -strict $timeout] && $timeout >= -1)} {
-        throw {NATS ErrBadTimeout} "Invalid timeout $timeout"
+namespace eval ::nats::msg {
+    proc create {args} {
+        nats::_parse_args $args {
+            subject valid_str null
+            data str ""
+            reply str ""
+        }
+        return [dict create header "" data $data subject $subject reply $reply sub_id ""]
     }
+    proc set {msgVar field value} {
+        switch -- $field {
+            -data - -subject - -reply {
+                upvar 1 $msgVar msg
+                dict set msg [string trimleft $field -] $value
+                return
+            }
+            default {
+                # do not allow changing the header or sub_id
+                throw {NATS ErrInvalidArg} "Invalid field $field"
+            }
+        }
+    }
+    proc subject {msg} {
+        return [dict get $msg subject]
+    }
+    proc data {msg} {
+        return [dict get $msg data]
+    }
+    proc reply {msg} {
+        return [dict get $msg reply]
+    }
+    proc no_responders {msg} {
+        return [expr {[dict lookup [dict get $msg header] Status 0] == 503}]
+    }
+    namespace export *
+    namespace ensemble create
 }
+namespace eval ::nats::header {
+    proc add {msgVar key value} {
+        upvar $msgVar msg
+        if {[dict exists $msg header $key]} {
+            dict with msg header {
+                lappend $key $value
+            }
+        } else {
+            dict set msg header $key [list $value]
+        }
+        return
+    }
+    # args may give more key-value pairs
+    proc set {msgVar key value args} {
+        upvar $msgVar msg
+        dict set msg header $key [list $value]
+        if {[llength $args]} {
+            if {![llength $args] % 2} {
+                throw {NATS ErrInvalidArg} "Missing a value for a key"
+            }
+            foreach {k v} $args {
+                dict set msg header $k [list $v]
+            }
+        }
+        return
+    }
+    proc delete {msgVar key} {
+        upvar $msgVar msg
+        dict unset msg header $key
+        return
+    }
+    # get only the first value
+    proc get {msg key} {
+        ::set all_values [dict get [dict get $msg header] $key]
+        return [lindex $all_values 0]
+    }
+    # get all values for a key
+    proc values {msg key} {
+        return [dict get [dict get $msg header] $key]
+    }
+    # get all keys
+    proc keys {msg {pattern ""} } {
+        if {$pattern eq ""} {
+            return [dict keys [dict get $msg header]]
+        } else {
+            return [dict keys [dict get $msg header] $pattern]
+        }
+    }
+    namespace export *
+    namespace ensemble create
+}
+
+# ------------------------ all following procs are private! --------------------------------------
 proc ::nats::_timestamp {} {
     # workaround for not being able to format current time with millisecond precision
     # should not be needed in Tcl 8.7, see https://core.tcl-lang.org/tips/doc/trunk/tip/423.md
@@ -1309,12 +1296,20 @@ proc ::nats::_json_write_object {args} {
 }
 
 # pending TIP 342 in Tcl 8.7
-proc ::nats::_get_default {dict_val key def} {
+proc ::nats::_dict_get_default {dict_val key {def ""}} {
     if {[dict exists $dict_val $key]} {
         return [dict get $dict_val $key]
     } else {
         return $def
     }
+}
+
+namespace eval ::nats {
+    # now add it to the standard "dict" ensemble under the name "lookup"; no support needed for nested dicts
+    variable map [namespace ensemble configure ::dict -map]
+    dict set map lookup ::nats::_dict_get_default
+    namespace ensemble configure ::dict -map $map
+    unset map
 }
 
 # official NATS clients use the sophisticated NUID algorithm, but this should be enough for the Tcl client
@@ -1327,6 +1322,97 @@ proc ::nats::_random_string {} {
         append result [string index $allowed_chars $pos]
     }
     return $result
+}
+
+proc ::nats::_validate {name val type} {
+    switch -- $type {
+        str {}
+        valid_str {
+            if {[string length $val] == 0} {
+                return false
+            }
+        }
+        pos_int - timeout {
+            if {![string is entier -strict $val]} {
+                return false
+            }
+            # 0 is reserved for "N/A" or "unlimited"
+            if { $val < 0 } {
+                return false
+            }
+        }
+        bool {
+            if {![string is boolean -strict $val]} {
+                return false
+            }
+        }
+        dict {
+            if {[catch {dict size $val}]} {
+                return false
+            }
+        }
+        queue_group {
+            #rules for queue names are more relaxed than for subjects
+            # badQueue in nats.go checks for whitespace
+            if {![string is graph $val]} {
+                return false
+            }
+        }
+        default {
+            throw {NATS ErrInvalidArg} "Wrong type $type"  ;# should not happen
+        }
+    }
+    return true
+}
+
+# args_list is always a list of option-value pairs; there are no "flag" options
+# $spec contains rows of: option-name option-type default-value
+# this proc initializes local vars in the upper stack (unless its default value is "null" in the spec)
+# or elements in the configure array
+proc ::nats::_parse_args {args_list spec {doConfig 0}} {
+    if {[llength $args_list] % 2 != 0} {
+        throw {NATS ErrInvalidArg} "Missing value for option [lindex $args_list end]"
+    }
+    foreach {k v} $args_list {
+        set args_arr([string trimleft $k -]) $v
+    }
+    if {$doConfig} {
+        upvar config config
+    }
+    # validate only those arguments that were received from the user
+    foreach {name type def} $spec {
+        if {[info exists args_arr($name)]} {
+            set val $args_arr($name)
+            if {![_validate $name $val $type]} {
+                set errCode [expr {$type eq "timeout" ? "ErrBadTimeout" : "ErrInvalidArg"}]
+                throw "NATS $errCode" "Invalid value for the $type option $name : $val"
+            }
+            if {$doConfig} {
+                upvar config($name) $name
+            } else {
+                upvar $name $name
+            }
+            if {$type eq "bool"} {
+                # normalized bools can be written directly to JSON
+                set $name [expr $val? "true" : "false"]
+            } else {
+                set $name $val
+            }
+            unset args_arr($name)
+        } else {
+            if {$doConfig} {
+                # do NOT initialise defaults when in "configure"
+                continue
+            }
+            if {$def ne "null"} {
+                upvar $name $name
+                set $name $def
+            }
+        }
+    }
+    if {[array size args_arr]} {
+        throw {NATS ErrInvalidArg} "Unknown option [lindex [array names args_arr] 0]"
+    }
 }
 
 package provide nats 1.0

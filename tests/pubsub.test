@@ -16,25 +16,24 @@ set conn [nats::connection new "AdvancedPubSub"]
 #debugLogging $conn
 
 $conn configure -servers nats://localhost:4222
+$conn connect
 
 test pubsub-1 "Publish and receive a message with a header" -body {
-    $conn connect
     set obs [test_utils::chanObserver new $conn b]
     set msg_received 0
     set sid [$conn subscribe nats_2.2 -callback test_utils::simpleCallback -dictmsg true]
 
-    set h [dict create hdr1 [list "val 1"] hdr2 val2]
-    $conn publish nats_2.2 "payload" -header $h
+    set msg_out [nats::msg create -subject "nats_2.2" -data "payload"]
+    nats::header set msg_out hdr1 "val 1" hdr2 "val2"
+    $conn publish_msg $msg_out
     
     wait_for test_utils::simpleMsg
     
-    assert {[dict get $test_utils::simpleMsg subject] eq "nats_2.2"}
-    assert {[dict get $test_utils::simpleMsg data] eq "payload"}
-    assert {[dict get $test_utils::simpleMsg reply] eq ""}
-    set hdr [dict get $test_utils::simpleMsg header]
-    # each key points to a list of values
-    assert {[lindex [dict get $hdr hdr1] 0] eq "val 1"}
-    assert {[lindex [dict get $hdr hdr2] 0] eq "val2"}
+    assert {[nats::msg subject $test_utils::simpleMsg] eq "nats_2.2"}
+    assert {[nats::msg data $test_utils::simpleMsg] eq "payload"}
+    assert {[nats::msg reply $test_utils::simpleMsg] eq ""}
+    assert {[nats::header get $test_utils::simpleMsg "hdr1"] eq "val 1"}
+    assert {[nats::header get $test_utils::simpleMsg "hdr2"] eq "val2"}
         
     lassign [$obs getChanData 0 1] readData writtenData
     $obs destroy
@@ -49,20 +48,24 @@ test pubsub-2 "Send requests with headers" -setup {
     startResponder $conn nats_2.2 "" 1
 } -body {
     # test a sync request
-    set header_out [dict create hdr1 val1]
-    set response [$conn request "nats_2.2" "0 msg with header" -dictmsg true -header $header_out -timeout 500]
-    set header_in [dict get $response header]
-    assert {[dict get $response data] eq "msg with header" } 1
-    assert {$header_in eq $header_out}
+    set msg_out [nats::msg create -subject "nats_2.2" -data "0 msg with header"]
+    nats::header set msg_out hdr1 "value 1"
+    set response [$conn request_msg $msg_out -timeout 500]
+
+    assert {[nats::msg data $response] eq "msg with header" } 1
+    assert {[nats::header get $response "hdr1"] eq "value 1"} 1
     
     # test an async request
-    $conn request "nats_2.2" "0 msg2 with header" -dictmsg true -header $header_out -timeout 500 -callback test_utils::asyncReqCallback
+    nats::msg set msg_out -data "0 msg2 with header"
+    
+    $conn request_msg $msg_out -timeout 500 -callback test_utils::asyncReqCallback
     wait_for test_utils::simpleMsg 1000
-    assert {[dict get $test_utils::simpleMsg data] eq "msg2 with header"} 1
-    assert {[dict get $test_utils::simpleMsg header] eq $::header_out} 1
+    assert {[nats::msg data $test_utils::simpleMsg] eq "msg2 with header"} 1
+    assert {[nats::header get $test_utils::simpleMsg "hdr1"] eq "value 1"} 1
     
     # test a sync request, but get back a plain message with no header
-    set response [$conn request "nats_2.2" "0 msg3 with header" -header $header_out -timeout 500]
+    nats::msg set msg_out -data "0 msg3 with header"
+    set response [$conn request_msg $msg_out -timeout 500 -dictmsg 0]
     assert { $response eq "msg3 with header" }
 } -cleanup {
     stopResponder $conn nats_2.2
@@ -72,16 +75,18 @@ test pubsub-3 "Receive a message with a header from NATS CLI" -body {
     set msg_received 0
     $conn subscribe nats_cli -dictmsg true -callback [lambda {subject message replyTo} {
         assert {$subject eq "nats_cli"}
-        assert {[dict get $message data] eq "payload"}
+        assert {[nats::msg data $message] eq "payload"}
         assert {$replyTo eq ""}
-        set hdr [dict get $message header]
-        # each key points to a list of values
-        assert {[lindex [dict get $hdr hdr1] 0] eq "val1"}
-        assert {[lindex [dict get $hdr hdr2] 0] eq "val2"}
+
+        assert {[nats::header get $message "hdr1"] eq "val1"}
+        # val2 and val3 can come in any order
+        set hdr_values [nats::header values $message "hdr2"]
+        assert {"val2" in $hdr_values}
+        assert {"val3" in $hdr_values}
         set ::msg_received 1
     }]
     wait_flush $conn
-    execNatsCmd pub -H hdr1:val1 -H hdr2:val2 nats_cli payload
+    execNatsCmd pub -H hdr1:val1 -H hdr2:val2 -H hdr2:val3 nats_cli payload
     wait_for ::msg_received 1000
     set msg_received
 } -result 1
@@ -91,9 +96,7 @@ test pubsub-4 "Receive no-responders from a subscription" -body {
     $conn subscribe $inbox -callback test_utils::simpleCallback -dictmsg true
     $conn publish nats_2.2 -reply $inbox
     wait_for test_utils::simpleMsg
-    assert {[dict get $test_utils::simpleMsg data] eq ""}
-    set hdr [dict get $test_utils::simpleMsg header]
-    assert {[dict get $hdr Status] == 503} 1
+    assert {[nats::msg no_responders $test_utils::simpleMsg]} 1
 }
 
 test pubsub-5 "Receive no-responders from a sync request" -body {
@@ -107,8 +110,9 @@ test pubsub-5 "Receive no-responders from a sync request" -body {
 
 test pubsub-6 "Receive no-responders from an async request" -body {
     set msg_received 0
-    $conn request nats_2.2 "no response" -timeout 500 -callback [lambda {timedOut msg} {
+    $conn request nats_2.2 "no response" -timeout 500 -dictmsg 1 -callback [lambda {timedOut msg} {
         assert {$timedOut}
+        assert {[nats::msg no_responders $msg]} 1
         set ::msg_received 1
     }]
     duration {

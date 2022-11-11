@@ -223,8 +223,9 @@ namespace eval test_utils {
     }
 
     proc execNatsCmd {args} {
-        exec -ignorestderr nats {*}$args
+        set output [exec -ignorestderr nats {*}$args]
         puts "[nats::_timestamp] Executed: nats $args"
+        return $output
     }
     
     proc startResponder {conn {subj "service"} {queue ""} {dictMsg 0}} {
@@ -237,10 +238,11 @@ namespace eval test_utils {
         wait_for test_utils::responderReady 1000
     }
     
-    # processman::kill doesn't work reliably with tclsh, so instead we send a NATS message to stop the responder gracefully
+    # send a NATS message to stop the responder gracefully
     proc stopResponder {conn {subj "service"}} {
         $conn publish $subj [list 0 exit]
         wait_flush $conn
+        sleep 500  ;# important when the next test begins with starting a new responder
     }
     
     # comm ID (port) is hard-coded to 4223
@@ -288,6 +290,18 @@ namespace eval test_utils {
         return [expr {$actual > ($ref - $tolerance) && $actual < ($ref + $tolerance)}]
     }
     
+    # check that dict1 is a subset of dict2, with the same values
+    proc dict_in {dict1 dict2} {
+        dict for {k v} $dict1 {
+            if {[dict exists $dict2 $k] && [dict get $dict2 $k] == $v} {
+                continue
+            } else {
+                return false
+            }
+        }
+        return true
+    }
+    
     namespace export sleep wait_for wait_flush chanObserver duration startNats stopNats startResponder stopResponder startFakeServer stopFakeServer sendFakeServer \
-                     assert approx getConnectOpts debugLogging execNatsCmd
+                     assert approx getConnectOpts debugLogging execNatsCmd dict_in
 }

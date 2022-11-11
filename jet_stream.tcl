@@ -4,8 +4,6 @@
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
-namespace eval ::nats {}
-
 oo::class create ::nats::jet_stream {
     variable conn
     
@@ -75,6 +73,10 @@ oo::class create ::nats::jet_stream {
         return [my SimpleRequest $subject $common_arguments "Deleting message from stream $stream timed out" $msg]
     }
 
+    # see also https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-13.md
+    # nats schema show io.nats.jetstream.api.v1.consumer_getnext_request
+    
+    # TODO: derive expires from timeout
     method consume {stream consumer args} {
         if {![${conn}::my CheckSubject $stream]} {
             throw {NATS ErrInvalidArg} "Invalid stream name $stream"
@@ -84,67 +86,56 @@ oo::class create ::nats::jet_stream {
         }
 
         set subject "\$JS.API.CONSUMER.MSG.NEXT.$stream.$consumer"
-        set batch_size 1 ;# by default, get only one message at a time from a consumer
-        set timeout -1 ;# ms
-        set callback ""
-        set config_dict [dict create]
-        set additonal_args [list]
         
-        foreach {opt val} $args {
-            switch -- $opt {
-                -timeout {
-                    nats::_check_timeout $val
-                    set timeout $val
-                }
-                -callback {
-                    set callback $val
-                }
-                -batch_size {
-                    set batch_size $val
-                    dict set config_dict batch $batch_size
-                }
-                -expires -
-                -idle_heartbeat {
-                    set opt_raw [string range $opt 1 end] ;# remove flag
-                    # duration args - provided in milliseconds should be formatted to nanoseconds 
-                    if {![string is double -strict $val]} {
-                        throw {NATS ErrInvalidArg} "Wrong duration value for argument $opt_raw it must be in milliseconds"
-                    }
-                    set val [expr {entier($val*1000*1000)}] ;#conversion milliseconds to nanoseconds
-
-                    dict set config_dict $opt_raw $val
-                }
-                -no_wait {
-                    if {![string is boolean $val]} {
-                        throw {NATS ErrInvalidArg} "Argument no_wait should be boolean"
-                    }
-                    if {$val} {
-                        dict set config_dict no_wait true
-                    } else {
-                        dict set config_dict no_wait false
-                    }
-                }
-                -custom_reqID {
-                    lappend additonal_args -custom_reqID $val
-                }
-                default {
-                    throw {NATS ErrInvalidArg} "Unknown option $opt"
-                }
+        nats::_parse_args $args {
+            timeout timeout 0
+            callback str ""
+            expires pos_int null
+            batch_size pos_int null
+            idle_heartbeat pos_int null
+            no_wait bool null
+            _custom_reqID valid_str ""
+        }
+        
+        # the JSON body is:
+        # expires : nanoseconds
+        # batch: int
+        # no_wait: bool
+        # idle_heartbeat: nanoseconds - I have no clue what it does! but it is present in the C# client
+        # when all options=defaults, do not send JSON at all
+        
+        if {[info exists batch_size]} {
+            set batch $batch_size
+        }
+        
+        foreach opt {expires batch no_wait idle_heartbeat} {
+            if {![info exists $opt]} {
+                continue
             }
+            set val [set $opt]
+            if {$opt in {expires idle_heartbeat}} {
+                # convert ms to ns
+                set val [expr {entier($val*1000*1000)}]
+            }
+            dict set config_dict $opt $val
         }
-        
-        if {$batch_size > 1 && $callback eq ""} {
-            throw {NATS ErrInvalidArg} "batch_size > 1 can be done only with an async consumer"
-        }
-
-        if {[dict size $config_dict] == 0} {
-            set message $batch_size
-        } else {
+        # custom_reqID
+        # TODO no_wait conflicts with expires?
+        set message ""
+        if {[info exists config_dict]} {
             set message [::nats::_json_write_object {*}$config_dict]
         }
-
+        set req_opts [list -dictmsg true -timeout $timeout -callback $callback]
+        if {[info exists batch_size]} {
+            lappend req_opts -max_msgs $batch_size
+        } else {
+            lappend req_opts -max_msgs 1 ;# trigger an old-style request
+        }
+        if {$_custom_reqID ne ""} {
+            lappend req_opts -_custom_reqID $_custom_reqID
+        }
         try {
-            return [$conn request $subject $message -dictmsg true -timeout $timeout -callback $callback -max_msgs $batch_size {*}$additonal_args]
+            return [$conn request $subject $message {*}$req_opts]
         } trap {NATS ErrTimeout} err {
             throw {NATS ErrTimeout} "Consume $stream.$consumer timed out"
         }
@@ -192,11 +183,15 @@ oo::class create ::nats::jet_stream {
         }
         
         # can throw nats server error
-        return [my ParsePublishResponse $result]
+        return [nats::_parsePublishResponse $result]
     }
 
     ### CONSUMERS ###
 
+    #"required":
+    #    "deliver_policy",
+    #    "ack_policy",
+    #    "replay_policy"
     method add_consumer {stream args} {
         if {![${conn}::my CheckSubject $stream]} {
             throw {NATS ErrInvalidArg} "Invalid stream name $stream"
@@ -344,7 +339,7 @@ oo::class create ::nats::jet_stream {
     }
 
     ### STREAMS ###
-
+    # nats schema show io.nats.jetstream.api.v1.stream_create_request
     method add_stream {stream args} {
         if {![${conn}::my CheckSubject $stream]} {
             throw {NATS ErrInvalidArg} "Invalid stream name $stream"
@@ -395,7 +390,6 @@ oo::class create ::nats::jet_stream {
         set subject "\$JS.API.STREAM.CREATE.$stream"
         dict set config_dict name [::json::write string $stream]
         set settings_json [::nats::_json_write_object {*}$config_dict]
-
         return [my SimpleRequest $subject $common_arguments "Creating stream $stream timed out" $settings_json]
     }
 
@@ -432,7 +426,7 @@ oo::class create ::nats::jet_stream {
             throw {NATS ErrInvalidArg} "Invalid stream or consumer name (target subject: $subject)"
         }
 
-        set timeout -1 ;# ms
+        set timeout 0 ;# ms
         set callback ""
         foreach {opt val} $common_arguments {
             switch -- $opt {
@@ -460,7 +454,7 @@ oo::class create ::nats::jet_stream {
         }
         
         # can throw nats server error
-        return [my ParsePublishResponse $result] 
+        return [nats::_parsePublishResponse $result] 
     }
 
     method PublishCallback {userCallback timedOut result} {
@@ -470,7 +464,7 @@ oo::class create ::nats::jet_stream {
         }
 
         try {
-            set pubAckResponse [my ParsePublishResponse $result]
+            set pubAckResponse [nats::_parsePublishResponse $result]
             after 0 [list {*}$userCallback 0 $pubAckResponse ""]
         } trap {NATS ErrJSResponse} {msg opt} {
             # make a dict with the same structure as AsyncError
@@ -481,27 +475,130 @@ oo::class create ::nats::jet_stream {
             [$conn logger]::error "Error while parsing JetStream response: $msg"
         }
     }
+}
 
-    method ParsePublishResponse {response} {
-        # $response is a dict here
-        try {
-            set responseDict [::json::json2dict [dict get $response data]]
+proc ::nats::_parsePublishResponse {response} {
+    # $response is a dict here
+    try {
+        set responseDict [::json::json2dict [dict get $response data]]
 
-            if {[dict exists $responseDict type] && [string match "*stream_msg_get_response" [dict get $responseDict type]]} {
-                if {[dict exists $responseDict message data]} {
-                    dict set responseDict message data [binary decode base64 [dict get $responseDict message data]]
-                }
+        if {[dict exists $responseDict type] && [string match "*stream_msg_get_response" [dict get $responseDict type]]} {
+            if {[dict exists $responseDict message data]} {
+                dict set responseDict message data [binary decode base64 [dict get $responseDict message data]]
             }
-        } trap JSON err {
-            throw {NATS ErrInvalidJSAck} "JSON parsing error $err\n while parsing the stream response: $response"
         }
-        # https://docs.nats.io/jetstream/nats_api_reference#error-handling
-        # looks like nats.go doesn't have a specific error type for this? see func (js *js) PublishMsg
-        # should I do anything with err_code?
-        if {[dict exists $responseDict error]} {
-            set errDict [dict get $responseDict error]
-            throw [list NATS ErrJSResponse [dict get $errDict code]] [dict get $errDict description]
+    } trap JSON err {
+        throw {NATS ErrInvalidJSAck} "JSON parsing error $err\n while parsing the stream response: $response"
+    }
+    # https://docs.nats.io/jetstream/nats_api_reference#error-handling
+    # looks like nats.go doesn't have a specific error type for this? see func (js *js) PublishMsg
+    # should I do anything with err_code?
+    if {[dict exists $responseDict error]} {
+        set errDict [dict get $responseDict error]
+        throw [list NATS ErrJSResponse [dict get $errDict code]] [dict get $errDict description]
+    }
+    return $responseDict
+}
+
+proc ::nats::_format_json {name val type} {
+    set errMsg "Invalid value for the $type option $name : $val"
+    switch -- $type {
+        valid_str {
+            if {[string length $val] == 0} {
+                throw {NATS ErrInvalidArg} $errMsg
+            }
+            return [json::write string $val]
         }
-        return $responseDict
+        int {
+            if {![string is entier -strict $val]} {
+                throw {NATS ErrInvalidArg} $errMsg
+            }
+            return $val
+        }
+        bool {
+            if {![string is boolean -strict $val]} {
+                throw {NATS ErrInvalidArg} $errMsg
+            }
+            return [expr $val? "true" : "false"]
+        }
+        list {
+            if {[llength $val] == 0} {
+                throw {NATS ErrInvalidArg} $errMsg
+            }
+            return [json::write array {*}[lmap element $val {
+                        json::write string $element
+                    }]]
+        }
+        ns {
+            if {![string is entier -strict $val]} {
+                throw {NATS ErrInvalidArg} $errMsg
+            }
+            # val must be in milliseconds
+            return [expr {entier($val*1000*1000)}]
+        }
+        default {
+            throw {NATS ErrInvalidArg} "Wrong type $type"  ;# should not happen
+        }
+    }
+}
+
+proc ::nats::_format_enum {name val type} {
+    set allowed_vals [lrange $type 1 end] ;# drop the 1st element "enum"
+    if {$val ni $allowed_vals} {
+        throw {NATS ErrInvalidArg} "Invalid value for the enum $name : $val; allowed values: $allowed_vals"
+    }
+    return [json::write string $val]
+}
+
+proc ::nats::_choose_format {name val type} {
+    if {[lindex $type 0] eq "enum"} {
+        return [_format_enum $name $val $type]
+    } else {
+        return [_format_json $name $val $type]
+    }
+}
+
+proc ::nats::_local2json {spec} {
+    set json_dict [dict create]
+    foreach {name type def} $spec {
+        try {
+            # is there a local variable with this name in the calling proc?
+            set val [uplevel 1 [list set $name]]
+            dict set json_dict $name [_choose_format $name $val $type]
+        } trap {TCL LOOKUP VARNAME} {err errOpts} {
+            # no local variable exists, so take a default value from the spec, unless it's required
+            if {$def eq "NATS_TCL_REQUIRED"} {
+                throw {NATS ErrInvalidArg} "Option $name is required"
+            }
+            if {$def ne "null"} {
+                dict set json_dict $name [_choose_format $name $def $type]
+            }
+        }
+    }
+    if {[dict size $json_dict]} {
+        return [json::write::object {*}$json_dict]
+    } else {
+        return ""
+    }
+}
+
+proc ::nats::_dict2json {spec src} {
+    set json_dict [dict create]
+    foreach {k v} $src {
+        dict set src_dict [string trimleft $k -] $v
+    }
+    foreach {name type def} $spec {
+        set val [dict lookup $src_dict $name $def]
+        if {$val eq "NATS_TCL_REQUIRED"} {
+            throw {NATS ErrInvalidArg} "Option $name is required"
+        }
+        if {$val ne "null"} {
+            dict set json_dict $name [_choose_format $name $def $type]
+        }
+    }
+    if {[dict size $json_dict]} {
+        return [json::write::object {*}$json_dict]
+    } else {
+        return ""
     }
 }

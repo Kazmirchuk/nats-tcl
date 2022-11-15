@@ -13,8 +13,10 @@ oo::class create ::nats::jet_stream {
         set timeout $t
     }
 
-    ### MESSAGES ###
+    # SUMMARY https://docs.nats.io/reference/reference-protocols/nats_api_reference
 
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_msg_get_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_msg_get_response
     method stream_msg_get {stream args} {
         set subject "\$JS.API.STREAM.MSG.GET.$stream"
 
@@ -47,7 +49,8 @@ oo::class create ::nats::jet_stream {
 
         return [my SimpleRequest $subject $common_arguments "Getting message from stream $stream timed out" $msg]
     }
-
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_msg_delete_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_msg_delete_response
     method stream_msg_delete {stream args} {
         set subject "\$JS.API.STREAM.MSG.DELETE.$stream"
 
@@ -76,7 +79,7 @@ oo::class create ::nats::jet_stream {
     }
 
     # see also https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-13.md
-    # nats schema show io.nats.jetstream.api.v1.consumer_getnext_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.consumer_getnext_request
     
     # TODO: derive expires from timeout
     method consume {stream consumer args} {
@@ -167,7 +170,7 @@ oo::class create ::nats::jet_stream {
     method in_progress {message} {
         $conn publish [dict get $message reply] "+WPI"
     }
-
+    
     method publish {subject message args} {
         set opts [dict create {*}$args]
         set userCallback ""
@@ -188,12 +191,13 @@ oo::class create ::nats::jet_stream {
         return [nats::_parsePublishResponse $result]
     }
 
-    ### CONSUMERS ###
-
+    # nats schema info --yaml io.nats.jetstream.api.v1.consumer_create_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.consumer_create_response
     #"required":
     #    "deliver_policy",
     #    "ack_policy",
     #    "replay_policy"
+    # 
     method add_consumer {stream args} {
         if {![${conn}::my CheckSubject $stream]} {
             throw {NATS ErrInvalidArg} "Invalid stream name $stream"
@@ -314,12 +318,18 @@ oo::class create ::nats::jet_stream {
 
         return [my SimpleRequest $subject $common_arguments "Creating consumer for $stream timed out" $settings_json]                
     }
-
+    
+    # no request body
+    # nats schema info --yaml io.nats.jetstream.api.v1.consumer_delete_response
     method delete_consumer {stream consumer args} {
         set subject "\$JS.API.CONSUMER.DELETE.$stream.$consumer"
         return [my SimpleRequest $subject $args "Deleting consumer $stream $consumer timed out"]         
     }
-
+    
+    # TODO split into 2 methods
+    # nats schema info --yaml io.nats.jetstream.api.v1.consumer_info_response
+    # nats schema info --yaml io.nats.jetstream.api.v1.consumer_list_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.consumer_list_response
     method consumer_info {stream {consumer ""} args} {
         if {$consumer eq ""} {
             set subject "\$JS.API.CONSUMER.LIST.$stream"
@@ -330,14 +340,17 @@ oo::class create ::nats::jet_stream {
         }
         return [my SimpleRequest $subject $args $timeout_message]               
     }
-
+    
+    # nats schema info --yaml io.nats.jetstream.api.v1.consumer_names_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.consumer_names_response
+    # TODO add -subject filter
     method consumer_names {stream args} {
         set subject "\$JS.API.CONSUMER.NAMES.$stream"
         return [my SimpleRequest $subject $args "Getting consumer names from $stream timed out"]    
     }
 
-    ### STREAMS ###
-    # nats schema show io.nats.jetstream.api.v1.stream_create_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_create_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_create_response
     method add_stream {stream args} {
         if {![${conn}::my CheckSubject $stream]} {
             throw {NATS ErrInvalidArg} "Invalid stream name $stream"
@@ -390,17 +403,24 @@ oo::class create ::nats::jet_stream {
         set settings_json [::nats::_json_write_object {*}$config_dict]
         return [my SimpleRequest $subject $common_arguments "Creating stream $stream timed out" $settings_json]
     }
-
+    # no request body
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_delete_response
     method delete_stream {stream args} {
         set subject "\$JS.API.STREAM.DELETE.$stream"
         return [my SimpleRequest $subject $args "Deleting stream $stream timed out"]         
     }
-
+    
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_purge_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_purge_response
     method purge_stream {stream args} {
         set subject "\$JS.API.STREAM.PURGE.$stream"
         return [my SimpleRequest $subject $args "Purging stream $stream timed out"]         
     }
-
+    # TODO split in 2 methods
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_info_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_info_response
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_list_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_list_response
     method stream_info {{stream ""} args} {
         if {$stream eq ""} {
             set subject "\$JS.API.STREAM.LIST"
@@ -411,13 +431,12 @@ oo::class create ::nats::jet_stream {
         }
         return [my SimpleRequest $subject $args $timeout_message]                
     }
-
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_names_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_names_response
     method stream_names {args} {
         set subject "\$JS.API.STREAM.NAMES"
         return [my SimpleRequest $subject $args "Getting stream names timed out"]
     }
-
-    ### UTILS ###
 
     method SimpleRequest {subject common_arguments timeout_message {msg {}}} {
         if {![${conn}::my CheckSubject $subject]} {
@@ -470,6 +489,7 @@ oo::class create ::nats::jet_stream {
     }
 }
 
+# nats schema info --yaml io.nats.jetstream.api.v1.pub_ack_response
 proc ::nats::_parsePublishResponse {response} {
     # $response is a dict here
     try {

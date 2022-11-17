@@ -39,10 +39,7 @@ oo::class create ::nats::jet_stream {
                     set msg [::nats::_json_write_object "seq" $val]
                 }
                 default {
-                    if {$opt ni [list -callback]} {
-                        throw {NATS ErrInvalidArg} "Unknown option $opt"
-                    }
-                    dict set common_arguments $opt $val
+                    throw {NATS ErrInvalidArg} "Unknown option $opt"
                 }
             }
         }
@@ -67,10 +64,7 @@ oo::class create ::nats::jet_stream {
                     set msg [::nats::_json_write_object "seq" $val]
                 }
                 default {
-                    if {$opt ni [list -callback]} {
-                        throw {NATS ErrInvalidArg} "Unknown option $opt"
-                    }
-                    dict set common_arguments $opt $val
+                    throw {NATS ErrInvalidArg} "Unknown option $opt"
                 }
             }
         }
@@ -248,15 +242,7 @@ oo::class create ::nats::jet_stream {
                     }
                     dict set config_dict ack_policy $val
                 }                
-                -callback {
-                    # receive status of adding consumer on callback proc
-                    set callback [mymethod PublishCallback $val]
-                }
                 default {
-                    if {$opt in [list -callback]} {
-                        dict set common_arguments $opt $val
-                        continue
-                    }
                     set opt_raw [string range $opt 1 end] ;# remove flag
                     # duration args - provided in milliseconds should be formatted to nanoseconds 
                     if {$opt_raw in [list "idle_heartbeat" "ack_wait"]} {
@@ -351,6 +337,7 @@ oo::class create ::nats::jet_stream {
 
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_create_request
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_create_response
+    # TODO update_stream?
     method add_stream {stream args} {
         if {![${conn}::my CheckSubject $stream]} {
             throw {NATS ErrInvalidArg} "Invalid stream name $stream"
@@ -371,10 +358,6 @@ oo::class create ::nats::jet_stream {
                     dict set config_dict subjects [::json::write array {*}[lmap subject $val {::json::write string $subject}]]
                 }
                 default {
-                    if {$opt in [list -callback ]} {
-                        dict set common_arguments $opt $val
-                        continue
-                    }
                     set opt_raw [string range $opt 1 end] ;# remove flag
                     # duration args - provided in milliseconds should be formatted to nanoseconds 
                     if {$opt_raw in [list "duplicate_window" "max_age"]} {

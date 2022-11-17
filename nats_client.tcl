@@ -471,11 +471,11 @@ oo::class create ::nats::connection {
         throw {NATS ErrTimeout} "PING timeout"
     }
 
-    method jet_stream {} {
-        if {$jetStream eq ""} {
-            set jetStream [::nats::jet_stream new [self]]
+    method jet_stream {args} {
+        nats::_parse_args $args {
+            timeout timeout 5000
         }
-        return $jetStream
+        return [nats::jet_stream new [self] $timeout]
     }
     
     method inbox {} {

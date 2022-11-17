@@ -4,7 +4,9 @@
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
 # Test summary:
-# -
+# - actions on a stream: create, get info, get names, purge, delete
+# - actions on a pull consumer: create, get info, get names, delete
+# - actions on a message: get, delete
 
 startNats NATS_JS -js
 set conn [nats::connection new]
@@ -68,7 +70,7 @@ set exp_consumer_config [dict create \
 
 #TODO try -idle_heartbeat 60000000000, -flow_control false  for pull consumer - should fail
 
-test js_mgmt-4 "Add a pull consumer" -body {
+test js_mgmt-4.1 "Add a pull consumer" -body {
     $js add_consumer MY_STREAM {*}$exp_consumer_config
     set actual_config [dict get [json::json2dict [execNatsCmd consumer info -j MY_STREAM PULL_CONSUMER]] config]
     
@@ -80,6 +82,44 @@ test js_mgmt-4 "Add a pull consumer" -body {
     dict unset exp opt_start_seq
     assert {[dict_in $exp $actual_config]}
 }
+
+test js_mgmt-4.2 "Get consumer info" -body {
+    set cons_info [$js consumer_info MY_STREAM PULL_CONSUMER]
+    dict get $cons_info name
+} -result "PULL_CONSUMER"
+
+test js_mgmt-4.3 "Get consumer names" -body {
+    set result [$js consumer_names MY_STREAM]
+    dict get $result consumers  ;# TODO flatten the structure
+} -result "PULL_CONSUMER"
+
+test js_mgmt-4.4 "Delete a consumer" -body {
+    set response [$js delete_consumer MY_STREAM PULL_CONSUMER]
+    dict get $response success
+} -result true
+
+test js_mgmt-5.1 "Get a message directly from a stream" -body {
+    $conn publish test.1 "msg 1"
+    set response [$js stream_msg_get MY_STREAM -last_by_subj test.1]
+    set seq [dict get $response message seq]
+    # puts $response  ;# includes also seq, time (ISO)
+    dict get $response message data ;# TODO flatten the structure - remove "message"
+} -result "msg 1"
+
+test js_mgmt-5.2 "Delete a message directly from a stream" -body {
+    set response [$js stream_msg_delete MY_STREAM -seq $seq]  ;# if not found, this will throw ErrJSResponse 400
+    dict get $response success
+} -result true
+
+test js_mgmt-6 "Purge a stream" -body {
+    set response [$js purge_stream MY_STREAM]
+    dict get $response success
+} -result true
+
+test js_mgmt-7 "Delete a stream" -body {
+    set response [$js delete_stream MY_STREAM]
+    dict get $response success
+} -result true
 
 
 $conn destroy

@@ -5,14 +5,18 @@
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
 oo::class create ::nats::jet_stream {
-    variable conn
+    variable conn timeout
     
-    constructor {c} {
+    # do NOT call directly! instead use connection::jet_stream
+    constructor {c t} {
         set conn $c
+        set timeout $t
     }
 
-    ### MESSAGES ###
+    # SUMMARY https://docs.nats.io/reference/reference-protocols/nats_api_reference
 
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_msg_get_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_msg_get_response
     method stream_msg_get {stream args} {
         set subject "\$JS.API.STREAM.MSG.GET.$stream"
 
@@ -35,17 +39,15 @@ oo::class create ::nats::jet_stream {
                     set msg [::nats::_json_write_object "seq" $val]
                 }
                 default {
-                    if {$opt ni [list -timeout -callback]} {
-                        throw {NATS ErrInvalidArg} "Unknown option $opt"
-                    }
-                    dict set common_arguments $opt $val
+                    throw {NATS ErrInvalidArg} "Unknown option $opt"
                 }
             }
         }
 
         return [my SimpleRequest $subject $common_arguments "Getting message from stream $stream timed out" $msg]
     }
-
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_msg_delete_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_msg_delete_response
     method stream_msg_delete {stream args} {
         set subject "\$JS.API.STREAM.MSG.DELETE.$stream"
 
@@ -62,10 +64,7 @@ oo::class create ::nats::jet_stream {
                     set msg [::nats::_json_write_object "seq" $val]
                 }
                 default {
-                    if {$opt ni [list -timeout -callback]} {
-                        throw {NATS ErrInvalidArg} "Unknown option $opt"
-                    }
-                    dict set common_arguments $opt $val
+                    throw {NATS ErrInvalidArg} "Unknown option $opt"
                 }
             }
         }
@@ -74,7 +73,7 @@ oo::class create ::nats::jet_stream {
     }
 
     # see also https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-13.md
-    # nats schema show io.nats.jetstream.api.v1.consumer_getnext_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.consumer_getnext_request
     
     # TODO: derive expires from timeout
     method consume {stream consumer args} {
@@ -86,7 +85,7 @@ oo::class create ::nats::jet_stream {
         }
 
         set subject "\$JS.API.CONSUMER.MSG.NEXT.$stream.$consumer"
-        
+        # timeout will shadow the member var
         nats::_parse_args $args {
             timeout timeout 0
             callback str ""
@@ -165,7 +164,7 @@ oo::class create ::nats::jet_stream {
     method in_progress {message} {
         $conn publish [dict get $message reply] "+WPI"
     }
-
+    
     method publish {subject message args} {
         set opts [dict create {*}$args]
         set userCallback ""
@@ -186,12 +185,13 @@ oo::class create ::nats::jet_stream {
         return [nats::_parsePublishResponse $result]
     }
 
-    ### CONSUMERS ###
-
+    # nats schema info --yaml io.nats.jetstream.api.v1.consumer_create_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.consumer_create_response
     #"required":
     #    "deliver_policy",
     #    "ack_policy",
     #    "replay_policy"
+    # 
     method add_consumer {stream args} {
         if {![${conn}::my CheckSubject $stream]} {
             throw {NATS ErrInvalidArg} "Invalid stream name $stream"
@@ -242,19 +242,7 @@ oo::class create ::nats::jet_stream {
                     }
                     dict set config_dict ack_policy $val
                 }                
-                -callback {
-                    # receive status of adding consumer on callback proc
-                    set callback [mymethod PublishCallback $val]
-                }
-                -timeout {
-                    nats::_check_timeout $val
-                    set timeout $val
-                }
                 default {
-                    if {$opt in [list -callback -timeout]} {
-                        dict set common_arguments $opt $val
-                        continue
-                    }
                     set opt_raw [string range $opt 1 end] ;# remove flag
                     # duration args - provided in milliseconds should be formatted to nanoseconds 
                     if {$opt_raw in [list "idle_heartbeat" "ack_wait"]} {
@@ -316,12 +304,18 @@ oo::class create ::nats::jet_stream {
 
         return [my SimpleRequest $subject $common_arguments "Creating consumer for $stream timed out" $settings_json]                
     }
-
+    
+    # no request body
+    # nats schema info --yaml io.nats.jetstream.api.v1.consumer_delete_response
     method delete_consumer {stream consumer args} {
         set subject "\$JS.API.CONSUMER.DELETE.$stream.$consumer"
         return [my SimpleRequest $subject $args "Deleting consumer $stream $consumer timed out"]         
     }
-
+    
+    # TODO split into 2 methods
+    # nats schema info --yaml io.nats.jetstream.api.v1.consumer_info_response
+    # nats schema info --yaml io.nats.jetstream.api.v1.consumer_list_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.consumer_list_response
     method consumer_info {stream {consumer ""} args} {
         if {$consumer eq ""} {
             set subject "\$JS.API.CONSUMER.LIST.$stream"
@@ -332,14 +326,18 @@ oo::class create ::nats::jet_stream {
         }
         return [my SimpleRequest $subject $args $timeout_message]               
     }
-
+    
+    # nats schema info --yaml io.nats.jetstream.api.v1.consumer_names_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.consumer_names_response
+    # TODO add -subject filter
     method consumer_names {stream args} {
         set subject "\$JS.API.CONSUMER.NAMES.$stream"
         return [my SimpleRequest $subject $args "Getting consumer names from $stream timed out"]    
     }
 
-    ### STREAMS ###
-    # nats schema show io.nats.jetstream.api.v1.stream_create_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_create_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_create_response
+    # TODO update_stream?
     method add_stream {stream args} {
         if {![${conn}::my CheckSubject $stream]} {
             throw {NATS ErrInvalidArg} "Invalid stream name $stream"
@@ -360,10 +358,6 @@ oo::class create ::nats::jet_stream {
                     dict set config_dict subjects [::json::write array {*}[lmap subject $val {::json::write string $subject}]]
                 }
                 default {
-                    if {$opt in [list -callback -timeout]} {
-                        dict set common_arguments $opt $val
-                        continue
-                    }
                     set opt_raw [string range $opt 1 end] ;# remove flag
                     # duration args - provided in milliseconds should be formatted to nanoseconds 
                     if {$opt_raw in [list "duplicate_window" "max_age"]} {
@@ -392,17 +386,24 @@ oo::class create ::nats::jet_stream {
         set settings_json [::nats::_json_write_object {*}$config_dict]
         return [my SimpleRequest $subject $common_arguments "Creating stream $stream timed out" $settings_json]
     }
-
+    # no request body
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_delete_response
     method delete_stream {stream args} {
         set subject "\$JS.API.STREAM.DELETE.$stream"
         return [my SimpleRequest $subject $args "Deleting stream $stream timed out"]         
     }
-
+    
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_purge_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_purge_response
     method purge_stream {stream args} {
         set subject "\$JS.API.STREAM.PURGE.$stream"
         return [my SimpleRequest $subject $args "Purging stream $stream timed out"]         
     }
-
+    # TODO split in 2 methods
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_info_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_info_response
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_list_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_list_response
     method stream_info {{stream ""} args} {
         if {$stream eq ""} {
             set subject "\$JS.API.STREAM.LIST"
@@ -413,30 +414,24 @@ oo::class create ::nats::jet_stream {
         }
         return [my SimpleRequest $subject $args $timeout_message]                
     }
-
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_names_request
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_names_response
     method stream_names {args} {
         set subject "\$JS.API.STREAM.NAMES"
         return [my SimpleRequest $subject $args "Getting stream names timed out"]
     }
-
-    ### UTILS ###
 
     method SimpleRequest {subject common_arguments timeout_message {msg {}}} {
         if {![${conn}::my CheckSubject $subject]} {
             throw {NATS ErrInvalidArg} "Invalid stream or consumer name (target subject: $subject)"
         }
 
-        set timeout 0 ;# ms
         set callback ""
         foreach {opt val} $common_arguments {
             switch -- $opt {
                 -callback {
                     # receive status of adding consumer on callback proc
                     set callback [mymethod PublishCallback $val]
-                }
-                -timeout {
-                    nats::_check_timeout $val
-                    set timeout $val
                 }
                 default {
                     throw {NATS ErrInvalidArg} "Unknown option $opt"        
@@ -477,6 +472,7 @@ oo::class create ::nats::jet_stream {
     }
 }
 
+# nats schema info --yaml io.nats.jetstream.api.v1.pub_ack_response
 proc ::nats::_parsePublishResponse {response} {
     # $response is a dict here
     try {

@@ -4,6 +4,10 @@
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
+# References:
+# NATS protocol: https://docs.nats.io/reference/reference-protocols/nats-protocol
+# Tcllib: https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/toc.md
+
 package require json
 package require json::write
 package require oo::util
@@ -437,6 +441,7 @@ oo::class create ::nats::connection {
         set response [dict get $sync_req response]
         set in_hdr [dict get $response header]
         if {[dict lookup $in_hdr Status 0] == 503} {
+            # TODO throw ErrJetStreamNotEnabled if subject starts with $JS.API
             throw {NATS ErrNoResponders} "No responders available for request"
         }
         if {$dictmsg} {
@@ -1155,6 +1160,22 @@ namespace eval ::nats::msg {
     proc no_responders {msg} {
         return [expr {[dict lookup [dict get $msg header] Status 0] == 503}]
     }
+    # only messages fetched using STREAM.MSG.GET will have it
+    proc seq {msg} {
+        if {[dict exists $msg seq]} {
+            return [dict get $msg seq]
+        } else {
+            throw {NATS ErrInvalidArg} "Invalid field 'seq'"
+        }
+    }
+    proc timestamp {msg} {
+        if {[dict exists $msg time]} {
+            return [dict get $msg time] ;# ISO timestamp like 2022-11-22T13:31:35.4514983Z ; [clock scan] doesn't understand it
+        } else {
+            throw {NATS ErrInvalidArg} "Invalid field 'timestamp'"
+        }
+    }
+    
     namespace export *
     namespace ensemble create
 }
@@ -1175,7 +1196,7 @@ namespace eval ::nats::header {
         upvar $msgVar msg
         dict set msg header $key [list $value]
         if {[llength $args]} {
-            if {![llength $args] % 2} {
+            if {[llength $args] % 2} {
                 throw {NATS ErrInvalidArg} "Missing a value for a key"
             }
             foreach {k v} $args {
@@ -1313,6 +1334,8 @@ namespace eval ::nats {
 }
 
 # official NATS clients use the sophisticated NUID algorithm, but this should be enough for the Tcl client
+# characters allowed in a NATS subject:
+# Naming Rules https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-6.md
 proc ::nats::_random_string {} {
     set allowed_chars "1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
     set range [string length $allowed_chars]
@@ -1325,8 +1348,13 @@ proc ::nats::_random_string {} {
 }
 
 proc ::nats::_validate {name val type} {
+    if {[lindex $type 0] eq "enum"} {
+        return true
+    }
     switch -- $type {
-        str {}
+        str - ns - int {
+            # some types used only in JetStream JSON generation don't need to be validated here
+        }
         valid_str {
             if {[string length $val] == 0} {
                 return false
@@ -1370,7 +1398,7 @@ proc ::nats::_validate {name val type} {
 # this proc initializes local vars in the upper stack (unless its default value is "null" in the spec)
 # or elements in the configure array
 proc ::nats::_parse_args {args_list spec {doConfig 0}} {
-    if {[llength $args_list] % 2 != 0} {
+    if {[llength $args_list] % 2} {
         throw {NATS ErrInvalidArg} "Missing value for option [lindex $args_list end]"
     }
     foreach {k v} $args_list {
@@ -1387,16 +1415,15 @@ proc ::nats::_parse_args {args_list spec {doConfig 0}} {
                 set errCode [expr {$type eq "timeout" ? "ErrBadTimeout" : "ErrInvalidArg"}]
                 throw "NATS $errCode" "Invalid value for the $type option $name : $val"
             }
-            if {$doConfig} {
-                upvar config($name) $name
-            } else {
-                upvar $name $name
-            }
             if {$type eq "bool"} {
                 # normalized bools can be written directly to JSON
-                set $name [expr $val? "true" : "false"]
+                set val [expr $val? "true" : "false"]
+            }
+            # use explicit ::set to avoid clashing with [nats::msg set]
+            if {$doConfig} {
+                uplevel 1 [list ::set config($name) $val]
             } else {
-                set $name $val
+                uplevel 1 [list ::set $name $val]
             }
             unset args_arr($name)
         } else {
@@ -1405,8 +1432,7 @@ proc ::nats::_parse_args {args_list spec {doConfig 0}} {
                 continue
             }
             if {$def ne "null"} {
-                upvar $name $name
-                set $name $def
+                uplevel 1 [list ::set $name $def]
             }
         }
     }

@@ -10,117 +10,213 @@
 
 startNats NATS_JS -js
 set conn [nats::connection new]
+$conn configure -servers nats://localhost:4222
+$conn connect
+set js [$conn jet_stream -timeout 2000]
 
 #debugLogging $conn
 
-# TODO check duplicate_window, ack_wait conversion ms->ns can't compare
-set expected_config [dict create \
-                     -subjects [list test.*] \
-                     -max_msg_size 1000000 \
-                     -storage memory \
-                     -num_replicas 1 \
-                     -discard new \
-                     -max_consumers 100 \
-                     -max_msgs 1000 \
-                     -max_msgs_per_subject 1000 \
-                     -max_bytes 1000000 \
-                     -retention workqueue]
+# duplicate_window is in ms
+set stream_config [dict create \
+                     description "My test stream" \
+                     subjects [list test.*] \
+                     max_msg_size 1000000 \
+                     storage memory \
+                     num_replicas 1 \
+                     duplicate_window 120000 \
+                     discard new \
+                     max_consumers 100 \
+                     max_msgs 10000 \
+                     max_msgs_per_subject 1000 \
+                     retention workqueue]
     
-test js_mgmt-1 "Create a stream" -setup {
-    $conn configure -servers nats://localhost:4222
-    $conn connect
-    set js [$conn jet_stream]
+test js_mgmt-1.1 "Create a stream" -body {
+    set response [$js add_stream MY_STREAM {*}$stream_config]
+    assert {[dict get $response did_create]}
+    set actual_config [dict get $response config]
+    set state [dict get $response state]
+    assert {[test_utils::dict_in $stream_config $actual_config]}
+    assert {[dict get $state messages] == 0}
+    assert {[dict get $state first_seq] == 0}
+}
+
+test js_mgmt-1.2 "Create another stream" -body {
+    set foo_config $stream_config
+    dict set foo_config subjects [list foo.*]
+    dict set foo_config deny_purge true
+    set response [$js add_stream FOO_STREAM {*}$foo_config]
+    assert {[dict get $response did_create]}
+}
+
+test js_mgmt-1.3 "Try creating a stream with the same name" -body {
+    $js add_stream MY_STREAM {*}$foo_config
+} -result {*stream name already in use*} -match glob -errorCode {NATS ErrJSResponse 400*}
+
+test js_mgmt-1.4 "Try creating a stream with a wrong configuration" -body {
+    set invalid_config $stream_config
+    dict set invalid_config subjects [list bla.*]
+    dict set invalid_config storage invalid
+    $js add_stream MY_STREAM2 {*}$invalid_config
+} -result {*enum storage*} -match glob -errorCode {NATS ErrInvalidArg}
+
+test js_mgmt-1.5 "Try creating a stream with an overlapping subject" -body {
+    set invalid_config $stream_config
+    dict set invalid_config subjects [list test.1 bla.*]
+    $js add_stream MY_STREAM2 {*}$invalid_config
+} -result {*subjects overlap*} -match glob -errorCode {NATS ErrJSResponse 400*}
+
+test js_mgmt-2 "Get stream information" -setup {
+    # send some messages to both streams
+    $conn publish test.1 "test msg 1"
+    $conn publish test.2 "test msg 2"
+    $conn publish foo.1 "foo msg 1"
+    wait_flush $conn
 } -body {
-        
-    
-    $js add_stream MY_STREAM {*}$expected_config ;# return state?
-    set actual_config [dict get [json::json2dict [execNatsCmd stream info -j MY_STREAM]] config]
-    
-    dict for {k v} $expected_config {
-        dict set exp [string trimleft $k -] $v
-    }
-    assert {[test_utils::dict_in $exp $actual_config]}
-    
+    set response [$js stream_info MY_STREAM]
+    set api_conf [dict get $response config]
+    set api_state [dict get $response state]
+    # get the same info from NATS CLI and check that they are in line
+    set cli_info [json::json2dict [execNatsCmd stream info -j MY_STREAM]]
+    # cli_info contains values in ns; convert them to ms
+    set cli_config [dict get $cli_info config]
+    nats::_ns2ms cli_config duplicate_window max_age
+    set cli_state [dict get $cli_info state]
+    assert {[dict get $api_state messages] == 2}
+    assert {[dict get $api_state num_subjects] == 2}
+    assert {[dict_in $api_conf $cli_config]}
+    assert {[dict_in $api_state $cli_state]}
 }
 
-test js_mgmt-2 "Check stream config" -body {
-    set actual_config [dict get [$js stream_info MY_STREAM] config]
-    assert {[dict_in $exp $actual_config]}
-} -cleanup {
-    unset exp
-}
+test js_mgmt-3.1 "List all streams" -body {
+    lsort [$js stream_names]
+} -result {FOO_STREAM MY_STREAM}
 
-test js_mgmt-3 "List streams" -body {
-    dict set expected_config -subjects [list test2.*]
-    $js add_stream MY_STREAM2 {*}$expected_config
-    
-    set stream_list [dict get [$js stream_names] streams]
-} -result {MY_STREAM MY_STREAM2}
+test js_mgmt-3.2 "Search for a stream by subject" -body {
+    $js stream_names -subject foo.1
+} -result FOO_STREAM
 
-set exp_consumer_config [dict create \
-                         -description "dummy pull consumer" \
-                         -deliver_policy all \
-                         -opt_start_seq 0 \
-                         -ack_policy explicit \
-                         -max_deliver -1 \
-                         -replay_policy instant \
-                         -max_waiting 100 \
-                         -max_ack_pending 1000 \
-                         -durable_name PULL_CONSUMER]
+test js_mgmt-3.3 "Search for a stream by subject - nothing found" -body {
+    $js stream_names -subject bla
+} -result ""
+
+test js_mgmt-4.1 "Purge a stream using a subject filter" -body {
+    $js purge_stream MY_STREAM -filter test.1 ;# returns number of purged messages
+} -result 1
+
+test js_mgmt-4.2 "Purge a stream entirely" -body {
+    $js purge_stream MY_STREAM
+} -result 1
+
+test js_mgmt-4.3 "Try purging a stream with deny_purge=true" -body {
+    $js purge_stream FOO_STREAM
+} -result {*purge not permitted*} -match glob -errorCode {NATS ErrJSResponse 500*}
+
+test js_mgmt-5.1 "Delete a stream" -body {
+    $js delete_stream FOO_STREAM
+} -result true
+
+test js_mgmt-5.2 "Delete a stream that doesn't exist" -body {
+    $js delete_stream BLA_STREAM
+} -result {*stream not found*} -match glob -errorCode {NATS ErrJSResponse 404*}
+
+set pull_consumer_config [dict create \
+                         description "dummy pull consumer" \
+                         filter_subject test.1 \
+                         deliver_policy all \
+                         ack_policy explicit \
+                         ack_wait 10000 \
+                         max_deliver -1 \
+                         replay_policy instant \
+                         max_waiting 100 \
+                         max_ack_pending 1000 \
+                         durable_name PULL_CONSUMER]
+
+# NB! I'm using "name" here instead of "durable_name"
+set push_consumer_config [dict create \
+                         description "dummy push consumer" \
+                         deliver_subject PUSH_CONSUMER_SUBJECT \
+                         filter_subject test.2 \
+                         name PUSH_CONSUMER]
 
 #TODO try -idle_heartbeat 60000000000, -flow_control false  for pull consumer - should fail
 
-test js_mgmt-4.1 "Add a pull consumer" -body {
-    $js add_consumer MY_STREAM {*}$exp_consumer_config
-    set actual_config [dict get [json::json2dict [execNatsCmd consumer info -j MY_STREAM PULL_CONSUMER]] config]
-    
-    dict for {k v} $exp_consumer_config {
-        dict set exp [string trimleft $k -] $v
-    }
-    
-    # missing opt_start_seq
-    dict unset exp opt_start_seq
-    assert {[dict_in $exp $actual_config]}
+test js_mgmt-6.1 "Add a pull consumer" -body {
+    set response [$js add_consumer MY_STREAM {*}$pull_consumer_config]
+    set actual_config [dict get $response config]
+    assert {[dict get $response name] eq "PULL_CONSUMER"}
+    assert {[test_utils::dict_in $pull_consumer_config $actual_config]}
 }
 
-test js_mgmt-4.2 "Get consumer info" -body {
-    set cons_info [$js consumer_info MY_STREAM PULL_CONSUMER]
-    dict get $cons_info name
-} -result "PULL_CONSUMER"
+test js_mgmt-6.2 "Add a push consumer" -body {
+    set response [$js add_consumer MY_STREAM {*}$push_consumer_config]
+    set actual_config [dict get $response config]
+    assert {[dict get $response name] eq "PUSH_CONSUMER"}
+    assert {[test_utils::dict_in $push_consumer_config $actual_config]}
+}
+# NB! calling add_consumer with a name of existing consumer will update its config instead of creating a new consumer
 
-test js_mgmt-4.3 "Get consumer names" -body {
-    set result [$js consumer_names MY_STREAM]
-    dict get $result consumers  ;# TODO flatten the structure
-} -result "PULL_CONSUMER"
+test js_mgmt-6.4 "Try creating a consumer with a wrong configuration" -body {
+    set invalid_config $pull_consumer_config
+    dict set invalid_config durable_name INVALID_CONSUMER
+    dict set invalid_config deliver_policy invalid
+    $js add_consumer MY_STREAM1 {*}$invalid_config
+} -result {*enum deliver_policy*} -match glob -errorCode {NATS ErrInvalidArg}
 
-test js_mgmt-4.4 "Delete a consumer" -body {
-    set response [$js delete_consumer MY_STREAM PULL_CONSUMER]
-    dict get $response success
+test js_mgmt-7.1 "Get consumer info" -setup {
+    $conn publish test.1 "test msg 1"
+    $conn publish test.1 "test msg 2"
+    wait_flush $conn
+} -body {
+    set response [$js consumer_info MY_STREAM PULL_CONSUMER]
+    set api_conf [dict get $response config]
+    # get the same info from NATS CLI and check that they are in line
+    set cli_info [json::json2dict [execNatsCmd consumer info -j MY_STREAM PULL_CONSUMER]]
+    # cli_info contains values in ns; convert them to ms
+    set cli_config [dict get $cli_info config]
+    nats::_ns2ms cli_config ack_wait
+    assert {[dict get $response num_pending] == 2}
+    assert {[dict_in $api_conf $cli_config]}
+    assert {[dict_in [dict get $response delivered] [dict get $cli_info delivered]]}
+    assert {[dict_in [dict get $response ack_floor] [dict get $cli_info ack_floor]]}    
+    dict get $response name
+} -result PULL_CONSUMER
+
+test js_mgmt-8.1 "List all consumers in MY_STREAM" -body {
+    lsort [$js consumer_names MY_STREAM]
+} -result "PULL_CONSUMER PUSH_CONSUMER"
+
+# not supported by NATS?
+#test js_mgmt-8.2 "Search for a consumer by subject" -body {
+#    $js consumer_names MY_STREAM -subject foo.2
+#} -result PUSH_CONSUMER
+
+#test js_mgmt-8.3 "Search for a consumer by subject - nothing found" -body {
+#    $js consumer_names MY_STREAM -subject bla
+#} -result ""
+
+test js_mgmt-9.1 "Delete a consumer" -body {
+    $js delete_consumer MY_STREAM PUSH_CONSUMER
 } -result true
 
-test js_mgmt-5.1 "Get a message directly from a stream" -body {
-    $conn publish test.1 "msg 1"
-    set response [$js stream_msg_get MY_STREAM -last_by_subj test.1]
-    set seq [dict get $response message seq]
-    # puts $response  ;# includes also seq, time (ISO)
-    dict get $response message data ;# TODO flatten the structure - remove "message"
+test js_mgmt-9.2 "Delete a consumer that doesn't exist" -body {
+    $js delete_consumer MY_STREAM BLA
+} -result {*consumer not found*} -match glob -errorCode {NATS ErrJSResponse 404*}
+
+test js_mgmt-10.1 "Get a message directly from a stream" -setup {
+    set out_msg [nats::msg create -subject test.1 -data "msg 1"]
+    nats::header set out_msg KEY1 VAL1 KEY2 "VAL 2"
+    $conn publish_msg $out_msg
+} -body {
+    set msg [$js stream_msg_get MY_STREAM -last_by_subj test.1]
+    assert {[llength [nats::header keys $msg]] == 2}
+    assert {[nats::header get $msg KEY1] eq "VAL1"}
+    assert {[nats::header get $msg KEY2] eq "VAL 2"}
+    nats::msg data $msg
 } -result "msg 1"
 
-test js_mgmt-5.2 "Delete a message directly from a stream" -body {
-    set response [$js stream_msg_delete MY_STREAM -seq $seq]  ;# if not found, this will throw ErrJSResponse 400
-    dict get $response success
+test js_mgmt-11.1 "Delete a message directly from a stream" -body {
+    $js stream_msg_delete MY_STREAM -seq [nats::msg seq $msg]  ;# if not found, this will throw ErrJSResponse 400
 } -result true
-
-test js_mgmt-6 "Purge a stream" -body {
-    set response [$js purge_stream MY_STREAM]
-    dict get $response success
-} -result true
-
-test js_mgmt-7 "Delete a stream" -body {
-    set response [$js delete_stream MY_STREAM]
-    dict get $response success
-} -result true
-
 
 $conn destroy
 stopNats NATS_JS

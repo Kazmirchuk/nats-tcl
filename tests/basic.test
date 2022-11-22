@@ -292,6 +292,7 @@ test basic-15 "Asynchronous request with multiple responders" -body {
 } -result 1
 
 stopResponder $conn multi_subj ;# stop all 5 responders
+sleep 500
 
 test basic-16 "Queue groups and publish with replyTo" -body {
     # start 2 responders on queue group QG1 and 3 more on QG2
@@ -337,12 +338,12 @@ test basic-18 "Disconnection cancels pending async requests" -body {
     $conn request service "2000 foo" -timeout 1000 -callback [lambda {timedOut msg} {
         set test_utils::simpleMsg $timedOut
     }]
-    sleep 500
+    wait_flush $conn
     # don't stop the responder before sending the request, otherwise we'll get no-responders immediately
     stopResponder $conn
     $conn disconnect
-    sleep 700
-    assert {$test_utils::simpleMsg == -1}
+    sleep 1500  ;# more than -timeout
+    assert {$test_utils::simpleMsg == -1} ;# lambda was not invoked
 }
 
 $conn destroy

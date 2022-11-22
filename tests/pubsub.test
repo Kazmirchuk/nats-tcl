@@ -162,6 +162,7 @@ test pubsub-8 "Gather multiple responses to a request - timeout" -body {
 } -cleanup {
     # will stop all 3 responders
     stopResponder $conn
+    sleep 500
 }
 
 test pubsub-9 "Send 2 sync requests in coroutines" -setup {

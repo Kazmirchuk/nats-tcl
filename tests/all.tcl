@@ -3,14 +3,11 @@
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
+package require nats  ;# if not found, add it to TCLLIBPATH
 package require lambda
 package require tcltest 2.5  ;# -errorCode option is relatively recent - make sure it's available
 
-# shortcut to locate the nats package; use proper Tcl mechanisms in production! e.g. TCLLIBPATH
 set thisDir [file dirname [file normalize [info script]]]
-lappend auto_path [file join $thisDir ..]
-package require nats
-
 source [file join $thisDir test_utils.tcl]
 
 cd $thisDir

@@ -242,7 +242,6 @@ namespace eval test_utils {
     proc stopResponder {conn {subj "service"}} {
         $conn publish $subj [list 0 exit]
         wait_flush $conn
-        sleep 500  ;# important when the next test begins with starting a new responder
     }
     
     # comm ID (port) is hard-coded to 4223

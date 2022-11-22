@@ -13,68 +13,45 @@ oo::class create ::nats::jet_stream {
         set timeout $t
     }
 
-    # SUMMARY https://docs.nats.io/reference/reference-protocols/nats_api_reference
+    # JetStream wire API Reference https://docs.nats.io/reference/reference-protocols/nats_api_reference
+    # JetStream JSON API Design https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-1.md
 
+    # JetStream Direct Get https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-31.md
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_msg_get_request
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_msg_get_response
     method stream_msg_get {stream args} {
-        set subject "\$JS.API.STREAM.MSG.GET.$stream"
+        set spec {last_by_subj valid_str null
+                  next_by_subj valid_str null
+                  seq          int null}
 
-        set containSeq [dict exists $args "-seq"]
-        set containLastBySubj [dict exists $args "-last_by_subj"]
-        if {($containSeq && $containLastBySubj) || (!$containSeq && !$containLastBySubj)} {
-            # XOR: exacly one of this option should be provided
-            throw {NATS ErrInvalidArg} "Options should contain -seq or -last_by_subj"
+        set response [json::json2dict [$conn request "\$JS.API.STREAM.MSG.GET.$stream" [nats::_dict2json $spec $args] -timeout $timeout]]
+        nats::_checkJsError $response
+        set encoded_msg [dict get $response message] ;# it is encoded in base64
+        set data [binary decode base64 [dict lookup $encoded_msg data ""]]
+        set msg [nats::msg create -subject [dict get $encoded_msg subject] -data $data]
+        dict set msg seq [dict get $encoded_msg seq]
+        dict set msg time [dict get $encoded_msg time]
+        set header [binary decode base64 [dict lookup $encoded_msg hdrs ""]]
+        if {$header ne ""} {
+            set hdr_dict [nats::_parse_header $header]
+            dict set msg header $hdr_dict
         }
-
-        set msg {}
-        set common_arguments [dict create]
-        
-        foreach {opt val} $args {
-            switch -- $opt {
-                -last_by_subj {
-                    set msg [::nats::_json_write_object "last_by_subj" [json::write::string $val]]
-                }
-                -seq {
-                    set msg [::nats::_json_write_object "seq" $val]
-                }
-                default {
-                    throw {NATS ErrInvalidArg} "Unknown option $opt"
-                }
-            }
-        }
-
-        return [my SimpleRequest $subject $common_arguments "Getting message from stream $stream timed out" $msg]
+        return $msg
     }
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_msg_delete_request
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_msg_delete_response
     method stream_msg_delete {stream args} {
-        set subject "\$JS.API.STREAM.MSG.DELETE.$stream"
+        set spec {no_erase bool null
+                  seq      int NATS_TCL_REQUIRED}
 
-        if {![dict exists $args "-seq"]} {
-            throw {NATS ErrInvalidArg} "Options should contain -seq"
-        }
-
-        set msg {}
-        set common_arguments [dict create]
-        
-        foreach {opt val} $args {
-            switch -- $opt {
-                -seq {
-                    set msg [::nats::_json_write_object "seq" $val]
-                }
-                default {
-                    throw {NATS ErrInvalidArg} "Unknown option $opt"
-                }
-            }
-        }
-
-        return [my SimpleRequest $subject $common_arguments "Deleting message from stream $stream timed out" $msg]
+        set response [json::json2dict [$conn request "\$JS.API.STREAM.MSG.DELETE.$stream" [nats::_dict2json $spec $args] -timeout $timeout]]
+        nats::_checkJsError $response
+        return [dict get $response success]
     }
 
-    # see also https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-13.md
+    # Pull Subscribe internals https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-13.md
+    # JetStream Subscribe Workflow https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-15.md
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_getnext_request
-    
     # TODO: derive expires from timeout
     method consume {stream consumer args} {
         if {![${conn}::my CheckSubject $stream]} {
@@ -165,6 +142,8 @@ oo::class create ::nats::jet_stream {
         $conn publish [dict get $message reply] "+WPI"
     }
     
+    # TODO?
+    # JetStream Publish Retries on No Responders https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-22.md
     method publish {subject message args} {
         set opts [dict create {*}$args]
         set userCallback ""
@@ -187,269 +166,199 @@ oo::class create ::nats::jet_stream {
 
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_create_request
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_create_response
-    #"required":
-    #    "deliver_policy",
-    #    "ack_policy",
-    #    "replay_policy"
-    # 
     method add_consumer {stream args} {
-        if {![${conn}::my CheckSubject $stream]} {
-            throw {NATS ErrInvalidArg} "Invalid stream name $stream"
+        if {[llength $args] % 2} {
+            throw {NATS ErrInvalidArg} "Missing value for option [lindex $args end]"
         }
-
-        set common_arguments [dict create]
-        set config_dict [dict create] ;# variable with formatted arguments
-
-        # supported arguments
-        set arguments_list [list description deliver_group deliver_policy opt_start_seq \
-            opt_start_time ack_policy ack_wait max_deliver filter_subject replay_policy \
-            rate_limit_bps sample_freq max_waiting max_ack_pending idle_heartbeat flow_control \
-            deliver_subject durable_name]
-
-
-        foreach {opt val} $args {
-            switch -- $opt {
-                -durable_name {
-                    if {![${conn}::my CheckSubject $val]} {
-                        throw {NATS ErrInvalidArg} "Invalid durable consumer name $val"
-                    }
-
-                    dict set config_dict durable_name $val
-                    set durable_consumer_name $val
-                }
-                -flow_control {       
-                    # flow control must be boolean          
-                    if {![string is boolean $val]} {
-                        throw {NATS ErrInvalidArg} "Argument flow_control should be boolean"
-                    }
-                    if {$val} {
-                        dict set config_dict flow_control true
-                    } else {
-                        dict set config_dict flow_control false
-                    }
-                }
-                -replay_policy {
-                    # only values: instant/original are supported
-                    if {$val ni [list instant original]} {
-                        throw {NATS ErrInvalidArg} "Wrong replay_policy value, must be: instant or original"
-                    }
-                    dict set config_dict replay_policy $val
-                }
-                -ack_policy {
-                    # only values: none/all/explicit are supported
-                    if {$val ni [list none all explicit]} {
-                        throw {NATS ErrInvalidArg} "Wrong ack_policy value, must be: none, all or explicit"
-                    }
-                    dict set config_dict ack_policy $val
-                }                
-                default {
-                    set opt_raw [string range $opt 1 end] ;# remove flag
-                    # duration args - provided in milliseconds should be formatted to nanoseconds 
-                    if {$opt_raw in [list "idle_heartbeat" "ack_wait"]} {
-                        if {![string is double -strict $val]} {
-                            throw {NATS ErrInvalidArg} "Wrong duration value for argument $opt_raw it must be in milliseconds"
-                        }
-                        set val [expr {entier($val*1000*1000)}] ;#conversion milliseconds to nanoseconds
-                    }
-                    
-                    # checking if all provided arguments are valid
-                    if {$opt_raw ni $arguments_list} {
-                        throw {NATS ErrInvalidArg} "Unknown option $opt"
-                    } else {
-                        dict set config_dict $opt_raw $val
-                    }                    
-                }
+        # what is opt_start_time??
+        set spec {name             valid_str null
+                  durable_name     valid_str null
+                  description      valid_str null
+                  deliver_policy   {enum all last new by_start_sequence by_start_time last_per_subject} all
+                  opt_start_seq    int null
+                  opt_start_time   valid_str null
+                  ack_policy       {enum none all explicit} explicit
+                  ack_wait         ns null
+                  max_deliver      int null
+                  filter_subject   valid_str null
+                  replay_policy    {enum instant original} instant
+                  rate_limit_bps   int null
+                  sample_freq      valid_str null
+                  max_waiting      int null
+                  max_ack_pending  int null
+                  flow_control     bool null
+                  idle_heartbeat   ns null
+                  headers_only     bool null
+                  deliver_subject  valid_str null
+                  deliver_group    valid_str null
+                inactive_threshold ns null
+                  num_replicas     int null
+                  mem_storage      bool null}
+                  
+        nats::_parse_args $args $spec
+        set consumer_config [nats::_local2json $spec]
+        set msg [json::write::object stream_name [json::write string $stream] config $consumer_config]
+        
+        set version_cmp [package vcompare 2.9.0 [dict get [$conn server_info] version]]
+        if {($version_cmp < 1) && [info exists name]} {
+            ;# starting from NATS 2.9.0, all consumers should have a name
+            if {[info exists filter_subject] && $filter_subject ne ">"} {
+                set subject "\$JS.API.CONSUMER.CREATE.$stream.$name.$filter_subject"
+            } else {
+                set subject "\$JS.API.CONSUMER.CREATE.$stream.$name"
             }
-        }
-
-        # pull/push consumers validation
-        if {[dict exists $config_dict deliver_subject]} {
-            # push consumer
-            foreach forbidden_arg [list max_waiting] {
-                if {[dict exists $config_dict $forbidden_arg]} {
-                    throw {NATS ErrInvalidArg} "Argument $forbidden_arg is forbbiden for push consumer"
-                }
-            }
+        } elseif {[info exists durable_name]} {
+            set subject "\$JS.API.CONSUMER.DURABLE.CREATE.$stream.$durable_name"
+        } elseif {[info exists name]} {
+            # I think, nats.py should do it too
+            set subject "\$JS.API.CONSUMER.DURABLE.CREATE.$stream.$name"
         } else {
-            # pull consumer
-            foreach forbidden_arg [list idle_heartbeat flow_control] {
-                if {[dict exists $config_dict $forbidden_arg]} {
-                    throw {NATS ErrInvalidArg} "Argument $forbidden_arg is forbbiden for pull consumer"
-                }
-            }            
-        }
-
-        # string arguments need to be within quotation marks ""
-        dict for {key value} $config_dict {
-            if {![string is boolean -strict $value] && ![string is double -strict $value]} {
-                dict set config_dict $key [json::write::string $value]
-            }            
+            set subject "\$JS.API.CONSUMER.CREATE.$stream"  ;# ephemeral consumer
         }
         
-        # create durable or ephemeral consumers
-        if {[info exists durable_consumer_name]} {
-            set subject "\$JS.API.CONSUMER.DURABLE.CREATE.$stream.$durable_consumer_name"
-            set settings_json [::nats::_json_write_object \
-                stream_name [json::write::string $stream] \
-                name [json::write::string $durable_consumer_name] \
-                config [::nats::_json_write_object {*}$config_dict] \
-            ]
-        } else {
-            set subject "\$JS.API.CONSUMER.CREATE.$stream"
-            set settings_json [::nats::_json_write_object \
-                stream_name [json::write::string $stream] \
-                config [::nats::_json_write_object {*}$config_dict] \
-            ]
-        }
-
-        return [my SimpleRequest $subject $common_arguments "Creating consumer for $stream timed out" $settings_json]                
+        set response [json::json2dict [$conn request $subject $msg -timeout $timeout]]
+        nats::_checkJsError $response
+        dict unset response type
+        set result_config [dict get $response config]
+        nats::_ns2ms result_config ack_wait idle_heartbeat inactive_threshold
+        dict set response config $result_config
+        return $response
+    }
+    
+    method add_pull_consumer {stream name args} {
+        set config $args
+        dict set config name $name
+        return [my add_consumer $stream {*}$config]
+    }
+    
+    method add_push_consumer {stream name deliver_subject args} {
+        dict set args name $name 
+        dict set args deliver_subject $deliver_subject
+        return [my add_consumer $stream {*}$args]
     }
     
     # no request body
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_delete_response
-    method delete_consumer {stream consumer args} {
-        set subject "\$JS.API.CONSUMER.DELETE.$stream.$consumer"
-        return [my SimpleRequest $subject $args "Deleting consumer $stream $consumer timed out"]         
+    method delete_consumer {stream consumer} {
+        set response [json::json2dict [$conn request "\$JS.API.CONSUMER.DELETE.$stream.$consumer" "" -timeout $timeout]]
+        nats::_checkJsError $response
+        return [dict get $response success]  ;# probably will always be true
     }
     
-    # TODO split into 2 methods
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_info_response
-    # nats schema info --yaml io.nats.jetstream.api.v1.consumer_list_request
-    # nats schema info --yaml io.nats.jetstream.api.v1.consumer_list_response
-    method consumer_info {stream {consumer ""} args} {
-        if {$consumer eq ""} {
-            set subject "\$JS.API.CONSUMER.LIST.$stream"
-            set timeout_message "Getting consumer list from $stream timed out"
-        } else {
-            set subject "\$JS.API.CONSUMER.INFO.$stream.$consumer"
-            set timeout_message "Getting consumer info from $stream named $consumer timed out"
-        }
-        return [my SimpleRequest $subject $args $timeout_message]               
+    method consumer_info {stream consumer} {
+        set response [json::json2dict [$conn request "\$JS.API.CONSUMER.INFO.$stream.$consumer" "" -timeout $timeout]]
+        nats::_checkJsError $response
+        dict unset response type
+        # remaining fields: name, stream_name, created, config and some others
+        set result_config [dict get $response config]
+        nats::_ns2ms result_config ack_wait idle_heartbeat inactive_threshold
+        dict set response config $result_config
+        return $response
     }
     
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_names_request
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_names_response
-    # TODO add -subject filter
-    method consumer_names {stream args} {
-        set subject "\$JS.API.CONSUMER.NAMES.$stream"
-        return [my SimpleRequest $subject $args "Getting consumer names from $stream timed out"]    
+    # TODO: check subject filter not working?
+    method consumer_names {stream} {        
+        #set spec {subject valid_str null}
+        #nats::_parse_args $args $spec
+        #set msg [nats::_local2json $spec]
+        set response [json::json2dict [$conn request "\$JS.API.CONSUMER.NAMES.$stream" "" -timeout $timeout]]
+        nats::_checkJsError $response
+        return [dict get $response consumers]
     }
 
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_create_request
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_create_response
     # TODO update_stream?
     method add_stream {stream args} {
-        if {![${conn}::my CheckSubject $stream]} {
-            throw {NATS ErrInvalidArg} "Invalid stream name $stream"
+        if {[llength $args] % 2} {
+            throw {NATS ErrInvalidArg} "Missing value for option [lindex $args end]"
         }
-
-        set common_arguments [dict create]
-        set config_dict [dict create] ;# variable with formatted arguments
-
-        # supported arguments
-        set arguments_list [list subjects retention max_consumers max_msgs max_bytes \
-            max_age max_msgs_per_subject max_msg_size discard storage num_replicas duplicate_window \
-            sealed deny_delete deny_purge allow_rollup_hdrs]
-
-
-        foreach {opt val} $args {
-            switch -- $opt {
-                -subjects {
-                    dict set config_dict subjects [::json::write array {*}[lmap subject $val {::json::write string $subject}]]
-                }
-                default {
-                    set opt_raw [string range $opt 1 end] ;# remove flag
-                    # duration args - provided in milliseconds should be formatted to nanoseconds 
-                    if {$opt_raw in [list "duplicate_window" "max_age"]} {
-                        if {![string is double -strict $val]} {
-                            throw {NATS ErrInvalidArg} "Wrong duration value for argument $opt_raw it must be in milliseconds"
-                        }
-                        set val [expr {entier($val*1000*1000)}] ;#conversion milliseconds to nanoseconds
-                    }
-                    
-                    # checking if all provided arguments are valid
-                    if {$opt_raw ni $arguments_list} {
-                        throw {NATS ErrInvalidArg} "Unknown option $opt"
-                    }
-
-                    if {![string is boolean -strict $val] && ![string is double -strict $val]} {
-                        dict set config_dict $opt_raw [::json::write string $val]
-                    } else {
-                        dict set config_dict $opt_raw $val
-                    }                 
-                }
-            }
-        }
+        # follow the same order of fields as in https://github.com/nats-io/nats.py/blob/main/nats/js/api.py
+        set spec {name             valid_str NATS_TCL_REQUIRED
+                  description      valid_str null
+                  subjects         list NATS_TCL_REQUIRED
+                  retention        {enum limits interest workqueue} limits
+                  max_consumers    int null
+                  max_msgs         int null
+                  max_bytes        int null
+                  discard          {enum new old} old
+                  max_age          ns null
+              max_msgs_per_subject int null
+                  max_msg_size     int null
+                  storage          {enum memory file} file
+                  num_replicas     int null
+                  no_ack           bool null
+                  duplicate_window ns null
+                  sealed           bool null
+                  deny_delete      bool null
+                  deny_purge       bool null
+                 allow_rollup_hdrs bool null
+                  allow_direct     bool null
+                  mirror_direct    bool null}
         
-        set subject "\$JS.API.STREAM.CREATE.$stream"
-        dict set config_dict name [::json::write string $stream]
-        set settings_json [::nats::_json_write_object {*}$config_dict]
-        return [my SimpleRequest $subject $common_arguments "Creating stream $stream timed out" $settings_json]
+        dict set args name $stream
+        set msg [nats::_dict2json $spec $args]
+        set response [json::json2dict [$conn request "\$JS.API.STREAM.CREATE.$stream" $msg -timeout $timeout]]
+        nats::_checkJsError $response
+        dict unset response type ;# remaining fields: config, created (timestamp), state, did_create
+        set result_config [dict get $response config]
+        nats::_ns2ms result_config duplicate_window max_age
+        dict set response config $result_config
+        return $response
     }
     # no request body
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_delete_response
-    method delete_stream {stream args} {
-        set subject "\$JS.API.STREAM.DELETE.$stream"
-        return [my SimpleRequest $subject $args "Deleting stream $stream timed out"]         
+    method delete_stream {stream} {
+        set response [json::json2dict [$conn request "\$JS.API.STREAM.DELETE.$stream" "" -timeout $timeout]]
+        nats::_checkJsError $response
+        return [dict get $response success]  ;# probably will always be true
     }
     
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_purge_request
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_purge_response
     method purge_stream {stream args} {
-        set subject "\$JS.API.STREAM.PURGE.$stream"
-        return [my SimpleRequest $subject $args "Purging stream $stream timed out"]         
+        set spec {filter valid_str null
+                  keep   pos_int   null
+                  seq    pos_int   null }
+        nats::_parse_args $args $spec
+        set msg [nats::_local2json $spec]
+        set response [json::json2dict [$conn request "\$JS.API.STREAM.PURGE.$stream" $msg -timeout $timeout]]
+        nats::_checkJsError $response
+        return [dict get $response purged]
     }
-    # TODO split in 2 methods
+    
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_info_request
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_info_response
-    # nats schema info --yaml io.nats.jetstream.api.v1.stream_list_request
-    # nats schema info --yaml io.nats.jetstream.api.v1.stream_list_response
-    method stream_info {{stream ""} args} {
-        if {$stream eq ""} {
-            set subject "\$JS.API.STREAM.LIST"
-            set timeout_message "Getting stream list timed out"
-        } else {
-            set subject "\$JS.API.STREAM.INFO.$stream"
-            set timeout_message "Getting stream info for $stream timed out"
-        }
-        return [my SimpleRequest $subject $args $timeout_message]                
+    method stream_info {stream} {
+        set response [json::json2dict [$conn request "\$JS.API.STREAM.INFO.$stream" "" -timeout $timeout]]
+        nats::_checkJsError $response
+        dict unset response type
+        dict unset response total
+        dict unset response offset
+        dict unset response limit
+        # remaining fields: config, created (timestamp), state
+        set result_config [dict get $response config]
+        nats::_ns2ms result_config duplicate_window max_age
+        dict set response config $result_config
+        return $response
     }
+    
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_names_request
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_names_response
     method stream_names {args} {
-        set subject "\$JS.API.STREAM.NAMES"
-        return [my SimpleRequest $subject $args "Getting stream names timed out"]
-    }
-
-    method SimpleRequest {subject common_arguments timeout_message {msg {}}} {
-        if {![${conn}::my CheckSubject $subject]} {
-            throw {NATS ErrInvalidArg} "Invalid stream or consumer name (target subject: $subject)"
+        set spec {subject valid_str null}
+        nats::_parse_args $args $spec
+        set msg [nats::_local2json $spec]
+        set response [json::json2dict [$conn request "\$JS.API.STREAM.NAMES" $msg -timeout $timeout]]
+        nats::_checkJsError $response
+        if {[dict get $response total] == 0} {
+            # in this case "streams" contains JSON null instead of an empty list; this is a bug in NATS server
+            return [list]
         }
-
-        set callback ""
-        foreach {opt val} $common_arguments {
-            switch -- $opt {
-                -callback {
-                    # receive status of adding consumer on callback proc
-                    set callback [mymethod PublishCallback $val]
-                }
-                default {
-                    throw {NATS ErrInvalidArg} "Unknown option $opt"        
-                }
-            }
-        }
-
-        try {
-            set result [$conn request $subject $msg -dictmsg true -timeout $timeout -callback $callback -max_msgs 1]
-        } trap {NATS ErrTimeout} err {
-            throw {NATS ErrTimeout} $timeout_message
-        }
-        if {$callback ne ""} {
-            return
-        }
-        
-        # can throw nats server error
-        return [nats::_parsePublishResponse $result] 
+        return [dict get $response streams]
     }
 
     method PublishCallback {userCallback timedOut result} {
@@ -469,6 +378,17 @@ oo::class create ::nats::jet_stream {
         } on error {msg opt} {
             [$conn logger]::error "Error while parsing JetStream response: $msg"
         }
+    }
+}
+
+# these clients have more specific JS errors
+# https://github.com/nats-io/nats.go/blob/main/jserrors.go
+# https://github.com/nats-io/nats.py/blob/main/nats/js/errors.py
+# for the Tcl client it's enough to throw ErrJSResponse for all errors from the JS server-side API
+proc ::nats::_checkJsError {msg} {
+    if {[dict exists $msg error]} {
+        set errDict [dict get $msg error]
+        throw [list NATS ErrJSResponse [dict get $errDict code] [dict get $errDict err_code]] [dict get $errDict description]
     }
 }
 
@@ -505,7 +425,7 @@ proc ::nats::_format_json {name val type} {
             }
             return [json::write string $val]
         }
-        int {
+        int - pos_int {
             if {![string is entier -strict $val]} {
                 throw {NATS ErrInvalidArg} $errMsg
             }
@@ -521,6 +441,7 @@ proc ::nats::_format_json {name val type} {
             if {[llength $val] == 0} {
                 throw {NATS ErrInvalidArg} $errMsg
             }
+            # assume list of strings
             return [json::write array {*}[lmap element $val {
                         json::write string $element
                     }]]
@@ -561,7 +482,10 @@ proc ::nats::_local2json {spec} {
             # is there a local variable with this name in the calling proc?
             set val [uplevel 1 [list set $name]]
             dict set json_dict $name [_choose_format $name $val $type]
-        } trap {TCL LOOKUP VARNAME} {err errOpts} {
+            # when the option is called "name", I get TCL READ VARNAME
+            # in other cases I get TCL LOOKUP VARNAME
+        } trap {TCL READ VARNAME} {err errOpts} - \
+          trap {TCL LOOKUP VARNAME} {err errOpts} {
             # no local variable exists, so take a default value from the spec, unless it's required
             if {$def eq "NATS_TCL_REQUIRED"} {
                 throw {NATS ErrInvalidArg} "Option $name is required"
@@ -572,6 +496,8 @@ proc ::nats::_local2json {spec} {
         }
     }
     if {[dict size $json_dict]} {
+        json::write::indented false
+        json::write::aligned false
         return [json::write::object {*}$json_dict]
     } else {
         return ""
@@ -579,6 +505,9 @@ proc ::nats::_local2json {spec} {
 }
 
 proc ::nats::_dict2json {spec src} {
+    if {[dict size $src] == 0} {
+        return ""
+    }
     set json_dict [dict create]
     foreach {k v} $src {
         dict set src_dict [string trimleft $k -] $v
@@ -589,12 +518,28 @@ proc ::nats::_dict2json {spec src} {
             throw {NATS ErrInvalidArg} "Option $name is required"
         }
         if {$val ne "null"} {
-            dict set json_dict $name [_choose_format $name $def $type]
+            dict set json_dict $name [_choose_format $name $val $type]
         }
     }
     if {[dict size $json_dict]} {
+        json::write::indented false
+        json::write::aligned false
         return [json::write::object {*}$json_dict]
     } else {
         return ""
+    }
+}
+
+# JetStream JSON API returns timestamps/duration in ns; convert them to ms before returning to a user
+proc ::nats::_ns2ms {dict_name args} {
+    upvar $dict_name d
+    foreach k $args {
+        if {![dict exists $d $k]} {
+            continue
+        }
+        set val [dict get $d $k]
+        if {$val > 0} {
+            dict set d $k [expr {entier($val/1000000)}]
+        }
     }
 }

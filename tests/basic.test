@@ -11,6 +11,8 @@
 # - Binary messages
 # - Checking data on the wire and timings
 
+source test_utils.tcl
+
 startNats NATS
 
 set conn [nats::connection new "BasicNats"]

@@ -363,10 +363,11 @@ oo::class create ::nats::connection {
     }
     
     method request_msg {msg args} {
+        set dictmsg $config(dictmsg)
         nats::_parse_args $args {
             timeout timeout 0
             callback str ""
-            dictmsg bool true
+            dictmsg bool null
         }
         set reply [dict get $msg reply]
         if {$reply ne ""} {
@@ -1298,11 +1299,7 @@ proc ::nats::_format_header { header } {
 }
 
 # preserve json::write variables
-proc ::nats::_json_write_object {args} {
-    if {[llength $args] %2 == 1} {
-	    return -code error {wrong # args, expected an even number of arguments}
-    }
-    
+proc ::nats::_json_write_object {args} {    
     set ind [json::write::indented]
     set ali [json::write::aligned]
 

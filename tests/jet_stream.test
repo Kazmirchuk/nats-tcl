@@ -8,35 +8,49 @@
 # - sync, async consuming from a durable consumer with ACK
 # - sync, async publishing to a stream
 # - async consuming messages in batches
+source test_utils.tcl
 
 set stream_name MY_STREAM
 set consumer_name PULL_CONSUMER
 
 startNats NATS_JS -js
 
-execNatsCmd stream add --config=stream_config.json
-execNatsCmd consumer add MY_STREAM PULL_CONSUMER --config=pull_consumer_config.json  ;# note that it has a rather short ack_wait=1s
-
 set conn [nats::connection new]
 #debugLogging $conn
 
-test jet_stream-1.1 "Publish and sync consume" -setup {
-    $conn configure -servers nats://localhost:4222
-    $conn connect
-} -body {
+$conn configure -servers nats://localhost:4222
+$conn connect
+set jet_stream [$conn jet_stream -timeout 1000]
+
+set stream_config [dict create \
+                   subjects [list test.*] \
+                   storage memory]
+
+# note a rather short ack_wait=1s
+set pull_consumer_config [dict create \
+                         ack_wait 1000 \
+                         durable_name $consumer_name]
+
+test jet_stream-setup "Create a stream and pull consumer" -body {
+    set response [$jet_stream add_stream $stream_name {*}$stream_config]
+    assert {[dict get $response did_create]}
+    set response [$jet_stream add_consumer $stream_name {*}$pull_consumer_config]
+    assert {[dict get $response name] eq $consumer_name}
+}
+
+test jet_stream-1.1 "Publish and sync consume" -body {
     $conn publish test.1 "msg 1"
-    set jet_stream [$conn jet_stream -timeout 1000]
     set msg [$jet_stream consume $stream_name $consumer_name]
     assert {[dict get $msg subject] eq "test.1"} 1
     dict get $msg data
-} -result {msg 1}
+} -result "msg 1"
 
 test jet_stream-1.2 "Sync consume redelivered message and ACK" -body {
     # message has not been ACK, so it should be redelivered
     set msg [$jet_stream consume $stream_name $consumer_name]
     $jet_stream ack $msg
     dict get $msg data
-} -result {msg 1}
+} -result "msg 1"
 
 test jet_stream-1.3 "No message left after ACK - timeout" -body {
     duration {
@@ -56,7 +70,7 @@ test jet_stream-2.1 "Publish and async consume" -body {
     
     wait_for test_utils::simpleMsg 5000
     dict get $test_utils::simpleMsg data
-} -result {msg 2}
+} -result "msg 2"
 
 test jet_stream-2.2 "Async consume and ACK" -body {
     duration {
@@ -96,10 +110,9 @@ test jet_stream-5.2 "Publish message to JetStream async" -body {
     assert {$elapsed < 50}
     
     wait_for ::pubAck 1000
-    set ::pubAck
 } -result [dict create stream $stream_name seq 4] -cleanup {
     # we are not going to consume these messages
-    execNatsCmd stream purge --force $stream_name
+    $jet_stream purge_stream $stream_name
 }
 
 test jet_stream-5.3 "Publish message to JetStream sync - no such stream" -body {
@@ -116,7 +129,6 @@ test jet_stream-5.4 "Publish message to JetStream async - no such stream" -body 
     duration {
         wait_for ::timedOut 2000
     } elapsed
-    puts "jet_stream-8 elapsed: $elapsed"
     set timedOut
 } -result 1
 

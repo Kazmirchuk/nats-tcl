@@ -8,6 +8,7 @@
 # - PING/PONG protocol and timeouts
 # - utf8_convert, check_connection
 
+source test_utils.tcl
 startNats NATS
 
 set conn [nats::connection new "ExtraConfigOptions"]

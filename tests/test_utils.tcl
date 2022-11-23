@@ -4,6 +4,10 @@
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
+# all *.test files source this file first
+
+package require nats  ;# if not found, add it to TCLLIBPATH
+package require tcltest 2.5
 package require tcl::transform::observe
 package require tcl::chan::variable
 package require processman
@@ -202,7 +206,13 @@ namespace eval test_utils {
     }
 
     proc startNats {id args} {
-        processman::spawn $id nats-server {*}$args
+        # stupid tcltest considers stderr from NATS as a test failure
+        if {$::tcl_platform(platform) eq "windows"} {
+            set dev_null NUL
+        } else {
+            set dev_null /dev/null
+        }
+        processman::spawn $id nats-server {*}$args 2> $dev_null
         sleep 500
         puts "[nats::_timestamp] Started $id"
     }
@@ -304,3 +314,8 @@ namespace eval test_utils {
     namespace export sleep wait_for wait_flush chanObserver duration startNats stopNats startResponder stopResponder startFakeServer stopFakeServer sendFakeServer \
                      assert approx getConnectOpts debugLogging execNatsCmd dict_in
 }
+
+namespace import ::tcltest::test
+namespace import test_utils::*
+
+# execution continues in a *.test file...

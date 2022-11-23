@@ -7,6 +7,7 @@
 # - actions on a stream: create, get info, get names, purge, delete
 # - actions on a pull consumer: create, get info, get names, delete
 # - actions on a message: get, delete
+source test_utils.tcl
 
 startNats NATS_JS -js
 set conn [nats::connection new]

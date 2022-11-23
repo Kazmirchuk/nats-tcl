@@ -8,6 +8,8 @@
 # - receiving INFO with connect_urls
 # - reconnecting and restoring subscriptions
 
+source test_utils.tcl
+
 # "seed" server
 # --client_advertise is not mandatory, but is useful to track what addresses are added to the server pool from the INFO message
 # and to filter out duplicate servers

@@ -1,8 +1,0 @@
-{
-  "ack_policy": "explicit",
-  "ack_wait": 1000000000,
-  "deliver_policy": "all",
-  "durable_name": "PULL_CONSUMER",
-  "max_deliver": -1,
-  "replay_policy": "instant"
-}

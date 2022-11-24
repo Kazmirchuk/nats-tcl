@@ -9,7 +9,9 @@
 # - supplying credentials from URL or options
 # - connecting to multiple servers with different authentication requirements
 
-test_utils::startNats NATS_user --user bilbo --pass ring
+source test_utils.tcl
+
+startNats NATS_user --user bilbo --pass ring
 
 set conn [nats::connection new]
 #debugLogging $conn
@@ -70,9 +72,9 @@ test auth-1.4 "Try connecting to NATS with wrong login/password - one server in 
     $conn reset -servers -user -password
 }
 
-test_utils::stopNats NATS_user
+stopNats NATS_user
 
-test_utils::startNats NATS_token --auth 12345
+startNats NATS_token --auth 12345
 
 test auth-2.1 "Connect to NATS using an authentication token in URL" -body {
     $conn configure -servers nats://12345@localhost:4222
@@ -115,7 +117,7 @@ test auth-2.3 "Try connecting with no credentials" -body {
     $conn reset -servers
 }
 
-test_utils::startNats NATS -p 4223
+startNats NATS -p 4223
 
 test auth-2.4 "Try connecting to a cluster with no credentials - OK" -body {
     # the first server will reject the connection, the second server will accept
@@ -133,7 +135,7 @@ test auth-2.4 "Try connecting to a cluster with no credentials - OK" -body {
     $conn reset -servers -randomize
 }
 
-test_utils::stopNats NATS
-test_utils::stopNats NATS_token
+stopNats NATS
+stopNats NATS_token
 
 tcltest::cleanupTests

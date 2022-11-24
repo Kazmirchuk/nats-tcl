@@ -6,6 +6,7 @@
 # Test summary:
 # - connect to NATS with TLS
 # - provide a client TLS certificate
+source test_utils.tcl
 
 set tls_failed [catch {package require tls}]
 set certs_present [file isdirectory cert]

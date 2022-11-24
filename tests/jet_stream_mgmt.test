@@ -7,6 +7,7 @@
 # - actions on a stream: create, get info, get names, purge, delete
 # - actions on a pull consumer: create, get info, get names, delete
 # - actions on a message: get, delete
+source test_utils.tcl
 
 startNats NATS_JS -js
 set conn [nats::connection new]
@@ -138,29 +139,50 @@ set push_consumer_config [dict create \
                          filter_subject test.2 \
                          name PUSH_CONSUMER]
 
-#TODO try -idle_heartbeat 60000000000, -flow_control false  for pull consumer - should fail
-
-test js_mgmt-6.1 "Add a pull consumer" -body {
+test js_mgmt-6.1 "Add a pull consumer with durable_name" -body {
+    # keep this unit test to check that durable_name works properly
     set response [$js add_consumer MY_STREAM {*}$pull_consumer_config]
     set actual_config [dict get $response config]
     assert {[dict get $response name] eq "PULL_CONSUMER"}
     assert {[test_utils::dict_in $pull_consumer_config $actual_config]}
 }
 
+test js_mgmt-6.2 "Add a pull consumer using add_pull_consumer" -body {
+    dict unset pull_consumer_config durable_name 
+    dict set pull_consumer_config filter_subject test.3
+    set response [$js add_pull_consumer MY_STREAM PULL_CONSUMER_2 {*}$pull_consumer_config]
+    dict get $response config name
+} -result PULL_CONSUMER_2
+
 test js_mgmt-6.2 "Add a push consumer" -body {
-    set response [$js add_consumer MY_STREAM {*}$push_consumer_config]
+    set response [$js add_push_consumer MY_STREAM PUSH_CONSUMER PUSH_CONSUMER_SUBJECT {*}$push_consumer_config]
     set actual_config [dict get $response config]
-    assert {[dict get $response name] eq "PUSH_CONSUMER"}
     assert {[test_utils::dict_in $push_consumer_config $actual_config]}
-}
+    dict get $response name
+} -result PUSH_CONSUMER
 # NB! calling add_consumer with a name of existing consumer will update its config instead of creating a new consumer
 
-test js_mgmt-6.4 "Try creating a consumer with a wrong configuration" -body {
+test js_mgmt-6.3 "Try creating a consumer with a wrong configuration - error when parsing args" -body {
     set invalid_config $pull_consumer_config
     dict set invalid_config durable_name INVALID_CONSUMER
     dict set invalid_config deliver_policy invalid
     $js add_consumer MY_STREAM1 {*}$invalid_config
-} -result {*enum deliver_policy*} -match glob -errorCode {NATS ErrInvalidArg}
+} -result {*enum deliver_policy*} -match glob -errorCode {NATS ErrInvalidArg} -cleanup {
+    dict unset invalid_config deliver_policy
+}
+
+test js_mgmt-6.4 "Try creating a pull consumer with flow control" -body {
+    dict set invalid_config filter_subject test.4
+    dict set invalid_config flow_control true
+    $js add_pull_consumer MY_STREAM INVALID_CONSUMER {*}$invalid_config
+    # consumer flow control requires a push based consumer
+} -result {*flow control*} -match glob -errorCode {NATS ErrJSResponse 400*}
+
+test js_mgmt-6.5 "Try creating a pull consumer with idle heartbeat" -body {
+    dict set invalid_config idle_heartbeat 6000
+    $js add_pull_consumer MY_STREAM INVALID_CONSUMER {*}$invalid_config
+    # consumer idle heartbeat requires a push based consumer
+} -result {*idle heartbeat*} -match glob -errorCode {NATS ErrJSResponse 400*}
 
 test js_mgmt-7.1 "Get consumer info" -setup {
     $conn publish test.1 "test msg 1"
@@ -183,16 +205,7 @@ test js_mgmt-7.1 "Get consumer info" -setup {
 
 test js_mgmt-8.1 "List all consumers in MY_STREAM" -body {
     lsort [$js consumer_names MY_STREAM]
-} -result "PULL_CONSUMER PUSH_CONSUMER"
-
-# not supported by NATS?
-#test js_mgmt-8.2 "Search for a consumer by subject" -body {
-#    $js consumer_names MY_STREAM -subject foo.2
-#} -result PUSH_CONSUMER
-
-#test js_mgmt-8.3 "Search for a consumer by subject - nothing found" -body {
-#    $js consumer_names MY_STREAM -subject bla
-#} -result ""
+} -result "PULL_CONSUMER PULL_CONSUMER_2 PUSH_CONSUMER"
 
 test js_mgmt-9.1 "Delete a consumer" -body {
     $js delete_consumer MY_STREAM PUSH_CONSUMER

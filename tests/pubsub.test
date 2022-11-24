@@ -9,6 +9,7 @@
 # - the no-responders feature
 # - request with -max_msgs option
 # - coroutine-aware sync request
+source test_utils.tcl
 
 startNats NATS
 
@@ -50,7 +51,7 @@ test pubsub-2 "Send requests with headers" -setup {
     # test a sync request
     set msg_out [nats::msg create -subject "nats_2.2" -data "0 msg with header"]
     nats::header set msg_out hdr1 "value 1"
-    set response [$conn request_msg $msg_out -timeout 500]
+    set response [$conn request_msg $msg_out -timeout 500 -dictmsg true]
 
     assert {[nats::msg data $response] eq "msg with header" } 1
     assert {[nats::header get $response "hdr1"] eq "value 1"} 1
@@ -58,7 +59,7 @@ test pubsub-2 "Send requests with headers" -setup {
     # test an async request
     nats::msg set msg_out -data "0 msg2 with header"
     
-    $conn request_msg $msg_out -timeout 500 -callback test_utils::asyncReqCallback
+    $conn request_msg $msg_out -timeout 500 -dictmsg true -callback test_utils::asyncReqCallback
     wait_for test_utils::simpleMsg 1000
     assert {[nats::msg data $test_utils::simpleMsg] eq "msg2 with header"} 1
     assert {[nats::header get $test_utils::simpleMsg "hdr1"] eq "value 1"} 1

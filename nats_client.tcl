@@ -55,7 +55,7 @@ set ::nats::_option_spec {
 oo::class create ::nats::connection {
     # "private" variables
     variable config sock coro timers counters subscriptions requests serverPool \
-             subjectRegex outBuffer requestsInboxPrefix jetStream pong logger
+             subjectRegex outBuffer requestsInboxPrefix pong logger
     
     # "public" variables, so that users can set up traces if needed
     variable status last_error serverInfo
@@ -100,7 +100,6 @@ oo::class create ::nats::connection {
         # so that even when we are reconnecting, messages can still be sent
         set outBuffer [list]
         set requestsInboxPrefix ""
-        set jetStream ""
         set pong 1 ;# sync variable for vwait in "ping". Set to 1 to avoid a check for existing timer in "ping"
     }
     
@@ -108,9 +107,6 @@ oo::class create ::nats::connection {
         my disconnect
         $serverPool destroy
         ${logger}::delete
-        if {$jetStream ne ""} {
-            $jetStream destroy
-        }
     }
     
     method cget {option} {
@@ -532,13 +528,9 @@ oo::class create ::nats::connection {
         # handle the async request
         set timedOut 0
         set in_hdr [dict get $msg header]
-        if {[dict lookup $in_hdr Status 0] == 503} {
-            # no-responders is equivalent to timedOut=1
-            set timedOut 1
-        }
-
-        # handle the nats timeout e.q. for pull consumers
-        if {[dict lookup $in_hdr Status 0] == 408} {
+        set msg_status [dict lookup $in_hdr Status]
+        if {$msg_status == 503 || $msg_status == 408} {
+            # no-responders or fetch timeout from NATS Server
             set timedOut 1
         }
 
@@ -848,7 +840,6 @@ oo::class create ::nats::connection {
             set maxMsgs [dict get $subscriptions($subID) maxMsgs]
             set recMsgs [dict get $subscriptions($subID) recMsgs]
             set cmdPrefix [dict get $subscriptions($subID) cmd]
-            set header ""
             if {$expHdrLength > 0} {
                 try {
                     set header [nats::_parse_header [string range $payload 0 $expHdrLength-1]]
@@ -859,19 +850,18 @@ oo::class create ::nats::connection {
             }
             set body [string range $payload $expHdrLength end-2] ;# discard \r\n at the end
 
-            #convert from utf-8
             if {$config(utf8_convert)} {
                 set body [encoding convertfrom utf-8 $body]
             }
 
             if {[dict get $subscriptions($subID) dictmsg]} {
-                # deliver the message as a dict, including headers, if any
-                # even though replyTo is passed to the callback, let's include it in the dict too
-                # so that we don't need do to it in RequestCallback
-                set msg [dict create header $header data $body subject $subject reply $replyTo sub_id $subID]
+                set msg [nats::msg create -subject $subject -data $body -reply $replyTo]
+                dict set msg sub_id $subID
+                if {[info exists header]} {
+                    dict set msg header $header
+                }
             } else {
-                # deliver the message as an opaque string
-                set msg $body 
+                set msg $body ;# deliver only the payload
             }
             
             after 0 [list {*}$cmdPrefix $subject $msg $replyTo]
@@ -1263,15 +1253,15 @@ proc ::nats::_parse_header {header} {
             continue
         }
         if {$i == 0} {
-            set descr [lassign $line protocol status]
+            set descr [lassign $line protocol msg_status]
             if {$protocol ne "NATS/1.0"} {
                 throw {NATS ErrBadHeaderMsg} "Unknown protocol $protocol"
             }
-            if {$status ne ""} {
-                if {! ([string is integer $status] && $status > 0)} {
-                    throw {NATS ErrBadHeaderMsg} "Invalid status $status"
+            if {$msg_status ne ""} {
+                if {! ([string is integer $msg_status] && $msg_status > 0)} {
+                    throw {NATS ErrBadHeaderMsg} "Invalid status $msg_status"
                 }
-                dict set result Status $status
+                dict set result Status $msg_status
             }
             if {$descr ne ""} {
                 dict set result Description $descr

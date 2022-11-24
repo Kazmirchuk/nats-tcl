@@ -219,6 +219,8 @@ namespace eval test_utils {
     
     proc stopNats {id} {
         if {$::tcl_platform(platform) eq "windows"} {
+            # Note: it uses twapi::end_process and is NOT a graceful shutdown - that is possible with Ctrl+C in the NATS console
+            # I tried nats-server.exe --signal stop=PID, but it requires NATS to run as a Windows service
             processman::kill $id
         } else {
             # processman::kill on Linux relies on odielib or Tclx packages that might not be available

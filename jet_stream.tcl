@@ -49,10 +49,10 @@ oo::class create ::nats::jet_stream {
         return [dict get $response success]
     }
 
+    # equivalent to "fetch" in other NATS clients
     # Pull Subscribe internals https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-13.md
     # JetStream Subscribe Workflow https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-15.md
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_getnext_request
-    # TODO: derive expires from timeout
     method consume {stream consumer args} {
         if {![${conn}::my CheckSubject $stream]} {
             throw {NATS ErrInvalidArg} "Invalid stream name $stream"
@@ -62,61 +62,60 @@ oo::class create ::nats::jet_stream {
         }
 
         set subject "\$JS.API.CONSUMER.MSG.NEXT.$stream.$consumer"
-        # timeout will shadow the member var
+
         nats::_parse_args $args {
-            timeout timeout 0
+            timeout timeout null
             callback str ""
-            expires pos_int null
-            batch_size pos_int null
-            idle_heartbeat pos_int null
-            no_wait bool null
-            _custom_reqID valid_str ""
+            batch_size pos_int 1
+            no_wait bool false
+            _custom_reqID valid_str null
+        }
+        set batch $batch_size
+
+        if {![info exists timeout]} {
+            set timeout $_timeout
+        }
+        if {!$no_wait} {
+            # no_wait conflicts with expires
+            set expires [expr {$timeout >= 20 ? $timeout - 10 : $timeout}]  ;# same as in nats.go
         }
         
-        # the JSON body is:
-        # expires : nanoseconds
-        # batch: int
-        # no_wait: bool
-        # idle_heartbeat: nanoseconds - I have no clue what it does! but it is present in the C# client
-        # when all options=defaults, do not send JSON at all
+        set message [nats::_local2json {
+                    expires ns null
+                    batch   int null
+                    no_wait bool null}]
         
-        if {[info exists batch_size]} {
-            set batch $batch_size
+        set req_opts [list -dictmsg true -timeout $timeout -callback $callback -max_msgs $batch_size]
+        if {[info exists _custom_reqID]} {
+            lappend req_opts $_custom_reqID
         }
-        
-        foreach opt {expires batch no_wait idle_heartbeat} {
-            if {![info exists $opt]} {
-                continue
-            }
-            set val [set $opt]
-            if {$opt in {expires idle_heartbeat}} {
-                # convert ms to ns
-                set val [expr {entier($val*1000*1000)}]
-            }
-            dict set config_dict $opt $val
+        set result [$conn request $subject $message {*}$req_opts]
+        if {$callback ne ""} {
+            return
         }
-        # custom_reqID
-        # TODO no_wait conflicts with expires?
-        set message ""
-        if {[info exists config_dict]} {
-            set message [::nats::_json_write_object {*}$config_dict]
+        if {[dict lookup [dict get $result header] Status] == 408} {
+            # Request Timeout
+            throw {NATS ErrTimeout} [nats::header get $result Description]
         }
-        set req_opts [list -dictmsg true -timeout $timeout -callback $callback]
-        if {[info exists batch_size]} {
-            lappend req_opts -max_msgs $batch_size
-        } else {
-            lappend req_opts -max_msgs 1 ;# trigger an old-style request
-        }
-        if {$_custom_reqID ne ""} {
-            lappend req_opts -_custom_reqID $_custom_reqID
-        }
-        try {
-            return [$conn request $subject $message {*}$req_opts]
-        } trap {NATS ErrTimeout} err {
-            throw {NATS ErrTimeout} "Consume $stream.$consumer timed out"
-        }
+        return $result
     }
 
+    # metadata is encoded in the reply field:
+    # $JS.ACK.<stream>.<consumer>.<delivered>.<sseq>.<cseq>.<time>.<pending>
+    method metadata {msg} {
+        set mlist [split [dict get $msg reply] .]
+        set mdict [dict create \
+                stream [lindex $mlist 2] \
+                consumer [lindex $mlist 3] \
+                num_delivered [lindex $mlist 4] \
+                stream_seq [lindex $mlist 5] \
+                consumer_seq [lindex $mlist 6] \
+                timestamp [lindex $mlist 7] \
+                num_pending [lindex $mlist 8]]
+        nats::_ns2ms mdict timestamp
+        return $mdict
+    }
+    
     # Ack acknowledges a message. This tells the server that the message was
     # successfully processed and it can move on to the next message.
     method ack {message} {
@@ -147,7 +146,7 @@ oo::class create ::nats::jet_stream {
     # nats schema info --yaml io.nats.jetstream.api.v1.pub_ack_response
     method publish {subject message args} {
         set msg [nats::msg create -subject $subject -data $message]
-        my publish_msg $msg {*}$args
+        return [my publish_msg $msg {*}$args]
     }
     method publish_msg {msg args} {
         nats::_parse_args $args {
@@ -261,12 +260,10 @@ oo::class create ::nats::jet_stream {
     }
     
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_names_request
+    # the schema suggests possibility to filter by subject, but it doesn't work!
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_names_response
     # TODO: check subject filter not working?
     method consumer_names {stream} {        
-        #set spec {subject valid_str null}
-        #nats::_parse_args $args $spec
-        #set msg [nats::_local2json $spec]
         set response [json::json2dict [$conn request "\$JS.API.CONSUMER.NAMES.$stream" "" -timeout $_timeout]]
         nats::_checkJsError $response
         return [dict get $response consumers]
@@ -424,9 +421,6 @@ proc ::nats::_format_json {name val type} {
                     }]]
         }
         ns {
-            if {![string is entier -strict $val]} {
-                throw {NATS ErrInvalidArg} $errMsg
-            }
             # val must be in milliseconds
             return [expr {entier($val*1000*1000)}]
         }

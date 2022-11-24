@@ -336,9 +336,6 @@ oo::class create ::nats::connection {
     method unsubscribe {subID args} {
         my CheckConnection
         nats::_parse_args $args {
-            queue queue_group ""
-            callback valid_str ""
-            dictmsg bool null
             max_msgs pos_int 0
         }
 
@@ -434,6 +431,11 @@ oo::class create ::nats::connection {
         unset requests($reqID)
         if {[dict get $sync_req timedOut]} {
             if {$subID ne ""} {
+                # when an old-style request times out, we need to UNSUB!
+                # otherwise, when using "consume", NATS server doesn't know about a client-side timeout
+                # and might deliver a message when we are not expecting it
+                lappend outBuffer "UNSUB $subID"
+                my ScheduleFlush
                 unset -nocomplain subscriptions($subID)
             }
             throw {NATS ErrTimeout} "Request to $subject timed out"
@@ -495,6 +497,13 @@ oo::class create ::nats::connection {
             set callback [dict lookup $requests($reqID) callback]
             if {$callback ne ""} {
                 after 0 [list {*}$callback 1 ""]
+                set subID [dict lookup $requests($reqID) subID]
+                if {$subID ne ""} {
+                    # in case of old-style async request, we need to cleanup subs here
+                    lappend outBuffer "UNSUB $subID"
+                    my ScheduleFlush
+                    unset -nocomplain subscriptions($subID)
+                }
                 unset requests($reqID)
             } else {
                 #sync request - exit from vwait in "method request"
@@ -776,9 +785,10 @@ oo::class create ::nats::connection {
         }
         my SendConnect $tls_done
     }
-    
+    method HMSG {cmd} {
+        my MSG $cmd 1
+    }
     method MSG {cmd {with_headers 0}} {
-        # HMSG is also handled here
         set replyTo ""
         set expHdrLength 0
         if {$with_headers} {
@@ -1037,11 +1047,7 @@ oo::class create ::nats::connection {
                 # extract the first word from the line (INFO, MSG etc)
                 # protocol_arg will be empty in case of PING/PONG/OK
                 set protocol_arg [lassign $line protocol_op]
-                if {$protocol_op eq "HMSG"} {
-                    my MSG $protocol_arg 1
-                    return
-                }
-                if {$protocol_op in {MSG INFO -ERR +OK PING PONG}} {
+                if {$protocol_op in {MSG HMSG INFO -ERR +OK PING PONG}} {
                     my $protocol_op $protocol_arg
                 } else {
                     ${logger}::warn "Invalid protocol $protocol_op $protocol_arg"
@@ -1336,7 +1342,6 @@ namespace eval ::nats {
 proc ::nats::_random_string {} {
     set allowed_chars "1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
     set range [string length $allowed_chars]
-    set result ""
     for {set i 0} {$i < 22} {incr i} {
         set pos [expr {int(rand() * $range)}]
         append result [string index $allowed_chars $pos]

@@ -50,7 +50,7 @@ test extra_opts-1 "Check verbose and pedantic modes" -body {
 }
 
 test extra_opts-2 "Check the echo=false option" -body {
-    set test_utils::simpleMsg ""
+    set inMsg ""
     $conn configure -echo false
     $conn connect -async
     set obs [test_utils::chanObserver new $conn w]
@@ -62,9 +62,9 @@ test extra_opts-2 "Check the echo=false option" -body {
     
     assert {[dict get $connectDict echo] eq "false"}
         
-    $conn subscribe no_echo -callback test_utils::simpleCallback
+    $conn subscribe no_echo -callback subCallback
     $conn publish no_echo "cold is the void" ;# we will not get this message back
-    assert {[catch {wait_for test_utils::simpleMsg}] == 1}
+    assert {[catch {wait_for ::inMsg}] == 1}
     # but a request to another subscriber still works fine
     startResponder $conn no_echo
     set result [$conn request no_echo "0 hello"]
@@ -104,7 +104,7 @@ test extra_opts-4.1 "PING/PONG protocol initiated by server" -body {
     startNats quick_ping -c $conf
     $conn connect
     set obs [test_utils::chanObserver new $conn b]
-    test_utils::sleep 2400
+    sleep 2400
     lassign [$obs getChanData 0 0] readData writtenData
     $obs destroy
     # check that the exchange occurred exactly once
@@ -196,7 +196,7 @@ test extra_opts-6 "Check the utf8_convert option" -body {
 
 test extra_opts-7.1 "option check_connection=true (default)" -body {
     $conn connect -async
-    $conn subscribe subject1 -callback test_utils::simpleCallback
+    $conn subscribe subject1 -callback subCallback
 } -result "No connection to NATS server" -errorCode {NATS ErrConnectionClosed} -cleanup {
     $conn disconnect
     assert {[set ${conn}::status] == $nats::status_closed} 1
@@ -206,9 +206,9 @@ test extra_opts-7.2 "option check_connection=false" -body {
     $conn configure -check_connection false
     # due to -check_connection false, PUB/SUB/UNSUB are buffered and flushed after a connection is established
     $conn connect -async
-    $conn subscribe subject1 -callback test_utils::simpleCallback
+    $conn subscribe subject1 -callback subCallback
     $conn publish subject1 "hello"
-    wait_for test_utils::simpleMsg 1000
+    wait_for ::inMsg 1000
 } -result "hello" -cleanup {
     $conn disconnect
     $conn reset -check_connection

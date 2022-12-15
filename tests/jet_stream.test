@@ -63,39 +63,39 @@ test jet_stream-1.3 "No message left after ACK - timeout" -body {
 test jet_stream-2.1 "Publish and async consume" -body {
     $conn publish test.2 "msg 2"
     duration {
-        $jet_stream consume $stream_name $consumer_name -callback test_utils::asyncReqCallback
+        $jet_stream consume $stream_name $consumer_name -callback asyncReqCallback
     } elapsed
     assert {$elapsed < 50} ;# async request returns immediately
     
-    wait_for test_utils::simpleMsg 500
-    dict get $test_utils::simpleMsg data
+    wait_for ::inMsg 500
+    dict get $inMsg data
 } -result "msg 2"
 
 test jet_stream-2.2 "Async consume and ACK" -body {
     sleep 1000 ;# =ack_wait
     duration {
-        $jet_stream consume $stream_name $consumer_name -callback test_utils::asyncReqCallback
+        $jet_stream consume $stream_name $consumer_name -callback asyncReqCallback
     } elapsed
     assert {$elapsed < 50} ;# async request returns immediately
     
-    wait_for test_utils::simpleMsg 500
-    $jet_stream ack $test_utils::simpleMsg
-    dict get $test_utils::simpleMsg data
+    wait_for ::inMsg 500
+    $jet_stream ack $inMsg
+    dict get $inMsg data
 } -result "msg 2"
 
 test jet_stream-2.3 "Async consume timeout" -body {
     duration {
-        $jet_stream consume $stream_name $consumer_name -callback test_utils::asyncReqCallback -timeout 1500
+        $jet_stream consume $stream_name $consumer_name -callback asyncReqCallback -timeout 1500
     } elapsed
     assert {$elapsed < 50} ;# async request returns immediately
     
     duration {
-        wait_for test_utils::simpleMsg 2000
+        wait_for ::inMsg 2000
     } elapsed
     assert {[approx $elapsed 1500]}
 
-    set test_utils::simpleMsg
-} -result timeout
+    set inMsg
+} -result "timeout"
 
 test jet_stream-5.1 "Publish message to JetStream sync" -body {
     $jet_stream publish test.3 "msg 3"

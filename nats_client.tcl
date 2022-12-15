@@ -202,6 +202,7 @@ oo::class create ::nats::connection {
         
         set status $nats::status_connecting
         # this coroutine will handle all work to connect and read from the socket
+        # current namespace is prepended to the coroutine name, so it's unique
         coroutine coro {*}[mymethod CoroMain]
         
         if {!$async} {

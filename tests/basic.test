@@ -32,7 +32,7 @@ test basic-1 "Connect NATS" -body {
 
 test basic-2.1 "Subscribe to a message" -body {
     set obs [test_utils::chanObserver new $conn w]
-    set sub_id [$conn subscribe subject1 -callback test_utils::simpleCallback]
+    set sub_id [$conn subscribe subject1 -callback subCallback]
     assert {[set ${conn}::timers(flush)] ne ""} ;# check that flush has been scheduled
     wait_flush $conn
     assert {[set ${conn}::timers(flush)] eq ""} ;# no more pending flushes
@@ -47,14 +47,14 @@ test basic-2.2 "Publish a message" -body {
     set obs [chanObserver new $conn b]
     duration {
         $conn publish subject1 hello
-        wait_for test_utils::simpleMsg
+        wait_for ::inMsg
     } elapsed
     lassign [$obs getChanData] readData writtenData
     assert {$writtenData eq {PUB subject1  5}}
     assert {$readData eq "MSG subject1 $sub_id 5"}
     assert {$elapsed < 100} ;# time to flush and receive MSG from the server
     $obs destroy
-    set test_utils::simpleMsg
+    set ::inMsg
 } -result "hello"
 
 test basic-2.3 "Unsubscribe and publish again" -body {
@@ -72,7 +72,7 @@ test basic-2.3 "Unsubscribe and publish again" -body {
     # check that the server did not send MSG back
     assert {[llength $readData] == 0}
     $obs destroy
-    set test_utils::simpleMsg
+    set ::inMsg
 } -result "hello"
 
 test basic-3.1 "Subscribe to a limited number of messages" -body {
@@ -187,44 +187,34 @@ sleep 500
 
 test basic-8 "Asynchronous request" -body {
     duration {
-        $conn request service "100 async_req" -callback test_utils::asyncReqCallback
+        $conn request service "100 async_req" -callback asyncReqCallback
     } elapsed
     assert {$elapsed < 50} ;# async request returns immediately
     
     duration {
-        wait_for test_utils::simpleMsg
+        wait_for ::inMsg
     } elapsed
     assert {[approx $elapsed 140 ]}
     
-    set test_utils::simpleMsg
+    set inMsg
 } -result "async_req"
 
 test basic-9 "Asynchronous request with timeout - success" -body {
     duration {
-        $conn request service "0 async_req2" -timeout 600 -callback [lambda {timedOut msg} {
-            # let's use lambda here for the sake of example
-            assert {!$timedOut}
-            assert {$msg eq "async_req2"}
-            set test_utils::simpleMsg ""
-        }]
-        
-        wait_for test_utils::simpleMsg
+        $conn request service "0 async_req2" -timeout 600 -callback asyncReqCallback
+        wait_for ::inMsg
     } elapsed
     assert {$elapsed < 300}
+    assert {$inMsg eq "async_req2"}
 } 
 
 test basic-10 "Asynchronous request with timeout - failure" -body {
     duration {
-        # timeout must be longer than flush_interval!
-        $conn request service "1000 async_req3" -timeout 600 -callback [lambda {timedOut msg} {
-            assert {$timedOut}
-            assert {$msg eq ""}
-            set test_utils::simpleMsg ""
-        }]
-        
-        wait_for test_utils::simpleMsg 900
+        $conn request service "1000 async_req3" -timeout 600 -callback asyncReqCallback
+        wait_for ::inMsg 900
     } elapsed
     assert {[approx $elapsed 600]}
+    assert {$inMsg eq "timeout"}    
 }
 
 # wait until the delayed message arrives
@@ -233,26 +223,25 @@ sleep 500
 test basic-11 "2 asynchronous requests" -body {
     #send two async requests, where the second request should complete faster than the first
     duration {
-        $conn request service "500 async_req4" -timeout 1500 -callback test_utils::asyncReqCallback
-        $conn request service "100 async_req5" -timeout 1000 -callback test_utils::asyncReqCallback
-        wait_for test_utils::simpleMsg
-        assert {$test_utils::simpleMsg eq "async_req5"}
-        wait_for test_utils::simpleMsg 700
-        assert {$test_utils::simpleMsg eq "async_req4"}
+        $conn request service "500 async_req4" -timeout 1500 -callback asyncReqCallback
+        $conn request service "100 async_req5" -timeout 1000 -callback asyncReqCallback
+        wait_for ::inMsg
+        assert {$inMsg eq "async_req5"}
+        wait_for ::inMsg 700
+        assert {$inMsg eq "async_req4"}
     } elapsed
     assert {[approx $elapsed 540]} 
 }
 
-# exchange of byte arrays has been tested manually with cnats in both directions
 test basic-12 "Sending and receiving a binary message" -body {
     set binString "\nhello\0world\r\n" ;# include a null byte and CR+LF that is a delimiter in the NATS protocol
-    set sub_id [$conn subscribe bin_subj -callback test_utils::simpleCallback]
+    set sub_id [$conn subscribe bin_subj -callback subCallback]
     $conn publish bin_subj $binString
-    wait_for test_utils::simpleMsg
+    wait_for ::inMsg
     $conn unsubscribe $sub_id
     wait_flush $conn
-    assert { [binary encode hex $test_utils::simpleMsg] eq [binary encode hex $binString] } 1
-    assert { [string length $test_utils::simpleMsg] == 14} 1
+    assert { [binary encode hex $inMsg] eq [binary encode hex $binString] } 1
+    assert { [string length $inMsg] == 14} 1
 }
 
 test basic-13 "Binary message request" -body {
@@ -307,10 +296,10 @@ test basic-16 "Queue groups and publish with replyTo" -body {
     set msg_count 0
     set myReplyTo [$conn inbox]
     set sub_id [$conn subscribe $myReplyTo -callback [lambda {subject message replyTo} {
-        incr ::msg_count
         assert {$subject eq $::myReplyTo}
         assert {$message eq "queue group test"}
         assert {$replyTo eq ""}
+        incr ::msg_count
     }]]
     
     $conn publish test_qg "0 queue group test" $myReplyTo
@@ -335,17 +324,15 @@ test basic-17 "Check internal state after disconnection" -body {
 }
 
 test basic-18 "Disconnection cancels pending async requests" -body {
-    set test_utils::simpleMsg -1
+    set inMsg -1
     $conn connect
-    $conn request service "2000 foo" -timeout 1000 -callback [lambda {timedOut msg} {
-        set test_utils::simpleMsg $timedOut
-    }]
+    $conn request service "2000 foo" -timeout 1000 -callback asyncReqCallback
     wait_flush $conn
     # don't stop the responder before sending the request, otherwise we'll get no-responders immediately
     stopResponder $conn
     $conn disconnect
     sleep 1500  ;# more than -timeout
-    assert {$test_utils::simpleMsg == -1} ;# lambda was not invoked
+    assert {$inMsg == -1} ;# asyncReqCallback was not invoked
 }
 
 $conn destroy

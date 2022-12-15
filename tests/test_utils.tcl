@@ -16,9 +16,10 @@ package require control
 package require comm
 package require lambda
 
+set ::inMsg ""
+
 namespace eval test_utils {
-    variable sleepVar 0
-    variable simpleMsg ""
+    variable sleepVar 0    
     variable commPort 4221
     variable responderReady 0
     
@@ -191,17 +192,15 @@ namespace eval test_utils {
         }]
     }
     
-    proc simpleCallback {subj msg reply} {
-        variable simpleMsg
-        set simpleMsg $msg
+    proc subCallback {subj msg reply} {
+        set ::inMsg $msg
     }
 
     proc asyncReqCallback {timedOut msg} {
-        variable simpleMsg
         if {$timedOut} {
-            set simpleMsg "timeout"
+            set ::inMsg "timeout"
         } else {
-            set simpleMsg $msg
+            set ::inMsg $msg
         }
     }
 
@@ -241,7 +240,6 @@ namespace eval test_utils {
     }
     
     proc startResponder {conn {subj "service"} {queue ""} {dictMsg 0}} {
-        variable responderReady
         $conn subscribe "$subj.ready" -max_msgs 1 -callback [lambda {subject message replyTo} {
             set test_utils::responderReady 1
         }]
@@ -314,7 +312,7 @@ namespace eval test_utils {
     }
     
     namespace export sleep wait_for wait_flush chanObserver duration startNats stopNats startResponder stopResponder startFakeServer stopFakeServer sendFakeServer \
-                     assert approx getConnectOpts debugLogging execNatsCmd dict_in
+                     assert approx getConnectOpts debugLogging subCallback asyncReqCallback execNatsCmd dict_in
 }
 
 namespace import ::tcltest::test

@@ -21,10 +21,9 @@ test auth-1.1 "Connect to NATS using login/password in URL" -body {
     set obs [test_utils::chanObserver new $conn w]
     $conn connect
     # check that the connection really works
-    set test_utils::simpleMsg ""
-    $conn subscribe subject1 -callback test_utils::simpleCallback
+    $conn subscribe subject1 -callback subCallback
     $conn publish subject1 "Hello Bilbo"
-    wait_for test_utils::simpleMsg
+    wait_for ::inMsg
     
     assert {[set ${conn}::serverInfo(auth_required)]}
     
@@ -32,7 +31,7 @@ test auth-1.1 "Connect to NATS using login/password in URL" -body {
     assert {[dict get $connectDict user] eq "bilbo"}
     assert {[dict get $connectDict pass] eq "ring"}
     
-    set test_utils::simpleMsg
+    set inMsg
 } -result "Hello Bilbo" -cleanup {
     $conn disconnect
     $conn reset -servers
@@ -42,11 +41,10 @@ test auth-1.1 "Connect to NATS using login/password in URL" -body {
 test auth-1.2 "Connect to NATS using login/password in options" -body {
     $conn configure -servers nats://localhost:4222 -user bilbo -password ring
     $conn connect
-    set test_utils::simpleMsg ""
-    $conn subscribe subject1 -callback test_utils::simpleCallback
+    $conn subscribe subject1 -callback subCallback
     $conn publish subject1 "hello again"
-    wait_for test_utils::simpleMsg
-    set test_utils::simpleMsg
+    wait_for ::inMsg
+    set inMsg
 } -result "hello again" -cleanup {
     $conn disconnect
     $conn reset -servers -user -password
@@ -80,17 +78,16 @@ test auth-2.1 "Connect to NATS using an authentication token in URL" -body {
     $conn configure -servers nats://12345@localhost:4222
     set obs [test_utils::chanObserver new $conn w]
     $conn connect
-    set test_utils::simpleMsg ""
-    $conn subscribe subject1 -callback test_utils::simpleCallback
+    $conn subscribe subject1 -callback subCallback
     $conn publish subject1 "hello token"
-    wait_for test_utils::simpleMsg
+    wait_for ::inMsg
     
     assert {[dict get [$conn server_info] auth_required]}
     set connectDict [getConnectOpts [$obs getChanData]]
     assert {[dict get $connectDict auth_token] eq "12345"}
         
-    set test_utils::simpleMsg
-} -result {hello token} -cleanup {
+    set inMsg
+} -result "hello token" -cleanup {
     $conn disconnect
     $conn reset -servers
     $obs destroy
@@ -99,12 +96,11 @@ test auth-2.1 "Connect to NATS using an authentication token in URL" -body {
 test auth-2.2 "Connect to NATS using an authentication token in options" -body {
     $conn configure -servers nats://localhost:4222 -token 12345
     $conn connect
-    set test_utils::simpleMsg ""
-    $conn subscribe subject1 -callback test_utils::simpleCallback
+    $conn subscribe subject1 -callback subCallback
     $conn publish subject1 "hello token2"
-    wait_for test_utils::simpleMsg
-    set test_utils::simpleMsg
-} -result {hello token2} -cleanup {
+    wait_for ::inMsg
+    set inMsg
+} -result "hello token2" -cleanup {
     $conn disconnect
     $conn reset -servers -token
 }

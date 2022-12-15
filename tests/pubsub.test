@@ -22,19 +22,19 @@ $conn connect
 test pubsub-1 "Publish and receive a message with a header" -body {
     set obs [test_utils::chanObserver new $conn b]
     set msg_received 0
-    set sid [$conn subscribe nats_2.2 -callback test_utils::simpleCallback -dictmsg true]
+    set sid [$conn subscribe nats_2.2 -callback subCallback -dictmsg true]
 
     set msg_out [nats::msg create -subject "nats_2.2" -data "payload"]
     nats::header set msg_out hdr1 "val 1" hdr2 "val2"
     $conn publish_msg $msg_out
     
-    wait_for test_utils::simpleMsg
+    wait_for ::inMsg
     
-    assert {[nats::msg subject $test_utils::simpleMsg] eq "nats_2.2"}
-    assert {[nats::msg data $test_utils::simpleMsg] eq "payload"}
-    assert {[nats::msg reply $test_utils::simpleMsg] eq ""}
-    assert {[nats::header get $test_utils::simpleMsg "hdr1"] eq "val 1"}
-    assert {[nats::header get $test_utils::simpleMsg "hdr2"] eq "val2"}
+    assert {[nats::msg subject $inMsg] eq "nats_2.2"}
+    assert {[nats::msg data $inMsg] eq "payload"}
+    assert {[nats::msg reply $inMsg] eq ""}
+    assert {[nats::header get $inMsg "hdr1"] eq "val 1"}
+    assert {[nats::header get $inMsg "hdr2"] eq "val2"}
         
     lassign [$obs getChanData 0 1] readData writtenData
     $obs destroy
@@ -59,10 +59,10 @@ test pubsub-2 "Send requests with headers" -setup {
     # test an async request
     nats::msg set msg_out -data "0 msg2 with header"
     
-    $conn request_msg $msg_out -timeout 500 -dictmsg true -callback test_utils::asyncReqCallback
-    wait_for test_utils::simpleMsg 1000
-    assert {[nats::msg data $test_utils::simpleMsg] eq "msg2 with header"} 1
-    assert {[nats::header get $test_utils::simpleMsg "hdr1"] eq "value 1"} 1
+    $conn request_msg $msg_out -timeout 500 -dictmsg true -callback asyncReqCallback
+    wait_for ::inMsg 1000
+    assert {[nats::msg data $inMsg] eq "msg2 with header"} 1
+    assert {[nats::header get $inMsg "hdr1"] eq "value 1"} 1
     
     # test a sync request, but get back a plain message with no header
     nats::msg set msg_out -data "0 msg3 with header"
@@ -94,10 +94,10 @@ test pubsub-3 "Receive a message with a header from NATS CLI" -body {
 
 test pubsub-4 "Receive no-responders from a subscription" -body {
     set inbox [$conn inbox]
-    $conn subscribe $inbox -callback test_utils::simpleCallback -dictmsg true
+    $conn subscribe $inbox -callback subCallback -dictmsg true
     $conn publish nats_2.2 -reply $inbox
-    wait_for test_utils::simpleMsg
-    assert {[nats::msg no_responders $test_utils::simpleMsg]} 1
+    wait_for ::inMsg
+    assert {[nats::msg no_responders $inMsg]} 1
 }
 
 test pubsub-5 "Receive no-responders from a sync request" -body {
@@ -110,14 +110,13 @@ test pubsub-5 "Receive no-responders from a sync request" -body {
 }
 
 test pubsub-6 "Receive no-responders from an async request" -body {
-    set msg_received 0
     $conn request nats_2.2 "no response" -timeout 500 -dictmsg 1 -callback [lambda {timedOut msg} {
         assert {$timedOut}
         assert {[nats::msg no_responders $msg]} 1
-        set ::msg_received 1
+        set ::inMsg 1
     }]
     duration {
-        wait_for ::msg_received
+        wait_for ::inMsg
     } elapsed
     assert { $elapsed < 100 }
 }

@@ -1,11 +1,11 @@
-# Copyright (c) 2020 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2020-2023 Petro Kazmirchuk https://github.com/Kazmirchuk
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
 # Test summary:
 # - Connecting, publishing, subscribing to messages
-# - Sync and async requests with timeouts
+# - Sync and async new-style requests with timeouts
 # - Subscribing using queue groups
 # - Multiple responders
 # - Binary messages
@@ -94,7 +94,7 @@ test basic-3.1 "Subscribe to a limited number of messages" -body {
     assert {[lindex $wdata end-1] == 20} ;# payload of the last sent message
     # each MSG will create 2 rows in rdata, so check that UNSUB was effective, and we've received 10 messages back +/- one or PING
     assert {[llength $rdata] < 25} 1
-        
+
     $obs destroy
     set msg_count
 }  -result 10
@@ -137,45 +137,46 @@ test basic-4.1 "Subscribe and unsubscribe with -max_msgs" -body {
 test basic-5.1 "Synchronous request" -setup {
     startResponder $conn
 } -body {
-    set obs [chanObserver new $conn b]
+    #set obs [chanObserver new $conn b]
     duration {
         set result [$conn request service "0 hello"]
     } elapsed
     assert {$elapsed < 200}  ;# actual roundtrip time on localhost ~40ms
-    lassign [$obs getChanData 0] rdata wdata
-    $obs destroy
+    #lassign [$obs getChanData 0] rdata wdata
+    #$obs destroy
     set result
 } -result "hello"
 
-test basic-5.2 "Synchronous request - written to socket" -body {
-    lassign $wdata sub pub payload
-    # the first request starts with subscribing to INBOX.<random>.*
-    assert {[regexp {SUB _INBOX.*.\*  ([[:digit:]]+)} $sub -> subID]}
-    assert {[regexp {PUB service _INBOX.*.1 (.*)} $pub -> msg_length]}
-    assert {$msg_length == [string length $payload]}
-    set payload
-} -result {0 hello} 
-
-test basic-5.3 "Synchronous request - read from socket" -body {
-    lassign $rdata msg payload
-    assert {[regexp {MSG _INBOX.*.([[:digit:]]+) ([[:digit:]]+) (.*)} $msg -> req_id subID2 msg_length]}
-    assert {$msg_length == [string length $payload]}
-    assert {$subID == $subID2}
-    assert {[info exists ${conn}::requests($req_id)] == 0}
-    set payload
-} -result "hello"
+# TODO: chan obs causes Tcl to crash in basic-6
+#test basic-5.2 "Synchronous request - written to socket" -body {
+#    lassign $wdata sub pub payload
+#    # the first request starts with subscribing to INBOX.<random>.*
+#    assert {[regexp {SUB _INBOX.*.\*  ([[:digit:]]+)} $sub -> subID]}
+#    assert {[regexp {PUB service _INBOX.*.1 (.*)} $pub -> msg_length]}
+#    assert {$msg_length == [string length $payload]}
+#    set payload
+#} -result {0 hello} 
+#
+#test basic-5.3 "Synchronous request - read from socket" -body {
+#    lassign $rdata msg payload
+#    assert {[regexp {MSG _INBOX.*.([[:digit:]]+) ([[:digit:]]+) (.*)} $msg -> req_id subID2 msg_length]}
+#    assert {$msg_length == [string length $payload]}
+#    assert {$subID == $subID2}
+#    assert {[array size ${conn}::requests] == 0}
+#    set payload
+#} -result "hello"
 
 test basic-6 "Synchronous request with timeout - success" -body {
     duration {
-        set result [$conn request service "500 sync_req" -timeout 600]
+        set result [$conn request service "500 basic-6" -timeout 600]
     } elapsed
-    assert {[approx $elapsed 540]}
+    assert {[approx $elapsed 510]}
     set result
-} -result "sync_req"
+} -result basic-6
 
 test basic-7 "Synchronous request with timeout - failure" -body {
     duration {
-        catch {$conn request service "600 sync_req" -timeout 500} err errOpts
+        catch {$conn request service "600 basic-7" -timeout 500} err errOpts
     } elapsed
     assert {[approx $elapsed 500]}
     assert {[dict get $errOpts -errorcode] eq {NATS ErrTimeout}}
@@ -214,7 +215,7 @@ test basic-10 "Asynchronous request with timeout - failure" -body {
         wait_for ::inMsg 900
     } elapsed
     assert {[approx $elapsed 600]}
-    assert {$inMsg eq "timeout"}    
+    assert {$inMsg eq "timeout"}
 }
 
 # wait until the delayed message arrives
@@ -239,7 +240,6 @@ test basic-12 "Sending and receiving a binary message" -body {
     $conn publish bin_subj $binString
     wait_for ::inMsg
     $conn unsubscribe $sub_id
-    wait_flush $conn
     assert { [binary encode hex $inMsg] eq [binary encode hex $binString] } 1
     assert { [string length $inMsg] == 14} 1
 }
@@ -314,13 +314,16 @@ for {set i 0} { $i < 3} {incr i} {
     sleep 500
 }
 
-test basic-17 "Check internal state after disconnection" -body {
+test basic-17 "Check internal state before and after disconnection" -body {
+    assert {[array size ${conn}::requests] == 0} 1
+    assert {[array size ${conn}::subscriptions] == 2} 1
+    assert {[llength [set ${conn}::outBuffer]] == 0} 1
+    
     $conn disconnect
+    
     assert {[set ${conn}::sock] eq ""} 1
     assert {[set ${conn}::status] == $nats::status_closed} 1
     assert {[array size ${conn}::subscriptions] == 0} 1
-    assert {[array size ${conn}::requests] == 0} 1
-    assert {[llength [set ${conn}::outBuffer]] == 0} 1
 }
 
 test basic-18 "Disconnection cancels pending async requests" -body {

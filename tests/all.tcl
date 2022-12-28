@@ -12,5 +12,6 @@ cd $thisDir
 tcltest::configure -testdir $thisDir {*}$argv
 # Note: using -singleproc 1 is not a very good idea,
 # because global variables created by one .test script will be inherited by following .test scripts
-
+# but Tcl debugger works in tests only with -singleproc 1
+# TODO print all output to tcltest::outputChannel
 exit [tcltest::runAllTests]

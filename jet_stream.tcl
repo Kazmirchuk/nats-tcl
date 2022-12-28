@@ -86,9 +86,6 @@ oo::class create ::nats::jet_stream {
                     no_wait bool null}]
         
         set req_opts [list -dictmsg true -timeout $timeout -callback $callback -max_msgs $batch_size]
-        if {[info exists _custom_reqID]} {
-            lappend req_opts $_custom_reqID
-        }
         set result [$conn request $subject $message {*}$req_opts]
         if {$callback ne ""} {
             return

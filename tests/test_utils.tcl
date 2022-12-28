@@ -184,11 +184,19 @@ namespace eval test_utils {
             upvar $var s
             puts "[nats::_timestamp] New status: $s"
         }]
-        trace add variable ${conn}::last_error write [lambda {var idx op } {
-            upvar $var e
-            if {$e ne ""} {
-                puts "[nats::_timestamp] Async error: $e"
-            }
+        trace add variable ${conn}::subscriptions write [lambda {var idx op } {
+            upvar ${var}($idx) s
+            puts "[nats::_timestamp] sub($idx): $s"
+        }]
+        trace add variable ${conn}::subscriptions unset [lambda {var idx op } {
+            puts "[nats::_timestamp] sub($idx) unset"
+        }]
+        trace add variable ${conn}::requests write [lambda {var idx op } {
+            upvar ${var}($idx) r
+            puts "[nats::_timestamp] req($idx): $r"
+        }]
+        trace add variable ${conn}::requests unset [lambda {var idx op } {
+            puts "[nats::_timestamp] req($idx) unset"
         }]
     }
     
@@ -243,12 +251,11 @@ namespace eval test_utils {
         $conn subscribe "$subj.ready" -max_msgs 1 -callback [lambda {subject message replyTo} {
             set test_utils::responderReady 1
         }]
-        set scriptPath [file join [file dirname [info script]] responder.tcl]
-        exec [info nameofexecutable] $scriptPath $subj $queue $dictMsg &
+        exec [info nameofexecutable] responder.tcl $subj $queue $dictMsg &
         wait_for test_utils::responderReady 1000
     }
     
-    # send a NATS message to stop the responder gracefully
+    # send a NATS message to stop the responder gracefully; remember to "sleep" a bit after calling this function!
     proc stopResponder {conn {subj "service"}} {
         $conn publish $subj [list 0 exit]
         wait_flush $conn
@@ -318,4 +325,4 @@ namespace eval test_utils {
 namespace import ::tcltest::test
 namespace import test_utils::*
 
-# execution continues in a *.test file...
+# execution continues in a *.test file... no need to call tcltest::configure there again

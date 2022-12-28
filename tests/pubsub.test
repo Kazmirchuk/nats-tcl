@@ -7,7 +7,7 @@
 # - publishing and subscription to messages with headers
 # - treating a received message as a dict
 # - the no-responders feature
-# - request with -max_msgs option
+# - old-style requests with -max_msgs option
 # - coroutine-aware sync request
 source test_utils.tcl
 
@@ -95,7 +95,7 @@ test pubsub-3 "Receive a message with a header from NATS CLI" -body {
 test pubsub-4 "Receive no-responders from a subscription" -body {
     set inbox [$conn inbox]
     $conn subscribe $inbox -callback subCallback -dictmsg true
-    $conn publish nats_2.2 -reply $inbox
+    $conn publish "unknown_subject" "" -reply $inbox
     wait_for ::inMsg
     assert {[nats::msg no_responders $inMsg]} 1
 }
@@ -121,45 +121,90 @@ test pubsub-6 "Receive no-responders from an async request" -body {
     assert { $elapsed < 100 }
 }
 
-test pubsub-7 "Gather multiple responses to a request" -setup {
+test pubsub-7.1 "Old-style request - async - get all messages" -setup {
     for {set i 0} { $i < 3} { incr i } {
         startResponder $conn
     }
-} -body {
-    set msg_received 0
-    set exit_wait 0
-    $conn request service "0 I need help" -max_msgs 3 -callback [lambda {timedOut msg} {
-        assert {!$timedOut}
-        assert {$msg eq "I need help"}
-        incr ::msg_received
-        if {$::msg_received == 3} {
-            set ::exit_wait 1
-        }
+    set oldStyleCb [lambda {timedOut msg} {
+        lappend ::gotMsgs [list $timedOut $msg]
     }]
-    wait_for ::exit_wait 2000
-    assert {$msg_received == 3}
-    assert {[array size ${conn}::requests] == 0} 1
+    set gotMsgs [list]
+} -body {
+    $conn request service "0 I need help 7.1" -max_msgs 3 -callback $oldStyleCb
+    while {[llength $gotMsgs] < 3} {
+        wait_for ::gotMsgs
+    }
+    assert {[llength $gotMsgs] == 3} 1
+    foreach i $gotMsgs {
+        lassign $i timedOut msg
+        assert {[nats::msg data $msg] eq "I need help 7.1"}
+        assert {!$timedOut}
+    }
+    array size ${conn}::requests
+} -result 0 -cleanup {
+    set gotMsgs [list]
 }
 
-test pubsub-8 "Gather multiple responses to a request - timeout" -body {
-    set msg_received 0
-    set exit_wait 0
-    # now we ask for -max_msgs=4
-    $conn request service "0 I need help" -max_msgs 4 -timeout 1000 -callback [lambda {timedOut msg} {
-        if {$timedOut} {
-            set ::exit_wait 1
-            return
-        }
-        assert {$msg eq "I need help"}
-        incr ::msg_received
-    }]
+test pubsub-7.2 "Old-style request - async - not all messages" -body {
+    # the callback will be invoked 3 times with a reply and the 4th time with timedOut=1
+    $conn request service "0 I need help 7.2" -max_msgs 4 -timeout 500 -callback $oldStyleCb
     duration {
-        wait_for ::exit_wait 2000
+        while {[llength $gotMsgs] < 4} {
+            wait_for ::gotMsgs 1000
+        }
+    } elapsed
+    assert {[approx $elapsed 500]}
+    assert {[llength $gotMsgs] == 4} 1
+    for {set i 0} {$i < 3} {incr i} {
+        lassign [lindex $gotMsgs $i] timedOut msg
+        assert {[nats::msg data $msg] eq "I need help 7.2"}
+        assert {!$timedOut}
+    }
+    lassign [lindex $gotMsgs 3] timedOut msg
+    assert {$timedOut}
+    array size ${conn}::requests
+} -result 0
+
+test pubsub-7.3 "Old-style request - async - timeout" -body {
+    $conn request service "500 I need help 7.3" -max_msgs 3 -timeout 100 -callback asyncReqCallback
+    duration {
+        wait_for ::inMsg
+    } elapsed
+    assert {[approx $elapsed 100]}
+    assert {$inMsg eq "timeout"}
+    array size ${conn}::requests
+} -result 0
+
+test pubsub-7.4 "Old-style request - sync - get all messages" -body {    
+    set responses [$conn request service "0 I need help 7.4" -max_msgs 3]
+    assert {[llength $responses] == 3} 1
+    foreach msg $responses {
+        assert {[nats::msg data $msg] eq "I need help 7.4"}
+    }
+    array size ${conn}::requests
+} -result 0
+
+test pubsub-7.5 "Old-style request - sync - not all messages" -body {
+    duration {
+        set responses [$conn request service "0 I need help 7.5" -max_msgs 4 -timeout 1000]
     } elapsed
     assert {[approx $elapsed 1000]}
-    assert {$msg_received == 3}
-    assert {[array size ${conn}::requests] == 0} 1
-} -cleanup {
+    assert {[llength $responses] == 3} 1
+    foreach msg $responses {
+        assert {[nats::msg data $msg] eq "I need help 7.5"}
+    }
+    array size ${conn}::requests
+} -result 0
+
+test pubsub-7.6 "Old-style request - sync - timeout" -body {
+    duration {
+        catch {$conn request service "500 I need help" -max_msgs 3 -timeout 100} err errOpts
+    } elapsed
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrTimeout}}
+    assert {$err eq "Request to service timed out"}
+    assert {[approx $elapsed 100]}
+    array size ${conn}::requests
+} -result 0 -cleanup {
     # will stop all 3 responders
     stopResponder $conn
     sleep 500

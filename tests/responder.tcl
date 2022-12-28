@@ -22,6 +22,10 @@ proc echo {subj msg reply} {
         puts "Responder $subj exiting..."
         exit
     }
+    if {$reply eq ""} {
+        puts "Responder: got empty reply; subj: $subj msg: $payload"
+        return
+    }
     after $delay [lambda {reply payload hdr} {
         if {$::dictMsg} {
             $::conn publish $reply $payload -header $hdr
@@ -38,7 +42,8 @@ package require nats
 lassign $argv subj queue dictMsg
 
 set conn [nats::connection new "Responder $subj"]
-$conn configure -servers nats://localhost:4222
+
+$conn configure -servers nats://localhost:4222 -max_reconnect_attempts 1 -connect_timeout 500
 $conn connect
 if {$queue eq "" } {
     $conn subscribe $subj -dictmsg $dictMsg -callback echo
@@ -48,4 +53,12 @@ if {$queue eq "" } {
 
 puts "Responder listening on $subj : $queue"
 $conn publish "$subj.ready" {} ;# test_utils::startResponder is waiting for this message
+
+trace add variable ${conn}::status write [lambda {var idx op } {
+    upvar $var s
+    if {$s eq $nats::status_closed} {
+        puts "[nats::_timestamp] Connection closed"
+        exit
+    }
+}]
 vwait forever

@@ -10,11 +10,15 @@ package require nats  ;# if not found, add it to TCLLIBPATH
 package require tcltest 2.5
 package require tcl::transform::observe
 package require tcl::chan::variable
-package require processman
+package require Thread
 package require oo::util
 package require control
 package require comm
 package require lambda
+
+if {$tcl_platform(platform) eq "windows"} {
+    package require twapi_process
+}
 
 set ::inMsg ""
 
@@ -22,6 +26,7 @@ namespace eval test_utils {
     variable sleepVar 0    
     variable commPort 4221
     variable responderReady 0
+    variable natsPid
     
     # sleep $delay ms in the event loop
     proc sleep {delay} {
@@ -212,35 +217,57 @@ namespace eval test_utils {
         }
     }
 
+    # start NATS server in the background unless it is already running; it must be available in $PATH
     proc startNats {id args} {
-        # stupid tcltest considers stderr from NATS as a test failure
-        if {$::tcl_platform(platform) eq "windows"} {
-            set dev_null NUL
-        } else {
-            set dev_null /dev/null
+        if {![needStartNats $args]} {
+            return
         }
-        processman::spawn $id nats-server {*}$args 2> $dev_null
-        sleep 500
+        variable natsPid
+        # tcltest -singleproc 0 considers stderr from NATS as a test failure; we don't need these logs, so just send them to /dev/null
+        # Tcllib's processman package doesn't offer much value
+        if {$::tcl_platform(platform) eq "windows"} {
+            set natsPid($id) [exec nats-server.exe {*}$args 2> NUL &]
+        } else {
+            set natsPid($id) [exec nats-server {*}$args 2> /dev/null &]
+        }
+        sleep 500 
         puts "[nats::_timestamp] Started $id"
     }
     
     proc stopNats {id} {
-        if {$::tcl_platform(platform) eq "windows"} {
-            # Note: it uses twapi::end_process and is NOT a graceful shutdown - that is possible with Ctrl+C in the NATS console
-            # I tried nats-server.exe --signal stop=PID, but it requires NATS to run as a Windows service
-            processman::kill $id
-        } else {
-            # processman::kill on Linux relies on odielib or Tclx packages that might not be available
-            set pid [processman::running $id]
-            if {$pid == 0} {
-                return
-            }
-            catch {exec kill $pid}
-            after 500
+        variable natsPid
+        if {![info exists natsPid($id)]} {
+            return
         }
+        if {$::tcl_platform(platform) eq "windows"} {
+            # Note: this is NOT a graceful shutdown - that is possible with Ctrl+C in the NATS console
+            # I tried nats-server.exe --signal stop=PID, but it requires NATS to run as a Windows service
+            twapi::end_process $natsPid($id)
+        } else {
+            exec kill $natsPid($id)
+            
+        }
+        unset natsPid($id)
+        after 500
         puts "[nats::_timestamp] Stopped $id"
     }
 
+    proc needStartNats {natsArgs} {
+        if {[llength $natsArgs]} {
+            return 1;# always start a "custom" NATS
+        }
+        if {$::tcl_platform(platform) eq "windows"} {
+            set count [llength [twapi::get_process_ids -name nats-server.exe]]
+        } else {
+            try {
+                set count [exec pgrep --exact --count nats-server]
+            } trap {CHILDSTATUS} {err opts} {
+                set count 0 ;# somewhat inconvenient that pgrep exits with $?=1 when nothing matched
+            }
+        }
+        return [expr {!$count}] ;# useful for troubleshooting: allow manually started nats-server -DV
+    }
+    
     proc execNatsCmd {args} {
         set output [exec -ignorestderr nats {*}$args]
         puts "[nats::_timestamp] Executed: nats $args"

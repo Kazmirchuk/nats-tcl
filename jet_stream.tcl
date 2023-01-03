@@ -68,7 +68,6 @@ oo::class create ::nats::jet_stream {
             callback str ""
             batch_size pos_int 1
             no_wait bool false
-            _custom_reqID valid_str null
         }
         set batch $batch_size
 
@@ -85,18 +84,27 @@ oo::class create ::nats::jet_stream {
                     batch   int null
                     no_wait bool null}]
         
-        set req_opts [list -dictmsg true -timeout $timeout -callback $callback -max_msgs $batch_size]
-        set result [$conn request $subject $message {*}$req_opts]
+        set req_opts [list -dictmsg true -timeout $timeout -max_msgs $batch_size]
         if {$callback ne ""} {
+            $conn request $subject $message -callback [mymethod ConsumeCb $callback] {*}$req_opts
             return
         }
+        set result [$conn request $subject $message {*}$req_opts]
         if {[dict lookup [dict get $result header] Status] == 408} {
-            # Request Timeout
-            throw {NATS ErrTimeout} [nats::header get $result Description]
+            throw {NATS ErrTimeout} [nats::header get $result Description] ;# Request Timeout
         }
         return $result
     }
 
+    method ConsumeCb {userCb timedOut msg} {
+        if {!$timedOut} {
+            if {[dict lookup [dict get $msg header] Status] == 408} {
+                set timedOut 1 ;# Request Timeout
+            }
+        }
+        {*}$userCb $timedOut $msg
+    }
+    
     # metadata is encoded in the reply field:
     # $JS.ACK.<stream>.<consumer>.<delivered>.<sseq>.<cseq>.<time>.<pending>
     method metadata {msg} {

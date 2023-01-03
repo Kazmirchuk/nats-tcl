@@ -10,8 +10,15 @@ cd $thisDir
 # by default, -tmpdir is the same as -testdir
 # to get messages about passed tests: -verbose bpe 
 tcltest::configure -testdir $thisDir {*}$argv
-# Note: using -singleproc 1 is not a very good idea,
-# because global variables created by one .test script will be inherited by following .test scripts
-# but Tcl debugger works in tests only with -singleproc 1
+# Default is -singleproc 0, so every .test file is run in a subprocess
+# PROs:
+# - isolation of global variables etc
+# - clear error message if Tcl crashes
+# CONs:
+# - Tcl debugger doesn't work
+# - any output to stderr is considered as a failure, and there's no -ignorestderr for tcltest
+# - need to [source] test_utils in every .test file
+
 # TODO print all output to tcltest::outputChannel
+
 exit [tcltest::runAllTests]

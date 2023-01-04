@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2022 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2020-2023 Petro Kazmirchuk https://github.com/Kazmirchuk
 # Copyright (c) 2021 ANT Solutions https://antsolutions.eu/
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
@@ -943,7 +943,7 @@ oo::class create ::nats::connection {
     }
     
     method +OK {cmd} {
-        ${logger}::debug $cmd
+        ${logger}::debug "+OK" ;# cmd is blank
     }
     
     method -ERR {cmd} {
@@ -1220,7 +1220,7 @@ namespace eval ::nats::msg {
 }
 namespace eval ::nats::header {
     proc add {msgVar key value} {
-        upvar $msgVar msg
+        upvar 1 $msgVar msg
         if {[dict exists $msg header $key]} {
             dict with msg header {
                 lappend $key $value
@@ -1232,7 +1232,7 @@ namespace eval ::nats::header {
     }
     # args may give more key-value pairs
     proc set {msgVar key value args} {
-        upvar $msgVar msg
+        upvar 1 $msgVar msg
         dict set msg header $key [list $value]
         if {[llength $args]} {
             if {[llength $args] % 2} {
@@ -1245,7 +1245,7 @@ namespace eval ::nats::header {
         return
     }
     proc delete {msgVar key} {
-        upvar $msgVar msg
+        upvar 1 $msgVar msg
         dict unset msg header $key
         return
     }
@@ -1439,7 +1439,7 @@ proc ::nats::_parse_args {args_list spec {doConfig 0}} {
         set args_arr([string trimleft $k -]) $v
     }
     if {$doConfig} {
-        upvar config config
+        upvar 1 config config
     }
     # validate only those arguments that were received from the user
     foreach {name type def} $spec {

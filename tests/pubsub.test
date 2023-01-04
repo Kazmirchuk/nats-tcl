@@ -1,4 +1,4 @@
-# Copyright (c) 2022 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2022-2023 Petro Kazmirchuk https://github.com/Kazmirchuk
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
@@ -20,27 +20,24 @@ $conn configure -servers nats://localhost:4222
 $conn connect
 
 test pubsub-1 "Publish and receive a message with a header" -body {
-    set obs [test_utils::chanObserver new $conn b]
     set msg_received 0
-    set sid [$conn subscribe nats_2.2 -callback subCallback -dictmsg true]
-
-    set msg_out [nats::msg create -subject "nats_2.2" -data "payload"]
-    nats::header set msg_out hdr1 "val 1" hdr2 "val2"
-    $conn publish_msg $msg_out
-    
-    wait_for ::inMsg
+    sniffer $conn {
+        set sid [$conn subscribe nats_2.2 -callback subCallback -dictmsg true]
+        set msg_out [nats::msg create -subject "nats_2.2" -data "payload"]
+        nats::header set msg_out hdr1 "val 1" hdr2 "val2"
+        $conn publish_msg $msg_out
+        wait_for ::inMsg
+    } readData writtenData -all_lines 1
     
     assert {[nats::msg subject $inMsg] eq "nats_2.2"}
     assert {[nats::msg data $inMsg] eq "payload"}
     assert {[nats::msg reply $inMsg] eq ""}
     assert {[nats::header get $inMsg "hdr1"] eq "val 1"}
     assert {[nats::header get $inMsg "hdr2"] eq "val2"}
-        
-    lassign [$obs getChanData 0 1] readData writtenData
-    $obs destroy
+
     # remove the first element in the list with SUB
-    assert {[lrange $writtenData 1 end] eq [list {HPUB nats_2.2  37 44} NATS/1.0 {hdr1: val 1} {hdr2: val2} {} payload {}]} 1
-    assert {$readData eq [list "HMSG nats_2.2 $sid 37 44" "NATS/1.0" "hdr1: val 1" "hdr2: val2" "" "payload" ""]}
+    assert {[lrange $writtenData 1 end] eq [list {HPUB nats_2.2  37 44} NATS/1.0 {hdr1: val 1} {hdr2: val2} {} payload]} 1
+    assert {$readData eq [list "HMSG nats_2.2 $sid 37 44" "NATS/1.0" "hdr1: val 1" "hdr2: val2" "" "payload"]}
 } -cleanup {
     $conn unsubscribe $sid
 }

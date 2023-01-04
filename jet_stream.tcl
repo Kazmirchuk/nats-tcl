@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2021-2023 Petro Kazmirchuk https://github.com/Kazmirchuk
 # Copyright (c) 2021 ANT Solutions https://antsolutions.eu/
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
@@ -511,7 +511,7 @@ proc ::nats::_dict2json {spec src} {
 
 # JetStream JSON API returns timestamps/duration in ns; convert them to ms before returning to a user
 proc ::nats::_ns2ms {dict_name args} {
-    upvar $dict_name d
+    upvar 1 $dict_name d
     foreach k $args {
         if {![dict exists $d $k]} {
             continue

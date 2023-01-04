@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2021-2023 Petro Kazmirchuk https://github.com/Kazmirchuk
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
@@ -22,16 +22,14 @@ test extra_opts-1 "Check verbose and pedantic modes" -body {
     # in order to get this -ERR I need to disable subject checking on client side
     $conn configure -verbose true -pedantic true -check_subjects false
     $conn connect -async ;# NATS sends back INFO, then replies +OK to our CONNECT
-    set obs [test_utils::chanObserver new $conn b]
-    while {[set ${conn}::status] ne $nats::status_connected} {
-        wait_for ${conn}::status
-    }
-    
-    $conn publish dummy_subj "Hello NATS" ;# NATS sends back +OK
-    $conn publish invalid_subj.* "Hello NATS 2" ;# NATS sends back -ERR and +OK (?!)
-    sleep 300
-    lassign [$obs getChanData 0] readData writtenData
-    $obs destroy
+    sniffer $conn {
+        while {[set ${conn}::status] ne $nats::status_connected} {
+            wait_for ${conn}::status
+        }
+        $conn publish dummy_subj "Hello NATS" ;# NATS sends back +OK
+        $conn publish invalid_subj.* "Hello NATS 2" ;# NATS sends back -ERR and +OK (?!)
+        sleep 300
+    } readData writtenData -all_lines 1
     
     assert {[set ${conn}::status] == $nats::status_connected} 1 ;# the connection should be still alive
 
@@ -53,13 +51,12 @@ test extra_opts-2 "Check the echo=false option" -body {
     set inMsg ""
     $conn configure -echo false
     $conn connect -async
-    set obs [test_utils::chanObserver new $conn w]
-    while {[set ${conn}::status] ne $nats::status_connected} {
-        wait_for ${conn}::status
-    }
-    set connectDict [getConnectOpts [$obs getChanData]]
-    $obs destroy
-    
+    sniffer $conn {
+        while {[set ${conn}::status] ne $nats::status_connected} {
+            wait_for ${conn}::status
+        }
+    } rdata wdata
+    set connectDict [getConnectOpts $wdata]
     assert {[dict get $connectDict echo] eq "false"}
         
     $conn subscribe no_echo -callback subCallback
@@ -78,13 +75,12 @@ test extra_opts-2 "Check the echo=false option" -body {
 test extra_opts-3 "PING/PONG protocol initiated by client" -body {
     $conn configure -ping_interval 1000 ;# default is 2 minutes
     $conn connect
-    set obs [test_utils::chanObserver new $conn b]
-    duration {
-        wait_for ${conn}::pong 2000
-    } elapsed
+    sniffer $conn {
+        duration {
+            wait_for ${conn}::pong 2000
+        } elapsed
+    } readData writtenData -all_lines 1 -filter_ping 0
     assert {$elapsed >= 1000 && $elapsed < 1300}
-    lassign [$obs getChanData 0 0] readData writtenData
-    $obs destroy
     # check that the exchange occurred exactly once
     assert {[lsearch -all $writtenData "PING"] == 0}
     assert {[lsearch -all $readData "PONG"] == 0}
@@ -103,10 +99,9 @@ test extra_opts-4.1 "PING/PONG protocol initiated by server" -body {
     } quick_ping.conf ]
     startNats quick_ping -c $conf
     $conn connect
-    set obs [test_utils::chanObserver new $conn b]
-    sleep 2400
-    lassign [$obs getChanData 0 0] readData writtenData
-    $obs destroy
+    sniffer $conn {
+        sleep 2400
+    } readData writtenData -all_lines 1 -filter_ping 0
     # check that the exchange occurred exactly once
     assert {[lsearch -all $writtenData "PONG"] == 0}
     assert {[lsearch -all $readData "PING"] == 0}
@@ -116,7 +111,7 @@ test extra_opts-4.1 "PING/PONG protocol initiated by server" -body {
 
 test extra_opts-4.2 "PING/PONG - no response from the client" -body {
     set bufferTrace [lambda {var idx op } {
-        upvar $var buffer
+        upvar 1 $var buffer
         set pos [lsearch $buffer "PONG"]
         if {$pos == -1} {
             return

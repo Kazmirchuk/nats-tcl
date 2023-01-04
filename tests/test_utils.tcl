@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2021 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2020-2023 Petro Kazmirchuk https://github.com/Kazmirchuk
 # Copyright (c) 2021 ANT Solutions https://antsolutions.eu/
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
@@ -11,8 +11,6 @@ package require tcltest 2.5
 package require tcl::transform::observe
 package require tcl::chan::variable
 package require Thread
-package require oo::util
-package require control
 package require comm
 package require lambda
 
@@ -27,7 +25,7 @@ namespace eval test_utils {
     variable commPort 4221
     variable responderReady 0
     variable natsPid
-    
+
     # sleep $delay ms in the event loop
     proc sleep {delay} {
         after $delay [list set ::test_utils::sleepVar 1]
@@ -46,136 +44,94 @@ namespace eval test_utils {
     }
     
     proc wait_flush {conn} {
-        # wait until Flusher executes
-        vwait ${conn}::timers(flush)
+        vwait ${conn}::timers(flush) ;# wait until Flusher executes
     }
     
-    # I don't like that [time] ignores the result of $body, and I need milliseconds rather than microseconds
-    proc duration {body var} {
-        upvar 1 $var elapsed
+    # [time] returns microseconds, while I need milliseconds
+    proc duration {script varName} {
+        upvar 1 $varName elapsed
         set now [clock millis]
-        set code [catch {uplevel 1 $body} result]
+        # trying to manipulate the error stack to hide duration+uplevel is too much hassle, so just let it propagate
+        uplevel 1 $script
         set elapsed [expr {[clock millis] - $now}]
-        if {$code == 1} {
-            return -errorinfo [::control::ErrorInfoAsCaller uplevel duration] -errorcode $::errorCode -code error $result
+    }
+    
+    proc sniffer {connection script readVar writtenVar args} {
+        nats::_parse_args $args {
+            all_lines bool false
+            filter_ping bool true
+        }
+        
+        upvar 1 $readVar r_link
+        upvar 1 $writtenVar w_link
+        upvar 1 ${connection}::sock chanHandle
+        
+        # tcl::chan::variable can't work with local variables
+        # and it requires explicit namespace qualifiers
+        set readChan [tcl::chan::variable ::test_utils::readData]
+        chan configure $readChan -translation binary
+        set writeChan [tcl::chan::variable ::test_utils::writtenData]
+        chan configure $writeChan -translation binary
+        
+        if {$chanHandle eq ""} {
+            # the socket hasn't been created yet
+            trace add variable ${connection}::sock write [lambda { writeChan readChan var idx op} {
+                upvar 1 $var chanHandle
+                if {$chanHandle ne ""} {
+                    tcl::transform::observe $chanHandle $writeChan $readChan
+                }
+            } $writeChan $readChan]
         } else {
-            return -code $code $result
+            tcl::transform::observe $chanHandle $writeChan $readChan
         }
+        try {
+            uplevel 1 $script
+        } finally {
+            if {[chan names $chanHandle] ne ""} {
+                # if the socket hasn't been closed yet, remove the transformation
+                chan pop $chanHandle
+            }
+            close $writeChan
+            close $readChan
+            foreach traceInfo [trace info variable ${connection}::sock] {
+                # remove our trace, if any
+                lassign $traceInfo op cmd
+                if {$op eq "write"} {
+                    trace remove variable ${connection}::sock write $cmd
+                }
+            }
+            set r_link $::test_utils::readData
+            set w_link $::test_utils::writtenData
+            unset ::test_utils::readData
+            unset ::test_utils::writtenData
+        }
+        set r_link [snifferBinToList $r_link $all_lines $filter_ping]
+        set w_link [snifferBinToList $w_link $all_lines $filter_ping]
+        return
     }
-    
-    oo::class create chanObserver {
-        variable writeChan readChan ;# channels for sniffed data
-        variable writingObs readingObs ;# variables backing the channels - reset when a socket is re-created
-        variable writtenData readData ;# all data is accumulated here
-        variable obsMode conn sock
-        # $mode can be r (read), w (write), b (both)
-        constructor {nats_conn mode} {
-            set conn $nats_conn
-            set obsMode $mode
-            set readChan ""
-            set writeChan ""
-            set sock [set ${conn}::sock]
-            if { $sock ne ""} {
-                # the socket already exists - start monitoring it now
-                my TraceCmd ${conn}::sock ignored ignored
-            }
-            trace add variable ${conn}::sock write [mymethod TraceCmd]
-        }
         
-        destructor {
-            trace remove variable ${conn}::sock write [mymethod TraceCmd]
+    # private proc: convert raw data sent through socket into a list of NATS protocol tokens
+    proc snifferBinToList {binData all_lines filter_ping} {
+        # NATS uses \r\n as a protocol delimiter
+        # [split] supports splitting only by a single character, so at first replace \r\n with plain \n
+        # and since binData ends with \r\n, resulting list will have 1 empty element in the end - discard it
+        set result [lrange [split [string map {\r\n \n} $binData] \n] 0 end-1]
+        #set result [string map {\r\n \n} $binData]
+        if {$filter_ping} {
+            # usually we are not interested in PING/PONG
+            set result [lmap e $result {
+                if {$e eq "PING" || $e eq "PONG"} {
+                    continue
+                }
+                set e
+            }]
         }
-        
-        method TraceCmd  {var idx op } {
-            upvar $var s
-            if {$s ne ""} {
-                # new socket was created - start monitoring it
-                set sock $s
-                set readingObs ""
-                set writingObs ""
-                switch -- $obsMode {
-                    r {
-                        set readChan [tcl::chan::variable [self object]::readingObs]
-                        tcl::transform::observe $s {} $readChan
-                    }
-                    w {
-                        set writeChan [tcl::chan::variable [self object]::writingObs]
-                        tcl::transform::observe $s $writeChan {}
-                    }
-                    b {
-                        set readChan [tcl::chan::variable [self object]::readingObs]
-                        set writeChan [tcl::chan::variable [self object]::writingObs]
-                        tcl::transform::observe $s $writeChan $readChan
-                    }
-                }
-            } else {
-                # the socket was closed - copy the sniffed data
-                my Finalize
-            }
+        if {$all_lines} {
+            return $result
         }
-
-        method Finalize {} {
-            # really important! remove the transformation
-            if {$sock ne ""} {
-                catch {chan pop $sock}
-                set sock ""
-            }
-            if {$readChan ne ""} {
-                close $readChan
-                set readChan ""
-                append readData $readingObs
-                set readingObs ""
-            }
-            if {$writeChan ne ""} {
-                close $writeChan
-                set writeChan ""
-                append writtenData $writingObs
-                set writingObs ""
-            }
-        }
-        
-        method getChanData { {firstLine 1} {filterPing 1}} {
-            # in case the socket is still open
-            my Finalize
-            switch -- $obsMode {
-                r {
-                    set varList "readData"
-                }
-                w {
-                    set varList "writtenData"
-                }
-                b {
-                    set varList [list readData writtenData]
-                }
-            }
-            foreach v $varList {
-                upvar 0 $v chanData
-                # these variables contain \r\r\n in each line, and I couldn't get rid of them with chan configure -translation
-                set chanData [string map {\r {} } $chanData]
-                if {$filterPing} {
-                    # usually we are not interested in PING/PONG
-                    set chanData [string map {PING\n {} PONG\n {} } $chanData]
-                }
-                set chanData [split $chanData \n]
-                if {$firstLine} {
-                    # we are interested only in the first line of sniffed data
-                    set chanData [lindex $chanData 0]
-                }
-            }
-            switch -- $obsMode {
-                r {
-                    return $readData
-                }
-                w {
-                    return $writtenData
-                }
-                b {
-                    return [list $readData $writtenData]
-                }
-            }
-        }
+        # usually we are interested only in the first line of sniffed data
+        return [lindex $result 0]
     }
-    
     proc getConnectOpts {data} {
         set pos [string first " " $data] ;# skip CONNECT straight to the beginning of JSON
         return [json::json2dict [string range $data $pos+1 end]]
@@ -186,18 +142,18 @@ namespace eval test_utils {
         # default is "warn"
         [$conn logger]::setlevel debug
         trace add variable ${conn}::status write [lambda {var idx op } {
-            upvar $var s
+            upvar 1 $var s
             puts "[nats::_timestamp] New status: $s"
         }]
         trace add variable ${conn}::subscriptions write [lambda {var idx op } {
-            upvar ${var}($idx) s
+            upvar 1 ${var}($idx) s
             puts "[nats::_timestamp] sub($idx): $s"
         }]
         trace add variable ${conn}::subscriptions unset [lambda {var idx op } {
             puts "[nats::_timestamp] sub($idx) unset"
         }]
         trace add variable ${conn}::requests write [lambda {var idx op } {
-            upvar ${var}($idx) r
+            upvar 1 ${var}($idx) r
             puts "[nats::_timestamp] req($idx): $r"
         }]
         trace add variable ${conn}::requests unset [lambda {var idx op } {
@@ -345,7 +301,7 @@ namespace eval test_utils {
         return true
     }
     
-    namespace export sleep wait_for wait_flush chanObserver duration startNats stopNats startResponder stopResponder startFakeServer stopFakeServer sendFakeServer \
+    namespace export sleep wait_for wait_flush sniffer duration startNats stopNats startResponder stopResponder startFakeServer stopFakeServer sendFakeServer \
                      assert approx getConnectOpts debugLogging subCallback asyncReqCallback execNatsCmd dict_in
 }
 

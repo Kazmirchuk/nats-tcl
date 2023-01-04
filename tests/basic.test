@@ -20,82 +20,80 @@ set conn [nats::connection new "BasicNats"]
 
 $conn configure -servers nats://localhost:4222
 
-test basic-1 "Connect NATS" -body {
-    set obs [test_utils::chanObserver new $conn w]
-    $conn connect
-    set chanData [$obs getChanData]
+test basic-1 "Connect to NATS" -body {
+    sniffer $conn {
+        $conn connect
+    } readData writtenData
+    assert {[string match {INFO *} $readData]}
     # if the server supports headers, the client sends headers:true, no_responders:true as well, no need to check for them, so just *
-    assert {[string match {CONNECT {"verbose":false,"pedantic":false,"tls_required":false,"name":"BasicNats","lang":"Tcl","version":"1.0","protocol":1,"echo":true*}} $chanData]}
-    $obs destroy
+    assert {[string match {CONNECT {"verbose":false,"pedantic":false,"tls_required":false,"name":"BasicNats","lang":"Tcl"*}} $writtenData]}
     set ${conn}::last_error
 } -result {}
 
 test basic-2.1 "Subscribe to a message" -body {
-    set obs [test_utils::chanObserver new $conn w]
-    set sub_id [$conn subscribe subject1 -callback subCallback]
-    assert {[set ${conn}::timers(flush)] ne ""} ;# check that flush has been scheduled
-    wait_flush $conn
+    sniffer $conn {
+        set sub_id [$conn subscribe subject1 -callback subCallback]
+        assert {[set ${conn}::timers(flush)] ne ""} ;# check that flush has been scheduled
+        wait_flush $conn
+    } ignored writtenData
     assert {[set ${conn}::timers(flush)] eq ""} ;# no more pending flushes
-    set chanData [$obs getChanData]
     # double space is not accidental
-    assert {$chanData eq "SUB subject1  $sub_id"}
-    $obs destroy
+    assert {$writtenData eq "SUB subject1  $sub_id"}
     set sub_id
 }  -result 1
 
 test basic-2.2 "Publish a message" -body {
-    set obs [chanObserver new $conn b]
-    duration {
-        $conn publish subject1 hello
-        wait_for ::inMsg
-    } elapsed
-    lassign [$obs getChanData] readData writtenData
+    sniffer $conn {
+        duration {
+            $conn publish subject1 hello
+            wait_for ::inMsg
+        } elapsed
+    } readData writtenData
+    
     assert {$writtenData eq {PUB subject1  5}}
     assert {$readData eq "MSG subject1 $sub_id 5"}
     assert {$elapsed < 100} ;# time to flush and receive MSG from the server
-    $obs destroy
     set ::inMsg
 } -result "hello"
 
 test basic-2.3 "Unsubscribe and publish again" -body {
-    set obs [chanObserver new $conn b]
-    $conn unsubscribe $sub_id
-    assert {[info exists ${conn}::subscriptions($sub_id)] == 0}
-    $conn publish subject1 "one more hello"
-    duration {
-        wait_flush $conn
-    } elapsed
-    lassign [$obs getChanData 0] readData writtenData
+    set out_msg "one more hello"
+    sniffer $conn {
+        $conn unsubscribe $sub_id
+        $conn publish subject1 $out_msg
+        duration {
+            wait_flush $conn
+        } elapsed
+    } readData writtenData -all_lines 1
+    assert {![info exists ${conn}::subscriptions($sub_id)]}
     assert {[lindex $writtenData 0] eq "UNSUB $sub_id"}
-    assert {[lindex $writtenData 1] eq "PUB subject1  [string length {one more hello}]"}
+    assert {[lindex $writtenData 1] eq "PUB subject1  [string length $out_msg]"}
     assert {$elapsed < 50}
     # check that the server did not send MSG back
     assert {[llength $readData] == 0}
-    $obs destroy
     set ::inMsg
 } -result "hello"
 
 test basic-3.1 "Subscribe to a limited number of messages" -body {
-    set obs [test_utils::chanObserver new $conn b]
     set msg_count 0
-    set sub_id [$conn subscribe subj_max_msgs -max_msgs 10 -callback [lambda {subject message replyTo} {
-        incr ::msg_count
-        assert {$message == $::msg_count}
-    }]]
-    # we send 20 messages, but will receive only 10 back
-    for {set i 1} {$i <= 20} {incr i} {
-        $conn publish subj_max_msgs $i
-    }
-    wait_flush $conn
-    sleep 400
-    lassign [$obs getChanData 0] rdata wdata
+    sniffer $conn {
+        set sub_id [$conn subscribe subj_max_msgs -max_msgs 10 -callback [lambda {subject message replyTo} {
+            incr ::msg_count
+            assert {$message == $::msg_count}
+        }]]
+        # we send 20 messages, but will receive only 10 back
+        for {set i 1} {$i <= 20} {incr i} {
+            $conn publish subj_max_msgs $i
+        }
+        while {$msg_count < 10} {
+            wait_for ::msg_count
+        }
+    } rdata wdata -all_lines 1
     assert {[lindex $wdata 0] eq "SUB subj_max_msgs  $sub_id"}
     assert {[lindex $wdata 1] eq "UNSUB $sub_id 10"}
-    assert {[lindex $wdata end-1] == 20} ;# payload of the last sent message
-    # each MSG will create 2 rows in rdata, so check that UNSUB was effective, and we've received 10 messages back +/- one or PING
-    assert {[llength $rdata] < 25} 1
-
-    $obs destroy
+    assert {[lindex $wdata end] == 20} ;# payload of the last sent message
+    # check that UNSUB was effective, and we've received 10 messages back
+    assert {[llength [lsearch -inline -all -glob $rdata MSG*]] == 10}
     set msg_count
 }  -result 10
 
@@ -113,41 +111,40 @@ test basic-4.1 "Subscribe and unsubscribe with -max_msgs" -body {
     for {set i 1} {$i <= 5} {incr i} {
         $conn publish subj_max_msgs2 $i
     }
-    wait_flush $conn
-    sleep 400
-    assert {$msg_count == 5}
+    while {$msg_count < 5} {
+        wait_for ::msg_count
+    }
 
     # unsubscribe after 5 more messages, i.e. 10 in total
-    set obs [test_utils::chanObserver new $conn w]
-    $conn unsubscribe $sub_id -max_msgs 10
-
-    # send 10 more messages
-    for {set i 6} {$i <= 15} {incr i} {
-        $conn publish subj_max_msgs2 $i
-    }
-    wait_flush $conn
-    set chanData [$obs getChanData]
-    $obs destroy
-    assert {$chanData eq "UNSUB $sub_id 10"}
-    sleep 400
+    sniffer $conn {
+        $conn unsubscribe $sub_id -max_msgs 10
+    
+        # send 10 more messages
+        for {set i 6} {$i <= 15} {incr i} {
+            $conn publish subj_max_msgs2 $i
+        }
+        while {$msg_count < 10} {
+            wait_for ::msg_count
+        }
+    } rdata wdata
+    assert {$wdata eq "UNSUB $sub_id 10"}
     assert {[info exists ${conn}::subscriptions($sub_id)] == 0}
     set msg_count
 } -result 10
 
-test basic-5.1 "Synchronous request" -setup {
-    startResponder $conn
-} -body {
-    #set obs [chanObserver new $conn b]
-    duration {
-        set result [$conn request service "0 hello"]
-    } elapsed
+startResponder $conn
+    
+test basic-5.1 "Synchronous request" -body {
+    # trying to sniff here causes Tcl to crash
+    #sniffer $conn {
+        duration {
+            set result [$conn request service "0 hello"]
+        } elapsed
+    #} rdata wdata -all_lines 1
     assert {$elapsed < 200}  ;# actual roundtrip time on localhost ~40ms
-    #lassign [$obs getChanData 0] rdata wdata
-    #$obs destroy
     set result
 } -result "hello"
 
-# TODO: chan obs causes Tcl to crash in basic-6
 #test basic-5.2 "Synchronous request - written to socket" -body {
 #    lassign $wdata sub pub payload
 #    # the first request starts with subscribing to INBOX.<random>.*
@@ -255,15 +252,14 @@ for {set i 0} { $i < 5} {incr i} {
 }
 
 test basic-14 "Synchronous request with multiple responders" -body {
-    set obs [chanObserver new $conn r]
-    duration {
-        set result [$conn request multi_subj "0 foobar"] ;# will return the first reply
-    } elapsed
+    sniffer $conn {
+        duration {
+            set result [$conn request multi_subj "0 foobar"] ;# will return the first reply
+        } elapsed
+        sleep 500 ;# ensure we receive the other 4 replies
+    } rdata wdata -all_lines 1
     assert {$elapsed < 300}
-    sleep 500 ;# ensure we receive the other 4 replies
-    set rdata [$obs getChanData 0]
     assert { [llength [lsearch -exact -all $rdata "foobar"]] == 5} 1
-    $obs destroy
     set result
 } -result "foobar"
 

@@ -18,24 +18,21 @@ set conn [nats::connection new]
 
 test auth-1.1 "Connect to NATS using login/password in URL" -body {
     $conn configure -servers nats://bilbo:ring@localhost:4222
-    set obs [test_utils::chanObserver new $conn w]
-    $conn connect
-    # check that the connection really works
-    $conn subscribe subject1 -callback subCallback
-    $conn publish subject1 "Hello Bilbo"
-    wait_for ::inMsg
-    
+    sniffer $conn {
+        $conn connect
+        # check that the connection really works
+        $conn subscribe subject1 -callback subCallback
+        $conn publish subject1 "Hello Bilbo"
+        wait_for ::inMsg
+    } rdata wdata
     assert {[set ${conn}::serverInfo(auth_required)]}
-    
-    set connectDict [getConnectOpts [$obs getChanData]]
+    set connectDict [getConnectOpts $wdata]
     assert {[dict get $connectDict user] eq "bilbo"}
-    assert {[dict get $connectDict pass] eq "ring"}
-    
+    assert {[dict get $connectDict pass] eq "ring"}    
     set inMsg
 } -result "Hello Bilbo" -cleanup {
     $conn disconnect
     $conn reset -servers
-    $obs destroy
 }
 
 test auth-1.2 "Connect to NATS using login/password in options" -body {
@@ -76,21 +73,19 @@ startNats NATS_token --auth 12345
 
 test auth-2.1 "Connect to NATS using an authentication token in URL" -body {
     $conn configure -servers nats://12345@localhost:4222
-    set obs [test_utils::chanObserver new $conn w]
-    $conn connect
-    $conn subscribe subject1 -callback subCallback
-    $conn publish subject1 "hello token"
-    wait_for ::inMsg
-    
+    sniffer $conn {
+        $conn connect
+        $conn subscribe subject1 -callback subCallback
+        $conn publish subject1 "hello token"
+        wait_for ::inMsg
+    } rdata wdata
     assert {[dict get [$conn server_info] auth_required]}
-    set connectDict [getConnectOpts [$obs getChanData]]
+    set connectDict [getConnectOpts $wdata]
     assert {[dict get $connectDict auth_token] eq "12345"}
-        
     set inMsg
 } -result "hello token" -cleanup {
     $conn disconnect
     $conn reset -servers
-    $obs destroy
 }
 
 test auth-2.2 "Connect to NATS using an authentication token in options" -body {

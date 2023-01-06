@@ -12,8 +12,6 @@ package require json
 package require json::write
 package require oo::util
 package require coroutine
-package require logger
-package require textutil::split
 
 namespace eval ::nats {
     # improvised enum
@@ -55,12 +53,18 @@ set ::nats::_option_spec {
 oo::class create ::nats::connection {
     # "private" variables
     variable config sock coro timers counters subscriptions requests serverPool \
-             subjectRegex outBuffer requestsInboxPrefix pong logger
+             subjectRegex outBuffer requestsInboxPrefix pong
     
     # "public" variables, so that users can set up traces if needed
     variable status last_error serverInfo
 
-    constructor { { conn_name "" } } {
+    constructor { { conn_name "" } args } {
+        nats::_parse_args $args {
+            logger valid_str ""
+            log_chan valid_str stdout
+            log_level valid_str warn
+        }
+        # TODO make log_level enum
         set status $nats::status_closed
         set last_error ""
 
@@ -69,21 +73,6 @@ oo::class create ::nats::connection {
             set config($name) $def
         }
         set config(name) $conn_name
-        # create a logger with a unique name, smth like Obj58
-        set loggerName [namespace tail [self object]]
-        if {$conn_name ne ""} {
-            append loggerName "_$conn_name"
-        }
-        set logger [logger::init $loggerName]
-        # default timestamp of the logger looks like Tue Jul 13 15:16:58 CEST 2021, which is not very useful
-        foreach lvl [logger::levels] {
-            interp alias {} ::nats::_log_stdout_$lvl {} ::nats::_log_stdout $loggerName $lvl
-            ${logger}::logproc $lvl ::nats::_log_stdout_$lvl
-        }
-        
-        # default level in the logger is debug, it's too verbose
-        ${logger}::setlevel warn
-        
         set sock "" ;# the TCP socket
         set coro "" ;# the coroutine handling readable and writeable events on the socket
         array set timers {ping {} flush {} connect {} }
@@ -95,20 +84,59 @@ oo::class create ::nats::connection {
         # old-style sync requests: timedOut: bool, inMsgs: list
         # old-style async requests: timer, callback, subID
         array set serverInfo {} ;# INFO from a current NATS server
-        set serverPool [nats::server_pool new [self object]] 
         # JetStream uses subjects with $
         set subjectRegex {^[[:alnum:]$_-]+$}
         # all outgoing messages are put in this list before being flushed to the socket,
         # so that even when we are reconnecting, messages can still be sent
         set outBuffer [list]
         set requestsInboxPrefix ""
-        set pong 1 ;# sync variable for vwait in "ping". Set to 1 to avoid a check for existing timer in "ping"
+        set pong 0
+        my InitLogger $logger $log_chan $log_level
+        set serverPool [nats::server_pool new [self object]] 
     }
     
     destructor {
         my disconnect
         $serverPool destroy
-        ${logger}::delete
+    }
+    
+    method InitLogger {logger log_chan log_level} {
+        if {$logger ne ""} {
+            # user has provided a pre-configured logger object
+            logger::import -namespace log [${logger}::servicename]
+            # log_chan and log_level have no effect in this case
+            return
+        }
+        # the logger package in Tcllib is crap, so make my own by default
+        # default output is stdout; default level is warn
+        set loggerName $config(name)
+        if {$loggerName eq ""} {
+            set loggerName [namespace tail [self object]]
+        }
+        
+        namespace eval log "variable logChannel $log_chan; \
+                            variable loggerName $loggerName;"
+        
+        proc log::log {level msg} {
+            variable logChannel
+            variable loggerName
+            puts $logChannel "\[[nats::timestamp] $loggerName $level\] $msg"
+        }
+        
+        proc log::suppressed {level msg} {}
+        
+        set belowLogLevel 0
+        # we use only these 4 logging levels
+        foreach level {error warn info debug} {
+            if {$belowLogLevel} {
+                interp alias {} [self object]::log::${level} {} [self object]::log::suppressed $level
+            } else {
+                interp alias {} [self object]::log::${level} {} [self object]::log::log $level
+            }
+            if {$log_level eq $level} {
+                set belowLogLevel 1
+            }
+        }
     }
     
     method cget {option} {
@@ -161,10 +189,6 @@ oo::class create ::nats::connection {
         }
     }
     
-    method logger {} {
-        return $logger
-    }
-    
     method current_server {} {
         return [lrange [$serverPool current_server] 0 1]  ;# drop the last element - schema (nats/tls)
     }
@@ -212,9 +236,9 @@ oo::class create ::nats::connection {
             # in case all calls to [socket] fail immediately and we exhaust the server pool
             # so we shouldn't vwait in this case
             if {$status == $nats::status_connecting} {
-                ${logger}::debug "Waiting for connection status"
+                log::debug "Waiting for connection status"
                 my CoroVwait [self object]::status
-                ${logger}::debug "Finished waiting for connection status"
+                log::debug "Finished waiting for connection status"
             }
             if {$status != $nats::status_connected} {
                 # if there's only one server in the pool, it's more user-friendly to report the actual error
@@ -367,7 +391,7 @@ oo::class create ::nats::connection {
         }
         set reply [dict get $msg reply]
         if {$reply ne ""} {
-            ${logger}::warn "request_msg: the reply $reply will be ignored"
+            log::warn "request_msg: the reply $reply will be ignored"
         }
         return [my request [dict get $msg subject] [dict get $msg data] \
                    -header [dict get $msg header] \
@@ -502,7 +526,7 @@ oo::class create ::nats::connection {
         set timerID [after $timeout [list set [self object]::pong 0]]
 
         lappend outBuffer "PING"
-        ${logger}::debug "sending PING"
+        log::debug "sending PING"
         my ScheduleFlush
         my CoroVwait [self object]::pong
         if {$pong} {
@@ -528,7 +552,7 @@ oo::class create ::nats::connection {
     # or we got a timeout for async request
     method NewStyleRequestCb {reqID subj msg reply} {
         if {$subj eq ""} {
-            ${logger}::debug "New-style async request $reqID timed out"
+            log::debug "New-style async request $reqID timed out"
             set callback [dict get $requests($reqID) callback]
             after 0 [list {*}$callback 1 ""]
             unset requests($reqID)
@@ -540,7 +564,7 @@ oo::class create ::nats::connection {
         
         if {![info exists requests($reqID)]} {
             # ignore all further responses, if >1 arrives; or it could be an overdue message
-            #${logger}::debug "NewStyleRequestCb got [string range $msg 0 15] on reqID $reqID - discarded"
+            #log::debug "NewStyleRequestCb got [string range $msg 0 15] on reqID $reqID - discarded"
             return
         }
         #TODO check status 408
@@ -568,7 +592,7 @@ oo::class create ::nats::connection {
             return
         }
         if {$subj eq ""} {
-            ${logger}::debug "Old-style async request $reqID timed out"
+            log::debug "Old-style async request $reqID timed out"
             set subID [dict get $requests($reqID) subID]
             set callback [dict get $requests($reqID) callback]
             unset requests($reqID)
@@ -615,7 +639,7 @@ oo::class create ::nats::connection {
         } else {
             # we get here only from method disconnect
             lassign [my current_server] host port
-            ${logger}::info "Closing connection to $host:$port" ;# in case of broken socket, the error will be logged elsewhere
+            log::info "Closing connection to $host:$port" ;# in case of broken socket, the error will be logged elsewhere
             # make sure we wait until successful flush, if connection was not broken
             chan configure $sock -blocking 1
             foreach msg $outBuffer {
@@ -647,7 +671,7 @@ oo::class create ::nats::connection {
         }
         
         lappend outBuffer "PING"
-        ${logger}::debug "Sending PING"
+        log::debug "Sending PING"
         incr counters(pendingPings)
         my ScheduleFlush
     }
@@ -688,12 +712,12 @@ oo::class create ::nats::connection {
             # if it throws ErrNoServers, we have exhausted all servers in the pool
             # we must stop the coroutine, so let the error propagate
             lassign [$serverPool next_server] host port ;# it may wait for reconnect_time_wait ms!
-            ${logger}::info "Connecting to the server at $host:$port"
+            log::info "Connecting to the server at $host:$port"
             try {
                 # socket -async can throw e.g. in case of a DNS resolution failure
                 if {![catch {package present iocp_inet}]} {
                     set sock [iocp::inet::socket -async $host $port]
-                    ${logger}::debug "Created IOCP socket"
+                    log::debug "Created IOCP socket"
                 } else {
                     set sock [socket -async $host $port]
                 }
@@ -768,7 +792,7 @@ oo::class create ::nats::connection {
             array set serverInfo [json::json2dict $cmd]
             if {[info exists serverInfo(connect_urls)]} {
                 set urls $serverInfo(connect_urls)
-                ${logger}::debug "Got connect_urls: $urls"
+                log::debug "Got connect_urls: $urls"
                 foreach url $urls {
                     $serverPool add $url
                 }
@@ -865,7 +889,7 @@ oo::class create ::nats::connection {
                     throw {NATS STOP_CORO} "Stop coroutine" ;# break from the main loop
                 }
                 default {
-                    ${logger}::error "MSG: unknown reason $reason"
+                    log::error "MSG: unknown reason $reason"
                 }
             }
         }
@@ -874,7 +898,7 @@ oo::class create ::nats::connection {
         
         if {![info exists subscriptions($subID)]} {
             # if we unsubscribe while there are pending incoming messages, we may get here - nothing to do
-            #${logger}::debug "Got [string range $payload 0 15] on subID $subID - discarded"
+            #log::debug "Got [string range $payload 0 15] on subID $subID - discarded"
             return
         }
         set maxMsgs [dict get $subscriptions($subID) maxMsgs]
@@ -883,7 +907,8 @@ oo::class create ::nats::connection {
         set postEvent [dict get $subscriptions($subID) post]
         if {$expHdrLength > 0} {
             try {
-                set header [nats::_parse_header [string range $payload 0 $expHdrLength-1]]
+                # the header ends with \r\n\r\n that we can drop before parsing
+                set header [nats::_parse_header [string range $payload 0 $expHdrLength-5]]
             } trap {NATS ErrBadHeaderMsg} err {
                 # invalid header causes an async error, nevertheless the message is delivered, see nats.go, func processMsg
                 my AsyncError ErrBadHeaderMsg $err
@@ -921,19 +946,19 @@ oo::class create ::nats::connection {
     
     method PING {cmd} {
         lappend outBuffer "PONG"
-        ${logger}::debug "received PING, sending PONG"
+        log::debug "received PING, sending PONG"
         my ScheduleFlush
     }
     
     method PONG {cmd} {
         set pong 1
         set counters(pendingPings) 0
-        ${logger}::debug "received PONG"
+        log::debug "received PONG"
         if {$status != $nats::status_connected} {
             # auth OK: finalise the connection process
             $serverPool current_server_connected true
             lassign [my current_server] host port
-            ${logger}::info "Connected to the server at $host:$port"
+            log::info "Connected to the server at $host:$port"
             # exit from vwait in "connect"
             set status $nats::status_connected
             my RestoreSubs
@@ -943,7 +968,7 @@ oo::class create ::nats::connection {
     }
     
     method +OK {cmd} {
-        ${logger}::debug "+OK" ;# cmd is blank
+        log::debug "+OK" ;# cmd is blank
     }
     
     method -ERR {cmd} {
@@ -987,7 +1012,7 @@ oo::class create ::nats::connection {
     
     method CoroMain {} {
         set coro [info coroutine]
-        ${logger}::debug "Started coroutine $coro"
+        log::debug "Started coroutine $coro"
         try {
             my ConnectNextServer
             while {1} {
@@ -1003,13 +1028,13 @@ oo::class create ::nats::connection {
         } trap {NATS} {msg opts} {
             # ErrNoServers error from next_server leads here; don't overwrite the real last_error
             # need to log this in case of "connect -async"
-            ${logger}::error $msg
+            log::error $msg
         } trap {} {msg opts} {
-            ${logger}::error "Unexpected error: $msg $opts"
+            log::error "Unexpected error: $msg $opts"
         }
         set status $nats::status_closed
         # TODO call disconnect?
-        ${logger}::debug "Finished coroutine $coro"
+        log::debug "Finished coroutine $coro"
         set coro ""
     }
     
@@ -1082,11 +1107,11 @@ oo::class create ::nats::connection {
                 if {$protocol_op in {MSG HMSG INFO -ERR +OK PING PONG}} {
                     my $protocol_op $protocol_arg
                 } else {
-                    ${logger}::warn "Invalid protocol $protocol_op $protocol_arg"
+                    log::warn "Invalid protocol $protocol_op $protocol_arg"
                 }
             }
             default {
-                ${logger}::error "CoroMain: unknown reason $reason"
+                log::error "CoroMain: unknown reason $reason"
             }
         }
     }
@@ -1136,7 +1161,7 @@ oo::class create ::nats::connection {
     }
     
     method AsyncError {code msg { doReconnect 0 }} {
-        ${logger}::error $msg
+        log::error $msg
         # errorMessage used to be just "message", but I already have many other messages in the code
         set last_error [dict create code "NATS $code" errorMessage $msg]
         if {$doReconnect} {
@@ -1147,7 +1172,7 @@ oo::class create ::nats::connection {
     
     method StartConnectTimer {} {
         set timers(connect) [after $config(connect_timeout) [list $coro connect_timeout]]
-        ${logger}::debug "Started connection timer $timers(connect)"
+        log::debug "Started connection timer $timers(connect)"
     }
     
     method CancelConnectTimer {} {
@@ -1155,7 +1180,7 @@ oo::class create ::nats::connection {
             return
         }
         after cancel $timers(connect)
-        ${logger}::debug "Cancelled connection timer $timers(connect)"
+        log::debug "Cancelled connection timer $timers(connect)"
         set timers(connect) ""
     }
 }
@@ -1270,65 +1295,60 @@ namespace eval ::nats::header {
     namespace ensemble create
 }
 
-# ------------------------ all following procs are private! --------------------------------------
-proc ::nats::_timestamp {} {
+# returns ISO 8601 date-time with milliseconds in a local timezone
+proc ::nats::timestamp {} {
     # workaround for not being able to format current time with millisecond precision
     # should not be needed in Tcl 8.7, see https://core.tcl-lang.org/tips/doc/trunk/tip/423.md
     set t [clock milliseconds]
-    set timeStamp [format "%s.%03d" \
-                      [clock format [expr {$t / 1000}] -format %T] \
-                      [expr {$t % 1000}] ]
-    return $timeStamp
+    return [format "%s.%03d" \
+                [clock format [expr {$t / 1000}] -format "%Y-%m-%dT%H:%M:%S"] \
+                [expr {$t % 1000}] ]
 }
 
-proc ::nats::_log_stdout {service level text} {
-    puts "\[[nats::_timestamp] $service $level\] $text"
-}
+# ------------------------ all following procs are private! --------------------------------------
 # returns a dict, where each key points to a list of values
 # NB! unlike HTTP headers, in NATS headers keys are case-sensitive
 proc ::nats::_parse_header {header} {
     set result [dict create]
-    set i 0
-    foreach line [textutil::split::splitx $header {\r\n}] {
-        if {$line eq ""} {
-            # the header finishes with \r\n\r\n, so splitx will return a list with an empty element in the end
-            continue
+    # textutil::split::splitx is slower than [string map]+split and RFC 5322 doesn't allow LF in a field body
+    set split_headers [split [string map {\r\n \n} $header] \n]
+    # the first line is always NATS status like NATS/1.0 404 No Messages
+    set split_headers [lassign $split_headers first_line]
+    # the code and description are optional
+    set descr [lassign $first_line protocol status_code]
+    if {![string match "NATS/*" $protocol]} {
+        throw {NATS ErrBadHeaderMsg} "Unknown protocol $protocol"
+    }
+    if {[string is integer -strict $status_code]} {
+        dict set result Status $status_code ;# non-int status is allowed but ignored
+    }
+    if {$descr ne ""} {
+        dict set result Description $descr
+    }
+    # process remaining fields
+    foreach line $split_headers {
+        lassign [split $line :] k v
+        set k [string trim $k]
+        set v [string trim $v]
+        if {$k ne ""} {
+            # empty keys are ignored, but empty values are allowed, see func readMIMEHeader in nats.go
+            dict lappend result $k $v
         }
-        if {$i == 0} {
-            set descr [lassign $line protocol msg_status]
-            if {$protocol ne "NATS/1.0"} {
-                throw {NATS ErrBadHeaderMsg} "Unknown protocol $protocol"
-            }
-            if {$msg_status ne ""} {
-                if {! ([string is integer $msg_status] && $msg_status > 0)} {
-                    throw {NATS ErrBadHeaderMsg} "Invalid status $msg_status"
-                }
-                dict set result Status $msg_status
-            }
-            if {$descr ne ""} {
-                dict set result Description $descr
-            }
-        } else {
-            lassign [split $line :] k v
-            set k [string trim $k]
-            set v [string trim $v]
-            if {$k ne "" && $v ne ""} {
-                dict lappend result $k $v
-            }
-            # strictly speaking, I should raise an error if k or v are empty
-        }
-        incr i
     }
     return $result
 }
 proc ::nats::_format_header { header } {
     # other official clients accept inline status & description in the first line when *parsing* headers
     # but when serializing headers, status & description are treated just like usual headers
-    # so I will do the same, and it simplifies my job here
     set result "NATS/1.0\r\n"
     dict for {k v} $header {
+        set k [string trim $k]
+        if {$k eq ""} {
+            continue
+        }
+        # each key points to a list of values (normally - just one)
         foreach el $v {
-            append result "$k: $el\r\n"
+            append result "$k: [string trim $el]\r\n"
         }
     }
     # don't append one more \r\n here! the header is put into outBuffer as a separate element

@@ -13,7 +13,7 @@ source test_utils.tcl
 
 startNats NATS
 
-set conn [nats::connection new "AdvancedPubSub"]
+set conn [nats::connection new "AdvancedPubSub" -log_chan [tcltest::outputChannel]]
 #debugLogging $conn
 
 $conn configure -servers nats://localhost:4222
@@ -43,7 +43,7 @@ test pubsub-1 "Publish and receive a message with a header" -body {
 }
 
 test pubsub-2 "Send requests with headers" -setup {
-    startResponder $conn nats_2.2 "" 1
+    set resp [responder new -subject nats_2.2]
 } -body {
     # test a sync request
     set msg_out [nats::msg create -subject "nats_2.2" -data "0 msg with header"]
@@ -66,7 +66,7 @@ test pubsub-2 "Send requests with headers" -setup {
     set response [$conn request_msg $msg_out -timeout 500 -dictmsg 0]
     assert { $response eq "msg3 with header" }
 } -cleanup {
-    stopResponder $conn nats_2.2
+    $resp destroy
 }
 
 test pubsub-3 "Receive a message with a header from NATS CLI" -body {
@@ -84,7 +84,7 @@ test pubsub-3 "Receive a message with a header from NATS CLI" -body {
         set ::msg_received 1
     }]
     wait_flush $conn
-    execNatsCmd pub -H hdr1:val1 -H hdr2:val2 -H hdr2:val3 nats_cli payload
+    execNatsCmd pub -H hdr1:val1 -H hdr2:val2 -H hdr2:val3 nats_cli payload 2>@1
     wait_for ::msg_received 1000
     set msg_received
 } -result 1
@@ -120,7 +120,7 @@ test pubsub-6 "Receive no-responders from an async request" -body {
 
 test pubsub-7.1 "Old-style request - async - get all messages" -setup {
     for {set i 0} { $i < 3} { incr i } {
-        startResponder $conn
+        responder new
     }
     set oldStyleCb [lambda {timedOut msg} {
         lappend ::gotMsgs [list $timedOut $msg]
@@ -202,13 +202,12 @@ test pubsub-7.6 "Old-style request - sync - timeout" -body {
     assert {[approx $elapsed 100]}
     array size ${conn}::requests
 } -result 0 -cleanup {
-    # will stop all 3 responders
-    stopResponder $conn
+    stopAllResponders
     sleep 500
 }
 
 test pubsub-9 "Send 2 sync requests in coroutines" -setup {
-    startResponder $conn
+    set resp [responder new]
 } -body {
     # prove that vwait in "request" is coroutine-aware
     set results [list]
@@ -226,7 +225,7 @@ test pubsub-9 "Send 2 sync requests in coroutines" -setup {
     # the second response will arrive sooner than the first. This would be impossible without coroutines
     set results
 } -result "msg2 msg1" -cleanup {
-    stopResponder $conn
+    $resp destroy
 }
 
 $conn destroy

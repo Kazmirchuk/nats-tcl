@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2021-2023 Petro Kazmirchuk https://github.com/Kazmirchuk
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
@@ -25,7 +25,7 @@ oo::class create ::nats::server_pool {
         try {
             set newServer [my parse $url]
         } trap {NATS INVALID_ARG} err {
-            [$conn logger]::warn $err ;# very unlikely
+            [info object namespace $conn]::log::warn $err ;# very unlikely
             return
         }
         foreach s $servers {
@@ -35,7 +35,7 @@ oo::class create ::nats::server_pool {
         }
         dict set newServer discovered true
         set servers [linsert $servers 0 $newServer] ;# recall that current server is always at the end of the list
-        [$conn logger]::debug "Added $url to the server pool"
+        [info object namespace $conn]::log::debug "Added $url to the server pool"
     }
     
     # used by "configure". All or nothing: if at least one URL is invalid, the old configuration stays intact
@@ -112,7 +112,7 @@ oo::class create ::nats::server_pool {
             set servers [lreplace $servers 0 0]
             # max_reconnect_attempts == -1 means "unlimited". See also selectNextServer in nats.go
             if {$attempts >= 0 && [dict get $s reconnects] >= $attempts} {
-                [$conn logger]::debug "Removed [dict get $s host]:[dict get $s port] from the server pool"
+                [info object namespace $conn]::log::debug "Removed [dict get $s host]:[dict get $s port] from the server pool"
                 continue
             }
             
@@ -121,7 +121,7 @@ oo::class create ::nats::server_pool {
             if {$now < $last_attempt + $wait} {
                 # other clients simply wait for reconnect_time_wait, but this approach is more precise
                 set waiting_time [expr {$wait - ($now - $last_attempt)}]
-                [$conn logger]::debug "Waiting for $waiting_time before connecting to the next server"
+                [info object namespace $conn]::log::debug "Waiting for $waiting_time before connecting to the next server"
                 set timer [after $waiting_time [info coroutine]]
                 set reason [yield] ;# may be interrupted by a user calling disconnect
                 if {$reason eq "stop" } {

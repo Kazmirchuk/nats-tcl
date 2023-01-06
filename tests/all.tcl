@@ -18,6 +18,4 @@ tcltest::configure -testdir $thisDir -verbose pe {*}$argv
 # - any output to stderr is considered as a failure, and there's no -ignorestderr for tcltest
 # - need to [source] test_utils in every .test file
 
-# TODO print all output to tcltest::outputChannel
-
 exit [tcltest::runAllTests]

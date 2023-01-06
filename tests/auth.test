@@ -13,7 +13,7 @@ source test_utils.tcl
 
 startNats NATS_user --user bilbo --pass ring
 
-set conn [nats::connection new]
+set conn [nats::connection new "auth_test" -log_chan [tcltest::outputChannel]]
 #debugLogging $conn
 
 test auth-1.1 "Connect to NATS using login/password in URL" -body {
@@ -126,7 +126,7 @@ test auth-2.4 "Try connecting to a cluster with no credentials - OK" -body {
     $conn reset -servers -randomize
 }
 
+$conn destroy
 stopNats NATS
 stopNats NATS_token
-
 tcltest::cleanupTests

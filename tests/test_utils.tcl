@@ -11,8 +11,9 @@ package require tcltest 2.5
 package require tcl::transform::observe
 package require tcl::chan::variable
 package require Thread
-package require comm
 package require lambda
+package require logger
+package require logger::utils
 
 if {$tcl_platform(platform) eq "windows"} {
     package require twapi_process
@@ -21,11 +22,16 @@ if {$tcl_platform(platform) eq "windows"} {
 set ::inMsg ""
 
 namespace eval test_utils {
-    variable sleepVar 0    
-    variable commPort 4221
-    variable responderReady 0
+    variable sleepVar 0
     variable natsPid
-
+    
+    logger::initNamespace [namespace current] info
+    set appenderArgs [list -outputChannel [tcltest::outputChannel]]
+    # format the messages in the same manner as nats::connection
+    lappend appenderArgs -conversionPattern {\[[nats::timestamp] %c %p\] %m}
+    logger::utils::applyAppender -appender fileAppend -service test_utils -appenderArgs $appenderArgs
+    unset appenderArgs
+    
     # sleep $delay ms in the event loop
     proc sleep {delay} {
         after $delay [list set ::test_utils::sleepVar 1]
@@ -187,7 +193,7 @@ namespace eval test_utils {
             set natsPid($id) [exec nats-server {*}$args 2> /dev/null &]
         }
         sleep 500 
-        puts "[nats::_timestamp] Started $id"
+        log::info "Started $id"
     }
     
     proc stopNats {id} {
@@ -205,7 +211,7 @@ namespace eval test_utils {
         }
         unset natsPid($id)
         after 500
-        puts "[nats::_timestamp] Stopped $id"
+        log::info "Stopped $id"
     }
 
     proc needStartNats {natsArgs} {
@@ -226,50 +232,61 @@ namespace eval test_utils {
     
     proc execNatsCmd {args} {
         set output [exec -ignorestderr nats {*}$args]
-        puts "[nats::_timestamp] Executed: nats $args"
+        log::info "Executed: nats $args"
         return $output
     }
     
-    proc startResponder {conn {subj "service"} {queue ""} {dictMsg 0}} {
-        $conn subscribe "$subj.ready" -max_msgs 1 -callback [lambda {subject message replyTo} {
-            set test_utils::responderReady 1
-        }]
-        exec [info nameofexecutable] responder.tcl $subj $queue $dictMsg &
-        wait_for test_utils::responderReady 1000
+    oo::class create responder {
+        variable responderThread
+        variable id
+        
+        constructor {args} {
+            nats::_parse_args $args {
+                id valid_str ""
+                subject valid_str service
+                queue valid_str ""
+            }
+            if {$id eq ""} {
+                set id [namespace tail [self object]]
+            }
+
+            set thread_script {
+                source responder.tcl
+                thread::wait
+                responder::shutdown
+            }
+            
+            set responderThread [thread::create -joinable -preserved $thread_script]
+            # return value of thread::send is the same as [catch]
+            if {[thread::send $responderThread [list responder::init $id $subject $queue] result] == 1} {
+                error "Failed to initialise responder $id: $result"
+            }
+            set log_msg "Responder $id listening on $subject"
+            if {$queue ne ""} {
+                append log_msg " queue: $queue"
+            }
+            [logger::servicecmd test_utils]::info $log_msg
+            # no need in thread::errorproc - if there's an unexpected error in the thread, it will be logged to stderr by itself
+        }
+        
+        destructor {
+            thread::release $responderThread ;# makes the thread return from thread::wait
+            thread::join $responderThread
+            [logger::servicecmd test_utils]::info "Responder $id finished"
+        }
     }
     
-    # send a NATS message to stop the responder gracefully; remember to "sleep" a bit after calling this function!
-    proc stopResponder {conn {subj "service"}} {
-        $conn publish $subj [list 0 exit]
-        wait_flush $conn
+    proc stopAllResponders {} {
+        foreach r [info class instances ::test_utils::responder] {
+            $r destroy
+        }
     }
-    
-    # comm ID (port) is hard-coded to 4223
-    proc startFakeServer {} {
-        set scriptPath [file join [file dirname [info script]] fake_server.tcl]
-        exec [info nameofexecutable] $scriptPath &
-        sleep 500
-    }
-    
-    proc stopFakeServer {} {
-        variable commPort
-        comm::comm send -async $commPort quit
-        sleep 500 ;# make sure it exits before starting a new fake or real NATS server
-    }
-    
-    proc sendFakeServer {data} {
-        variable commPort
-        comm::comm send $commPort $data
-    }
-    
-    # control:assert is garbage and doesn't perform substitution on failed expressions, so I can't even know a value of offending variable etc
+
+    # control::assert is garbage and doesn't perform substitution on failed expressions, so I can't even know a value of offending variable etc
     # if assert is used in a callback and fails, it will not be reported as a failed test, because it runs in the global scope
     # so it must always be followed by a change to a variable that is then checked/vwaited in the test itself
     proc assert {expression { subst_commands 0} } {
-        set code [catch {uplevel 1 [list expr $expression]} res]
-        if {$code} {
-            return -code $code $res
-        }
+        set res [uplevel 1 [list expr $expression]]
         if {![string is boolean -strict $res]} {
             return -code error "invalid boolean expression: $expression"
         }
@@ -301,7 +318,7 @@ namespace eval test_utils {
         return true
     }
     
-    namespace export sleep wait_for wait_flush sniffer duration startNats stopNats startResponder stopResponder startFakeServer stopFakeServer sendFakeServer \
+    namespace export sleep wait_for wait_flush sniffer duration startNats stopNats responder stopAllResponders \
                      assert approx getConnectOpts debugLogging subCallback asyncReqCallback execNatsCmd dict_in
 }
 

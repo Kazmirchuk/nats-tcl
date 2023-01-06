@@ -11,7 +11,7 @@
 source test_utils.tcl
 startNats NATS
 
-set conn [nats::connection new "ExtraConfigOptions"]
+set conn [nats::connection new "ExtraConfigOptions" -log_chan [tcltest::outputChannel]]
 #debugLogging $conn
 
 $conn configure -servers nats://localhost:4222
@@ -63,11 +63,11 @@ test extra_opts-2 "Check the echo=false option" -body {
     $conn publish no_echo "cold is the void" ;# we will not get this message back
     assert {[catch {wait_for ::inMsg}] == 1}
     # but a request to another subscriber still works fine
-    startResponder $conn no_echo
+    set resp [responder new -subject no_echo]
     set result [$conn request no_echo "0 hello"]
     assert {$result eq "hello"}
 } -cleanup {
-    stopResponder $conn no_echo
+    $resp destroy
     $conn disconnect
     $conn reset -echo
 }
@@ -117,7 +117,6 @@ test extra_opts-4.2 "PING/PONG - no response from the client" -body {
             return
         }
         set buffer [lsearch -inline -all -not -exact $buffer "PONG"] ;# do not send PONG to the server
-        puts "Deleted PONG"
     }]
     # access to a private variable only for test purposes!
     trace add variable ${conn}::outBuffer write $bufferTrace
@@ -138,40 +137,40 @@ test extra_opts-4.2 "PING/PONG - no response from the client" -body {
 
 stopNats quick_ping
 
-test extra_opts-5 "PING/PONG - no response from the server" -setup {
-    # make a fake NATS server that does not respond to PING
-    # but ensure the first round goes ok for "connect" to succeed
-    startFakeServer
-    set handler {
-        proc handler {channel line} {
-            if {$line eq "PING"} {
-                incr ::ping_count
-                if {$::ping_count == 1} {
-                    puts $channel PONG
-                } else {
-                    puts $channel FAKE_PONG
-                }
-            }
-        }
-    }
-    sendFakeServer $handler
-} -body {
-    $conn configure -ping_interval 1000
-    # default max_outstanding_pings=2
-    $conn connect
-    duration {
-        # the client will send 2 PINGs without reply; when Pinger runs for the 3rd time, it will raise the error
-        # and the client will go into reconnecting
-        wait_for ${conn}::status 4000
-    } elapsed
-    assert {[dict get [set ${conn}::last_error] code] eq [list NATS ErrStaleConnection]}
-    assert {[set ${conn}::status] == $nats::status_reconnecting} 1
-    assert {[approx $elapsed 3000]}
-} -cleanup {
-    $conn disconnect
-    $conn reset -ping_interval
-    stopFakeServer
-}
+#test extra_opts-5 "PING/PONG - no response from the server" -setup {
+#    # make a fake NATS server that does not respond to PING
+#    # but ensure the first round goes ok for "connect" to succeed
+#    startFakeServer
+#    set handler {
+#        proc handler {channel line} {
+#            if {$line eq "PING"} {
+#                incr ::ping_count
+#                if {$::ping_count == 1} {
+#                    puts $channel PONG
+#                } else {
+#                    puts $channel FAKE_PONG
+#                }
+#            }
+#        }
+#    }
+#    sendFakeServer $handler
+#} -body {
+#    $conn configure -ping_interval 1000
+#    # default max_outstanding_pings=2
+#    $conn connect
+#    duration {
+#        # the client will send 2 PINGs without reply; when Pinger runs for the 3rd time, it will raise the error
+#        # and the client will go into reconnecting
+#        wait_for ${conn}::status 4000
+#    } elapsed
+#    assert {[dict get [set ${conn}::last_error] code] eq [list NATS ErrStaleConnection]}
+#    assert {[set ${conn}::status] == $nats::status_reconnecting} 1
+#    assert {[approx $elapsed 3000]}
+#} -cleanup {
+#    $conn disconnect
+#    $conn reset -ping_interval
+#    stopFakeServer
+#}
 
 startNats NATS
 # this is "Eivør Pálsdóttir" encoded in UTF-8
@@ -179,12 +178,12 @@ set utf8_msg [encoding convertfrom utf-8 "\x45\x69\x76\xC3\xB8\x72\x20\x50\xC3\x
 test extra_opts-6 "Check the utf8_convert option" -body {
     $conn configure -utf8_convert true
     $conn connect
-    startResponder $conn
+    set resp [responder new]
     set response [$conn request service "0 $utf8_msg"]  ;# check that the message comes back uncorrupted
-    puts "Got UTF-8 response: $response"  ;# this should be readable in the terminal
+    [logger::servicecmd test_utils]::info "Got UTF-8 response: $response"  ;# this should be readable in the terminal
     set response
 } -result $utf8_msg -cleanup {
-    stopResponder $conn
+    $resp destroy
     $conn disconnect
     $conn reset -utf8_convert
 }

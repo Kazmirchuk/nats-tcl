@@ -15,7 +15,7 @@ source test_utils.tcl
 
 startNats NATS
 
-set conn [nats::connection new "BasicNats"]
+set conn [nats::connection new "BasicNats" -log_chan [tcltest::outputChannel]]
 #debugLogging $conn
 
 $conn configure -servers nats://localhost:4222
@@ -132,7 +132,7 @@ test basic-4.1 "Subscribe and unsubscribe with -max_msgs" -body {
     set msg_count
 } -result 10
 
-startResponder $conn
+set resp [responder new]
     
 test basic-5.1 "Synchronous request" -body {
     # trying to sniff here causes Tcl to crash
@@ -248,7 +248,7 @@ test basic-13 "Binary message request" -body {
 }
 
 for {set i 0} { $i < 5} {incr i} {
-    startResponder $conn multi_subj
+    set resp [responder new -subject multi_subj] 
 }
 
 test basic-14 "Synchronous request with multiple responders" -body {
@@ -278,16 +278,15 @@ test basic-15 "Asynchronous request with multiple responders" -body {
     set msg_count ;# check the lambda was called only once
 } -result 1
 
-stopResponder $conn multi_subj ;# stop all 5 responders
-sleep 500
+stopAllResponders
 
 test basic-16 "Queue groups and publish with replyTo" -body {
     # start 2 responders on queue group QG1 and 3 more on QG2
     for {set i 0} { $i < 2} {incr i} {
-        startResponder $conn test_qg QG1
+        set resp [responder new -subject test_qg -queue QG1]
     }
     for {set i 0} { $i < 3} {incr i} {
-        startResponder $conn test_qg QG2
+        set resp [responder new -subject test_qg -queue QG2]
     }
     set msg_count 0
     set myReplyTo [$conn inbox]
@@ -302,12 +301,8 @@ test basic-16 "Queue groups and publish with replyTo" -body {
     sleep 200
     set msg_count
     # $conn unsubscribe $sub_id - deliberately don't unsubscribe - $conn disconnect should delete all subscriptions
-} -result 2
-
-# because of queue groups I need to send as many "exit" messages as number of responders in the biggest queue group
-for {set i 0} { $i < 3} {incr i} {
-    stopResponder $conn test_qg
-    sleep 500
+} -result 2 -cleanup {
+    stopAllResponders
 }
 
 test basic-17 "Check internal state before and after disconnection" -body {
@@ -323,15 +318,16 @@ test basic-17 "Check internal state before and after disconnection" -body {
 }
 
 test basic-18 "Disconnection cancels pending async requests" -body {
+    set resp [responder new]
     set inMsg -1
     $conn connect
     $conn request service "2000 foo" -timeout 1000 -callback asyncReqCallback
     wait_flush $conn
-    # don't stop the responder before sending the request, otherwise we'll get no-responders immediately
-    stopResponder $conn
     $conn disconnect
     sleep 1500  ;# more than -timeout
     assert {$inMsg == -1} ;# asyncReqCallback was not invoked
+} -cleanup {
+    $resp destroy
 }
 
 $conn destroy

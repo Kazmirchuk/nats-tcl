@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2020-2023 Petro Kazmirchuk https://github.com/Kazmirchuk
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
@@ -15,7 +15,7 @@ source test_utils.tcl
 # and to filter out duplicate servers
 startNats NATS1 --cluster nats://localhost:4248 --cluster_name "TCL_TEST" --client_advertise "localhost:4222"
   
-set conn [nats::connection new "Cluster"]
+set conn [nats::connection new "Cluster" -log_chan [tcltest::outputChannel]]
 #debugLogging $conn
 
 # I don't know if there is a reliable way to trigger a NATS server to send out INFO with connect_urls
@@ -26,7 +26,7 @@ test cluster-1.1 "Dynamic expansion of the server pool with INFO message" -body 
     $conn configure -servers nats://localhost:4222 
     $conn connect -async
     assert {[set ${conn}::status] == $nats::status_connecting}
-    test_utils::sleep 500
+    sleep 500
     assert {[set ${conn}::status] == $nats::status_connected}
     assert {[llength [$conn all_servers]] == 1}
     # add another server to the cluster
@@ -54,19 +54,19 @@ test cluster-1.1 "Dynamic expansion of the server pool with INFO message" -body 
 }
 
 test cluster-1.2 "Restore subscriptions after reconnecting to another server" -body {
-    $conn subscribe eupnea -callback test_utils::simpleCallback
+    $conn subscribe eupnea -callback subCallback
     wait_flush $conn
     # exact behaviour and timings of reconnecting change from run to run, so only async checks are reliable 
     set all_statuses [list]
     set status_trace [lambda {var idx op } {
-        upvar $var s
+        upvar 1 $var s
         lappend ::all_statuses $s
     }]
     trace add variable ${conn}::status write $status_trace
     
     set all_errors [list]
     set error_trace [lambda {var idx op } {
-        upvar $var e
+        upvar 1 $var e
         if {$e ne ""} {
             lappend ::all_errors $e
         }
@@ -74,7 +74,7 @@ test cluster-1.2 "Restore subscriptions after reconnecting to another server" -b
     trace add variable ${conn}::last_error write $error_trace
     
     stopNats NATS1
-    set test_utils::simpleMsg ""
+    set inMsg ""
     $conn publish foo bar ;# find out about the failure ASAP
     wait_flush $conn
     sleep 500
@@ -88,7 +88,7 @@ test cluster-1.2 "Restore subscriptions after reconnecting to another server" -b
     assert {$port == 5222}
 
     $conn publish eupnea "back online"
-    wait_for test_utils::simpleMsg
+    wait_for ::inMsg
 } -result "back online" -cleanup {
     trace remove variable ${conn}::status write $status_trace
     trace remove variable ${conn}::last_error write $error_trace
@@ -97,13 +97,13 @@ test cluster-1.2 "Restore subscriptions after reconnecting to another server" -b
 }
 
 test cluster-2 "Outgoing messages are buffered while reconnecting" -body {
-    set test_utils::simpleMsg ""
+    set inMsg ""
     startNats NATS1 ;# no need to create a real cluster for this test case
     startNats NATS2 -p 5222
 
     $conn configure -servers [list nats://localhost:4222 nats://localhost:5222] -randomize false
     $conn connect
-    $conn subscribe subj -callback test_utils::simpleCallback -max_msgs 1
+    $conn subscribe subj -callback subCallback -max_msgs 1
     wait_flush $conn
     stopNats NATS1
     after 500 ;# let the server quit, but do not process events yet
@@ -114,11 +114,11 @@ test cluster-2 "Outgoing messages are buffered while reconnecting" -body {
     lassign [$conn current_server] host port
     assert {$host eq "localhost"}
     assert {$port == 5222}
-    assert {$test_utils::simpleMsg eq "Buffered message"}
+    assert {$inMsg eq "Buffered message"}
     $conn publish subj "Buffered message 2"
     sleep 500
     # check that UNSUB worked too
-    set test_utils::simpleMsg
+    set inMsg
 } -result "Buffered message" -cleanup {
     $conn disconnect
     stopNats NATS1

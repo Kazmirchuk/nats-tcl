@@ -1,4 +1,4 @@
-# Copyright (c) 2022 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2022-2023 Petro Kazmirchuk https://github.com/Kazmirchuk
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
@@ -7,46 +7,43 @@
 # - publishing and subscription to messages with headers
 # - treating a received message as a dict
 # - the no-responders feature
-# - request with -max_msgs option
+# - old-style requests with -max_msgs option
 # - coroutine-aware sync request
 source test_utils.tcl
 
 startNats NATS
 
-set conn [nats::connection new "AdvancedPubSub"]
+set conn [nats::connection new "AdvancedPubSub" -log_chan [tcltest::outputChannel]]
 #debugLogging $conn
 
 $conn configure -servers nats://localhost:4222
 $conn connect
 
 test pubsub-1 "Publish and receive a message with a header" -body {
-    set obs [test_utils::chanObserver new $conn b]
     set msg_received 0
-    set sid [$conn subscribe nats_2.2 -callback test_utils::simpleCallback -dictmsg true]
+    sniffer $conn {
+        set sid [$conn subscribe nats_2.2 -callback subCallback -dictmsg true]
+        set msg_out [nats::msg create -subject "nats_2.2" -data "payload"]
+        nats::header set msg_out hdr1 "val 1" hdr2 "val2"
+        $conn publish_msg $msg_out
+        wait_for ::inMsg
+    } readData writtenData -all_lines 1
+    
+    assert {[nats::msg subject $inMsg] eq "nats_2.2"}
+    assert {[nats::msg data $inMsg] eq "payload"}
+    assert {[nats::msg reply $inMsg] eq ""}
+    assert {[nats::header get $inMsg "hdr1"] eq "val 1"}
+    assert {[nats::header get $inMsg "hdr2"] eq "val2"}
 
-    set msg_out [nats::msg create -subject "nats_2.2" -data "payload"]
-    nats::header set msg_out hdr1 "val 1" hdr2 "val2"
-    $conn publish_msg $msg_out
-    
-    wait_for test_utils::simpleMsg
-    
-    assert {[nats::msg subject $test_utils::simpleMsg] eq "nats_2.2"}
-    assert {[nats::msg data $test_utils::simpleMsg] eq "payload"}
-    assert {[nats::msg reply $test_utils::simpleMsg] eq ""}
-    assert {[nats::header get $test_utils::simpleMsg "hdr1"] eq "val 1"}
-    assert {[nats::header get $test_utils::simpleMsg "hdr2"] eq "val2"}
-        
-    lassign [$obs getChanData 0 1] readData writtenData
-    $obs destroy
     # remove the first element in the list with SUB
-    assert {[lrange $writtenData 1 end] eq [list {HPUB nats_2.2  37 44} NATS/1.0 {hdr1: val 1} {hdr2: val2} {} payload {}]} 1
-    assert {$readData eq [list "HMSG nats_2.2 $sid 37 44" "NATS/1.0" "hdr1: val 1" "hdr2: val2" "" "payload" ""]}
+    assert {[lrange $writtenData 1 end] eq [list {HPUB nats_2.2  37 44} NATS/1.0 {hdr1: val 1} {hdr2: val2} {} payload]} 1
+    assert {$readData eq [list "HMSG nats_2.2 $sid 37 44" "NATS/1.0" "hdr1: val 1" "hdr2: val2" "" "payload"]}
 } -cleanup {
     $conn unsubscribe $sid
 }
 
 test pubsub-2 "Send requests with headers" -setup {
-    startResponder $conn nats_2.2 "" 1
+    set resp [responder new -subject nats_2.2]
 } -body {
     # test a sync request
     set msg_out [nats::msg create -subject "nats_2.2" -data "0 msg with header"]
@@ -59,17 +56,17 @@ test pubsub-2 "Send requests with headers" -setup {
     # test an async request
     nats::msg set msg_out -data "0 msg2 with header"
     
-    $conn request_msg $msg_out -timeout 500 -dictmsg true -callback test_utils::asyncReqCallback
-    wait_for test_utils::simpleMsg 1000
-    assert {[nats::msg data $test_utils::simpleMsg] eq "msg2 with header"} 1
-    assert {[nats::header get $test_utils::simpleMsg "hdr1"] eq "value 1"} 1
+    $conn request_msg $msg_out -timeout 500 -dictmsg true -callback asyncReqCallback
+    wait_for ::inMsg 1000
+    assert {[nats::msg data $inMsg] eq "msg2 with header"} 1
+    assert {[nats::header get $inMsg "hdr1"] eq "value 1"} 1
     
     # test a sync request, but get back a plain message with no header
     nats::msg set msg_out -data "0 msg3 with header"
     set response [$conn request_msg $msg_out -timeout 500 -dictmsg 0]
     assert { $response eq "msg3 with header" }
 } -cleanup {
-    stopResponder $conn nats_2.2
+    $resp destroy
 }
 
 test pubsub-3 "Receive a message with a header from NATS CLI" -body {
@@ -87,17 +84,17 @@ test pubsub-3 "Receive a message with a header from NATS CLI" -body {
         set ::msg_received 1
     }]
     wait_flush $conn
-    execNatsCmd pub -H hdr1:val1 -H hdr2:val2 -H hdr2:val3 nats_cli payload
+    execNatsCmd pub -H hdr1:val1 -H hdr2:val2 -H hdr2:val3 nats_cli payload 2>@1
     wait_for ::msg_received 1000
     set msg_received
 } -result 1
 
 test pubsub-4 "Receive no-responders from a subscription" -body {
     set inbox [$conn inbox]
-    $conn subscribe $inbox -callback test_utils::simpleCallback -dictmsg true
-    $conn publish nats_2.2 -reply $inbox
-    wait_for test_utils::simpleMsg
-    assert {[nats::msg no_responders $test_utils::simpleMsg]} 1
+    $conn subscribe $inbox -callback subCallback -dictmsg true
+    $conn publish "unknown_subject" "" -reply $inbox
+    wait_for ::inMsg
+    assert {[nats::msg no_responders $inMsg]} 1
 }
 
 test pubsub-5 "Receive no-responders from a sync request" -body {
@@ -110,64 +107,107 @@ test pubsub-5 "Receive no-responders from a sync request" -body {
 }
 
 test pubsub-6 "Receive no-responders from an async request" -body {
-    set msg_received 0
     $conn request nats_2.2 "no response" -timeout 500 -dictmsg 1 -callback [lambda {timedOut msg} {
         assert {$timedOut}
         assert {[nats::msg no_responders $msg]} 1
-        set ::msg_received 1
+        set ::inMsg 1
     }]
     duration {
-        wait_for ::msg_received
+        wait_for ::inMsg
     } elapsed
     assert { $elapsed < 100 }
 }
 
-test pubsub-7 "Gather multiple responses to a request" -setup {
+test pubsub-7.1 "Old-style request - async - get all messages" -setup {
     for {set i 0} { $i < 3} { incr i } {
-        startResponder $conn
+        responder new
     }
-} -body {
-    set msg_received 0
-    set exit_wait 0
-    $conn request service "0 I need help" -max_msgs 3 -callback [lambda {timedOut msg} {
-        assert {!$timedOut}
-        assert {$msg eq "I need help"}
-        incr ::msg_received
-        if {$::msg_received == 3} {
-            set ::exit_wait 1
-        }
+    set oldStyleCb [lambda {timedOut msg} {
+        lappend ::gotMsgs [list $timedOut $msg]
     }]
-    wait_for ::exit_wait 2000
-    assert {$msg_received == 3}
-    assert {[array size ${conn}::requests] == 0} 1
+    set gotMsgs [list]
+} -body {
+    $conn request service "0 I need help 7.1" -max_msgs 3 -callback $oldStyleCb
+    while {[llength $gotMsgs] < 3} {
+        wait_for ::gotMsgs
+    }
+    assert {[llength $gotMsgs] == 3} 1
+    foreach i $gotMsgs {
+        lassign $i timedOut msg
+        assert {[nats::msg data $msg] eq "I need help 7.1"}
+        assert {!$timedOut}
+    }
+    array size ${conn}::requests
+} -result 0 -cleanup {
+    set gotMsgs [list]
 }
 
-test pubsub-8 "Gather multiple responses to a request - timeout" -body {
-    set msg_received 0
-    set exit_wait 0
-    # now we ask for -max_msgs=4
-    $conn request service "0 I need help" -max_msgs 4 -timeout 1000 -callback [lambda {timedOut msg} {
-        if {$timedOut} {
-            set ::exit_wait 1
-            return
-        }
-        assert {$msg eq "I need help"}
-        incr ::msg_received
-    }]
+test pubsub-7.2 "Old-style request - async - not all messages" -body {
+    # the callback will be invoked 3 times with a reply and the 4th time with timedOut=1
+    $conn request service "0 I need help 7.2" -max_msgs 4 -timeout 500 -callback $oldStyleCb
     duration {
-        wait_for ::exit_wait 2000
+        while {[llength $gotMsgs] < 4} {
+            wait_for ::gotMsgs 1000
+        }
+    } elapsed
+    assert {[approx $elapsed 500]}
+    assert {[llength $gotMsgs] == 4} 1
+    for {set i 0} {$i < 3} {incr i} {
+        lassign [lindex $gotMsgs $i] timedOut msg
+        assert {[nats::msg data $msg] eq "I need help 7.2"}
+        assert {!$timedOut}
+    }
+    lassign [lindex $gotMsgs 3] timedOut msg
+    assert {$timedOut}
+    array size ${conn}::requests
+} -result 0
+
+test pubsub-7.3 "Old-style request - async - timeout" -body {
+    $conn request service "500 I need help 7.3" -max_msgs 3 -timeout 100 -callback asyncReqCallback
+    duration {
+        wait_for ::inMsg
+    } elapsed
+    assert {[approx $elapsed 100]}
+    assert {$inMsg eq "timeout"}
+    array size ${conn}::requests
+} -result 0
+
+test pubsub-7.4 "Old-style request - sync - get all messages" -body {    
+    set responses [$conn request service "0 I need help 7.4" -max_msgs 3]
+    assert {[llength $responses] == 3} 1
+    foreach msg $responses {
+        assert {[nats::msg data $msg] eq "I need help 7.4"}
+    }
+    array size ${conn}::requests
+} -result 0
+
+test pubsub-7.5 "Old-style request - sync - not all messages" -body {
+    duration {
+        set responses [$conn request service "0 I need help 7.5" -max_msgs 4 -timeout 1000]
     } elapsed
     assert {[approx $elapsed 1000]}
-    assert {$msg_received == 3}
-    assert {[array size ${conn}::requests] == 0} 1
-} -cleanup {
-    # will stop all 3 responders
-    stopResponder $conn
+    assert {[llength $responses] == 3} 1
+    foreach msg $responses {
+        assert {[nats::msg data $msg] eq "I need help 7.5"}
+    }
+    array size ${conn}::requests
+} -result 0
+
+test pubsub-7.6 "Old-style request - sync - timeout" -body {
+    duration {
+        catch {$conn request service "500 I need help" -max_msgs 3 -timeout 100} err errOpts
+    } elapsed
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrTimeout}}
+    assert {$err eq "Request to service timed out"}
+    assert {[approx $elapsed 100]}
+    array size ${conn}::requests
+} -result 0 -cleanup {
+    stopAllResponders
     sleep 500
 }
 
 test pubsub-9 "Send 2 sync requests in coroutines" -setup {
-    startResponder $conn
+    set resp [responder new]
 } -body {
     # prove that vwait in "request" is coroutine-aware
     set results [list]
@@ -185,7 +225,7 @@ test pubsub-9 "Send 2 sync requests in coroutines" -setup {
     # the second response will arrive sooner than the first. This would be impossible without coroutines
     set results
 } -result "msg2 msg1" -cleanup {
-    stopResponder $conn
+    $resp destroy
 }
 
 $conn destroy

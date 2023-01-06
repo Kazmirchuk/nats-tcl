@@ -1,4 +1,4 @@
-# Copyright (c) 2021 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2021-2023 Petro Kazmirchuk https://github.com/Kazmirchuk
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
@@ -9,7 +9,7 @@
 # - trying to connect when there are no NATS servers available
 source test_utils.tcl
 
-set conn [nats::connection new]
+set conn [nats::connection new "ServerPool" -log_chan [tcltest::outputChannel]]
 $conn configure -randomize false
 
 set sp [set ${conn}::serverPool] ;# access to a private variable only for test purposes!
@@ -112,7 +112,7 @@ test server_pool-14.1 "Reconnecting timings and counters" -body {
     
     set all_errors [list]
     set error_trace [lambda {var idx op } {
-        upvar $var e
+        upvar 1 $var e
         if {$e ne ""} {
             lappend ::all_errors [lindex [dict get $e code] 1] ;# keep only the second part of the error code
         }
@@ -123,11 +123,11 @@ test server_pool-14.1 "Reconnecting timings and counters" -body {
     stopNats NATS1 ;# the client goes into reconnecting
     duration {
         startNats NATS1
-        [$conn logger]::info "Waiting for the client to go into reconnecting"
+        test_utils::log::info "Waiting for the client to go into reconnecting"
         while {[set ${conn}::status] != $nats::status_reconnecting} {
             wait_for ${conn}::status 5000
         }
-        [$conn logger]::info "Waiting for the client to restore connection"
+        test_utils::log::info "Waiting for the client to restore connection"
         while {[set ${conn}::status] != $nats::status_connected} {
             wait_for ${conn}::status 5000
         }
@@ -149,11 +149,11 @@ test server_pool-14.1 "Reconnecting timings and counters" -body {
 test server_pool-14.2 "Remove servers from the pool when they reach max_reconnect_attempts" -body {
     stopNats NATS1 ;# the client goes into reconnecting    
     startNats NATS1
-    [$conn logger]::info "Waiting for the client to go into reconnecting"
+    test_utils::log::info "Waiting for the client to go into reconnecting"
     while {[set ${conn}::status] != $nats::status_reconnecting} {
         wait_for ${conn}::status 5000
     }
-    [$conn logger]::info "Waiting for the client to restore connection"
+    test_utils::log::info "Waiting for the client to restore connection"
     while {[set ${conn}::status] != $nats::status_connected} {
         wait_for ${conn}::status 5000
     }

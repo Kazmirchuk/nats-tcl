@@ -1,4 +1,4 @@
-# Copyright (c) 2022 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2022-2023 Petro Kazmirchuk https://github.com/Kazmirchuk
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
@@ -10,7 +10,7 @@
 source test_utils.tcl
 
 startNats NATS_JS -js
-set conn [nats::connection new]
+set conn [nats::connection new "JS_mgmt" -log_chan [tcltest::outputChannel]]
 $conn configure -servers nats://localhost:4222
 $conn connect
 set js [$conn jet_stream -timeout 2000]
@@ -36,7 +36,7 @@ test js_mgmt-1.1 "Create a stream" -body {
     assert {[dict get $response did_create]}
     set actual_config [dict get $response config]
     set state [dict get $response state]
-    assert {[test_utils::dict_in $stream_config $actual_config]}
+    assert {[dict_in $stream_config $actual_config]}
     assert {[dict get $state messages] == 0}
     assert {[dict get $state first_seq] == 0}
 }
@@ -144,7 +144,7 @@ test js_mgmt-6.1 "Add a pull consumer with durable_name" -body {
     set response [$js add_consumer MY_STREAM {*}$pull_consumer_config]
     set actual_config [dict get $response config]
     assert {[dict get $response name] eq "PULL_CONSUMER"}
-    assert {[test_utils::dict_in $pull_consumer_config $actual_config]}
+    assert {[dict_in $pull_consumer_config $actual_config]}
 }
 
 test js_mgmt-6.2 "Add a pull consumer using add_pull_consumer" -body {
@@ -157,7 +157,7 @@ test js_mgmt-6.2 "Add a pull consumer using add_pull_consumer" -body {
 test js_mgmt-6.2 "Add a push consumer" -body {
     set response [$js add_push_consumer MY_STREAM PUSH_CONSUMER PUSH_CONSUMER_SUBJECT {*}$push_consumer_config]
     set actual_config [dict get $response config]
-    assert {[test_utils::dict_in $push_consumer_config $actual_config]}
+    assert {[dict_in $push_consumer_config $actual_config]}
     dict get $response name
 } -result PUSH_CONSUMER
 # NB! calling add_consumer with a name of existing consumer will update its config instead of creating a new consumer

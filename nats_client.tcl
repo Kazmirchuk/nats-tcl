@@ -921,7 +921,7 @@ oo::class create ::nats::connection {
         }
 
         if {[dict get $subscriptions($subID) isDictMsg]} {
-            set msg [nats::msg create -subject $subject -data $body -reply $replyTo]
+            set msg [nats::msg create $subject -data $body -reply $replyTo]
             dict set msg sub_id $subID
             if {[info exists header]} {
                 dict set msg header $header
@@ -1191,24 +1191,23 @@ oo::class create ::nats::connection {
 proc ::nats::tls_callback {args} { }
 
 namespace eval ::nats::msg {
-    proc create {args} {
+    proc create {subject args} {
         nats::_parse_args $args {
-            subject valid_str null
             data str ""
             reply str ""
         }
         return [dict create header "" data $data subject $subject reply $reply sub_id ""]
     }
-    proc set {msgVar field value} {
-        switch -- $field {
+    proc set {msgVar opt value} {
+        switch -- $opt {
             -data - -subject - -reply {
                 upvar 1 $msgVar msg
-                dict set msg [string trimleft $field -] $value
+                dict set msg [string trimleft $opt -] $value
                 return
             }
             default {
                 # do not allow changing the header or sub_id
-                throw {NATS ErrInvalidArg} "Invalid field $field"
+                throw {NATS ErrInvalidArg} "Invalid field $opt"
             }
         }
     }

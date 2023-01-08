@@ -28,7 +28,7 @@ oo::class create ::nats::jet_stream {
         nats::_checkJsError $response
         set encoded_msg [dict get $response message] ;# it is encoded in base64
         set data [binary decode base64 [dict lookup $encoded_msg data ""]]
-        set msg [nats::msg create -subject [dict get $encoded_msg subject] -data $data]
+        set msg [nats::msg create [dict get $encoded_msg subject] -data $data]
         dict set msg seq [dict get $encoded_msg seq]
         dict set msg time [dict get $encoded_msg time]
         set header [binary decode base64 [dict lookup $encoded_msg hdrs ""]]
@@ -150,7 +150,7 @@ oo::class create ::nats::jet_stream {
     # JetStream Publish Retries on No Responders https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-22.md
     # nats schema info --yaml io.nats.jetstream.api.v1.pub_ack_response
     method publish {subject message args} {
-        set msg [nats::msg create -subject $subject -data $message]
+        set msg [nats::msg create $subject -data $message]
         return [my publish_msg $msg {*}$args]
     }
     method publish_msg {msg args} {

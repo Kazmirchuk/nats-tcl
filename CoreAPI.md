@@ -4,7 +4,7 @@
 All commands are defined in and exported from the `::nats` namespace.
 
 ## Synopsis
-[**::nats::connection new** *?conn_name?*](#constructor-conn_name) <br/>
+[**nats::connection new** *?conn_name?*](#constructor-conn_name) <br/>
 [*objectName* **cget** *option*](#objectName-cget-option) <br/>
 [*objectName* **configure** *?option? ?value option value ...?*](#objectName-configure-option-value-option-value) <br/>
 [*objectName* **reset** *option*](#objectName-reset-option) <br/>
@@ -184,11 +184,24 @@ TclOO destructor. It calls `disconnect` and then destroys the object.
 ### objectName jet_stream
 Returns `jetStreamObject` TclOO object to work with [JetStream](https://docs.nats.io/jetstream/jetstream).
 
-## msg
+## nats::msg
 This ensemble encapsulates all commands to work with a NATS message. Accessing it as a dict is deprecated. 
-### **msg create -subject** *subject* ?**-data** *payload*? ?**-reply** *replySubj?*
+### **msg create** *subject* ?-data *payload*? ?-reply *replySubj*?
 Returns a new message with the specified subject, payload and reply subject.
-
+### **msg set** *msgVariable option value*
+Updates the message. Possible `options` are `-subject`, `-data` and `-reply`.
+### msg subject *msgValue*
+Returns the message subject.
+### msg data *msgValue*
+Returns the message payload.
+### msg reply *msgValue*
+Returns the message reply-to subject.
+### msg no_responders *msgValue*
+Returns true if this is a no-responders message (status 503).
+### msg seq *msgValue*
+Returns the message sequence number (only for messages returned by `stream_msg_get`).
+### msg timestamp *msgValue*
+Returns the message timestamp in the ISO format, e.g. 2022-11-22T13:31:35.4514983Z (only for messages returned by `stream_msg_get`).
 ### header
 
 ### timestamp

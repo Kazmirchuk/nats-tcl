@@ -23,7 +23,7 @@ test pubsub-1 "Publish and receive a message with a header" -body {
     set msg_received 0
     sniffer $conn {
         set sid [$conn subscribe nats_2.2 -callback subCallback -dictmsg true]
-        set msg_out [nats::msg create -subject "nats_2.2" -data "payload"]
+        set msg_out [nats::msg create "nats_2.2" -data "payload"]
         nats::header set msg_out hdr1 "val 1" hdr2 "val2"
         $conn publish_msg $msg_out
         wait_for ::inMsg
@@ -46,7 +46,7 @@ test pubsub-2 "Send requests with headers" -setup {
     set resp [responder new -subject nats_2.2]
 } -body {
     # test a sync request
-    set msg_out [nats::msg create -subject "nats_2.2" -data "0 msg with header"]
+    set msg_out [nats::msg create "nats_2.2" -data "0 msg with header"]
     nats::header set msg_out hdr1 "value 1"
     set response [$conn request_msg $msg_out -timeout 500 -dictmsg true]
 

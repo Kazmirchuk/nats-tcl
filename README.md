@@ -71,7 +71,10 @@ Both `nats-server` and `nats` [CLI](https://github.com/nats-io/natscli) must be 
 
 The tests are based on the standard Tcl unit testing framework, [tcltest](https://www.tcl.tk/man/tcl8.6/TclCmd/tcltest.htm). Simply run `tclsh tests/all.tcl` and the tests will be executed one after another. 
 
-And this is how you can run just one test script and save the log to a file: `tclsh tests/all.tcl -file basic.test -outfile test.log`
+And this is how you can run just one test script and save the log to a file:
+```bash
+tclsh tests/all.tcl -file basic.test -outfile test.log
+```
 
 To run the TLS tests, you will need to provide certificates yourself in `tests/cert` subfolder. E.g. you can generate them using [mkcert](https://docs.nats.io/nats-server/configuration/securing_nats/tls#self-signed-certificates-for-testing).
 

@@ -1,7 +1,7 @@
 # Core NATS API
 `package require nats`
 
-All commands are defined in and exported from the ::nats namespace.
+All commands are defined in and exported from the `::nats` namespace.
 
 ## Synopsis
 [**::nats::connection new** *?conn_name?*](#constructor-conn_name) <br/>
@@ -24,7 +24,7 @@ All commands are defined in and exported from the ::nats namespace.
 
 [*objectName* **jet_stream**](#objectName-jet_stream) <br/>
 
-
+[**msg create -subject** *subject* ?**-data** *payload*? ?**-reply** *replySubj?*](#msg-create--subject-subject--data-payload--reply-replysubj)
 
 
 ## Description

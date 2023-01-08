@@ -1,10 +1,9 @@
-# Name
-nats - a client library for the NATS message broker.
+# Core NATS API
+`package require nats`
+
+All commands are defined in and exported from the ::nats namespace.
 
 ## Synopsis
-
-package require nats
-
 [**::nats::connection new** *?conn_name?*](#constructor-conn_name) <br/>
 [*objectName* **cget** *option*](#objectName-cget-option) <br/>
 [*objectName* **configure** *?option? ?value option value ...?*](#objectName-configure-option-value-option-value) <br/>
@@ -24,6 +23,11 @@ package require nats
 [*objectName* **destroy**](#objectName-destroy)
 
 [*objectName* **jet_stream**](#objectName-jet_stream) <br/>
+
+
+
+
+## Description
 
 ## Callbacks
 All callbacks are treated as command prefixes (like [trace](https://www.tcl.tk/man/tcl8.6/TclCmd/trace.htm) callbacks), so in addition to a command itself they may include user-supplied arguments. They are invoked from the event loop as follows:
@@ -106,7 +110,7 @@ The **configure** method accepts the following options. Make sure to set them *b
 | -utf8_convert | boolean | false | By default, the client does not change a message body when it is sent or received. Setting this option to `true` will encode outgoing messages to UTF-8 and decode incoming messages from UTF-8 |
 | -? | | | Provides interactive help with all options|
 
-## Description
+## Commands
 
 ### constructor ?conn_name?
 Creates a new instance of the TclOO object `nats::connection` with default options and initialises a [logger](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/log/logger.md) instance with the severity level set to `warn`. If you pass in a connection name, it is sent to NATS in a `CONNECT` message, and is indicated in the logger name.
@@ -179,6 +183,16 @@ TclOO destructor. It calls `disconnect` and then destroys the object.
 
 ### objectName jet_stream
 Returns `jetStreamObject` TclOO object to work with [JetStream](https://docs.nats.io/jetstream/jetstream).
+
+## msg
+This ensemble encapsulates all commands to work with a NATS message. Accessing it as a dict is deprecated. 
+### **msg create -subject** *subject* ?**-data** *payload*? ?**-reply** *replySubj?*
+Returns a new message with the specified subject, payload and reply subject.
+
+### header
+
+### timestamp
+
 
 ## Error handling
 Error codes are similar to those from the nats.go client as much as possible. A few additional error codes provide more information about failed connection attempts to the NATS server: ErrBrokenSocket, ErrTLS, ErrConnectionRefused.

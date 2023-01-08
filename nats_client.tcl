@@ -1494,6 +1494,9 @@ proc ::nats::_parse_args {args_list spec {doConfig 0}} {
         throw {NATS ErrInvalidArg} "Unknown option [lindex [array names args_arr] 0]"
     }
 }
+namespace eval ::nats {
+    namespace export connection msg header timestamp
+}
 
 package provide nats 1.0
 

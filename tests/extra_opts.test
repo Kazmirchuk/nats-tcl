@@ -93,8 +93,9 @@ stopNats NATS
 
 test extra_opts-4.1 "PING/PONG protocol initiated by server" -body {
     # I can't pass ping_interval as a command line argument to the NATS server, so have to create a config file
+    # older NATS (v1.4) doesn't accept ping_interval: 2s, so just use int
     set conf [tcltest::makeFile {
-        ping_interval: "2s"
+        ping_interval: 2
         ping_max: 1
     } quick_ping.conf ]
     startNats quick_ping -c $conf

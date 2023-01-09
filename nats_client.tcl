@@ -53,7 +53,7 @@ set ::nats::_option_spec {
 oo::class create ::nats::connection {
     # "private" variables
     variable config sock coro timers counters subscriptions requests serverPool \
-             subjectRegex outBuffer requestsInboxPrefix pong
+             outBuffer requestsInboxPrefix pong
     
     # "public" variables, so that users can set up traces if needed
     variable status last_error serverInfo
@@ -84,8 +84,6 @@ oo::class create ::nats::connection {
         # old-style sync requests: timedOut: bool, inMsgs: list
         # old-style async requests: timer, callback, subID
         array set serverInfo {} ;# INFO from a current NATS server
-        # JetStream uses subjects with $
-        set subjectRegex {^[[:alnum:]$_-]+$}
         # all outgoing messages are put in this list before being flushed to the socket,
         # so that even when we are reconnecting, messages can still be sent
         set outBuffer [list]
@@ -332,17 +330,21 @@ oo::class create ::nats::connection {
         set dictmsg $config(dictmsg)
         
         nats::_parse_args $args {
-            queue queue_group ""
+            queue valid_str ""
             callback valid_str ""
             dictmsg bool null
             max_msgs pos_int 0
             post bool true
         }
 
-        if {![my CheckWildcard $subject]} {
+        if {![my CheckSubject $subject -wildcard]} {
             throw {NATS ErrBadSubject} "Invalid subject $subject"
         }
 
+        if {$queue ne "" && ![my CheckSubject $queue -queue]} {
+            throw {NATS ErrBadQueueName} "Invalid queue $queue"
+        }
+        
         set subID [incr counters(subscription)]
         set subscriptions($subID) [dict create subj $subject queue $queue callback $callback maxMsgs $max_msgs recMsgs 0 isDictMsg $dictmsg post $post]
         
@@ -959,8 +961,8 @@ oo::class create ::nats::connection {
             $serverPool current_server_connected true
             lassign [my current_server] host port
             log::info "Connected to the server at $host:$port"
-            # exit from vwait in "connect"
-            set status $nats::status_connected
+            set last_error "" ;# cleanup possible error messages about prior connection attempts
+            set status $nats::status_connected ;# exit from vwait in "connect"
             my RestoreSubs
             my ScheduleFlush
             set timers(ping) [after $config(ping_interval) [mymethod Pinger]]
@@ -1117,32 +1119,33 @@ oo::class create ::nats::connection {
     }
     
     # ------------ coroutine end -----------------------------------------
-    
-    method CheckSubject {subj} {
+    # check if subject/subject with wildcard/queue group is valid
+    # Tcl caches the compiled regexp in the thread-local storage, so no need to save it myself
+    # per https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-6.md :
+    # with no extra args, it checks "reply-to"
+    # with -wildcard, it checks "message-subject"
+    # with -queue, it checks queue-name
+    method CheckSubject {subj args} {
         if {[string length $subj] == 0} {
             return false
         }
         if {!$config(check_subjects)} {
             return true
         }
+        set wildcard [expr {"-wildcard" in $args}]
+        set queue [expr {"-queue" in $args}]
+        # "term" except \ " [] {}
+        # this also checks that the string is not empty
+        # dash in front of a char set means a literal dash
+        set term {^[-[:alnum:]!#$%&'()+,/:;<=?@^_`|~]+$}
+        if {$queue} {
+            return [regexp -- $term $subj]
+        }
         foreach token [split $subj .] {
-            if {[regexp -- $subjectRegex $token]} {
+            if {[regexp -- $term $token]} {
                 continue
             }
-            return false
-        }
-        return true
-    }
-    
-    method CheckWildcard {subj} {            
-        if {[string length $subj] == 0} {
-            return false
-        }
-        if {!$config(check_subjects)} {
-            return true
-        }
-        foreach token [split $subj .] {
-            if {[regexp -- $subjectRegex $token] || $token == "*" || $token == ">" } {
+            if {$wildcard && ($token eq "*" || $token eq ">")} {
                 continue
             }
             return false
@@ -1151,11 +1154,8 @@ oo::class create ::nats::connection {
     }
     
     method CheckConnection {} {
-        if {!$config(check_connection)} {
-            return  ;# allow to buffer PUB/SUB/UNSUB even before the first connection to NATS
-        }
-        # allow PUB/SUB/UNSUB when connected or reconnecting, throw an error otherwise
-        if {$status in [list $nats::status_closed $nats::status_connecting] } {
+        # allow to buffer PUB/SUB/UNSUB even before the connection to NATS is finalized
+        if {$status eq $nats::status_closed} {
             throw {NATS ErrConnectionClosed} "No connection to NATS server"
         }
     }
@@ -1388,8 +1388,7 @@ namespace eval ::nats {
 }
 
 # official NATS clients use the sophisticated NUID algorithm, but this should be enough for the Tcl client
-# characters allowed in a NATS subject:
-# Naming Rules https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-6.md
+# note that NUID chars are only a subset of what is allowed in a subject name
 proc ::nats::_random_string {} {
     set allowed_chars "1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
     set range [string length $allowed_chars]
@@ -1429,13 +1428,6 @@ proc ::nats::_validate {name val type} {
         }
         dict {
             if {[catch {dict size $val}]} {
-                return false
-            }
-        }
-        queue_group {
-            #rules for queue names are more relaxed than for subjects
-            # badQueue in nats.go checks for whitespace
-            if {![string is graph $val]} {
                 return false
             }
         }

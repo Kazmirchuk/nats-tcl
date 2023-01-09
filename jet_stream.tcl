@@ -54,10 +54,10 @@ oo::class create ::nats::jet_stream {
     # JetStream Subscribe Workflow https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-15.md
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_getnext_request
     method consume {stream consumer args} {
-        if {![${conn}::my CheckSubject $stream]} {
+        if {![my CheckFilenameSafe $stream]} {
             throw {NATS ErrInvalidArg} "Invalid stream name $stream"
         }
-        if {![${conn}::my CheckSubject $consumer]} {
+        if {![my CheckFilenameSafe $consumer]} {
             throw {NATS ErrInvalidArg} "Invalid consumer name $consumer"
         }
 
@@ -381,6 +381,11 @@ oo::class create ::nats::jet_stream {
             return
         }
         after 0 [list {*}$userCallback 0 $response ""]
+    }
+    # https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-6.md
+    # only the Unix variant, also no " [] {}
+    method CheckFilenameSafe {str} {
+        return [regexp -- {^[-[:alnum:]!#$%&()+,:;<=?@^_`|~]+$} $str]
     }
 }
 

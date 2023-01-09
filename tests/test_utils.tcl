@@ -12,7 +12,6 @@ package require tcl::transform::observe
 package require tcl::chan::variable
 package require Thread
 package require lambda
-package require logger
 package require logger::utils
 
 if {$tcl_platform(platform) eq "windows"} {

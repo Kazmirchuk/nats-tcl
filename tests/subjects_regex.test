@@ -10,10 +10,11 @@ set conn [nats::connection new]
 test regex-1 "Check exact subjects" -body {
     # these are valid
     assert {[${conn}::my CheckSubject foo]}
-    assert {[${conn}::my CheckSubject FOO.ba_r]}
-    assert {[${conn}::my CheckSubject foo1.bAr2.ba-z]}
+    assert {[${conn}::my CheckSubject FOO/.ba_r]}
+    assert {[${conn}::my CheckSubject foo#1.bAr2.ba-z]}
     # JetStream uses subjects with $
     assert {[${conn}::my CheckSubject "\$JS.API.STREAM.NAMES"]}
+    assert {[${conn}::my CheckSubject foo@.bAr=.ba(z)]}
         
     # these are invalid
     assert {![${conn}::my CheckSubject ""]}
@@ -21,22 +22,23 @@ test regex-1 "Check exact subjects" -body {
     assert {![${conn}::my CheckSubject foo..bar]}
     assert {![${conn}::my CheckSubject "foo. .bar"]}
     assert {![${conn}::my CheckSubject "fOo. bar"]}
-    assert {![${conn}::my CheckSubject fo*o]}
-    assert {![${conn}::my CheckSubject foo.]}
-} -result {}
+    assert {![${conn}::my CheckSubject foo.*]}
+    assert {![${conn}::my CheckSubject foo.>]}
+}
 
 test regex-2 "Check subjects with wildcards" -body {
-    assert {[${conn}::my CheckWildcard foo.*]}
-    assert {[${conn}::my CheckWildcard foo.bar]}
-    assert {[${conn}::my CheckWildcard foo]}
-    assert {[${conn}::my CheckWildcard foo.>]}
-    assert {[${conn}::my CheckWildcard *.foo.*]}
+    assert {[${conn}::my CheckSubject foo.* -wildcard]}
+    assert {[${conn}::my CheckSubject foo.bar -wildcard]}
+    assert {[${conn}::my CheckSubject foo -wildcard]}
+    assert {[${conn}::my CheckSubject foo.> -wildcard]}
+    assert {[${conn}::my CheckSubject *.foo.* -wildcard]}
     # invalid wildcards
-    assert {![${conn}::my CheckWildcard foo*]}
-    assert {![${conn}::my CheckWildcard foo>]}
-    assert {![${conn}::my CheckWildcard foo.*bar]}
-    assert {![${conn}::my CheckWildcard *foo.*]}
-} -result {}
+    assert {![${conn}::my CheckSubject "" -wildcard]}
+    assert {![${conn}::my CheckSubject foo* -wildcard]}
+    assert {![${conn}::my CheckSubject foo> -wildcard]}
+    assert {![${conn}::my CheckSubject foo.*bar -wildcard]}
+    assert {![${conn}::my CheckSubject *foo.* -wildcard]}
+}
 
 
 # seems like capture groups are broken in Tcl:
@@ -63,6 +65,31 @@ test regex-3 "Check inbox generation" -body {
     foreach char [array names char_stats] {
         assert {$char_stats($char) > 100}
     }
+}
+
+test regex-4 "Check stream names" -body {
+    set js [$conn jet_stream]
+    # these are valid
+    assert {[${js}::my CheckFilenameSafe foo@]}
+    assert {[${js}::my CheckFilenameSafe FOO_123]}
+    assert {[${js}::my CheckFilenameSafe foo#-z_D2]}
+        
+    # these are invalid
+    assert {![${js}::my CheckFilenameSafe foo/bar]}
+    assert {![${js}::my CheckFilenameSafe foo\\bar]}
+    assert {![${js}::my CheckFilenameSafe foo.bar]}
+}
+
+test regex-5 "Check queue groups" -body {
+    # these are valid
+    assert {[${conn}::my CheckSubject foo@-123 -queue]}
+    assert {[${conn}::my CheckSubject foo_+bar -queue]}
+    assert {[${conn}::my CheckSubject 78&foo -queue]}
+    
+    # these are invalid
+    assert {![${conn}::my CheckSubject foo.* -queue]}
+    assert {![${conn}::my CheckSubject foo.> -queue]}
+    assert {![${conn}::my CheckSubject *foo -queue]}
 }
 
 tcltest::cleanupTests

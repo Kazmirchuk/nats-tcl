@@ -4,27 +4,45 @@
 All commands are defined in and exported from the `::nats` namespace.
 
 ## Synopsis
-[**nats::connection new** *?conn_name?*](#constructor-conn_name) <br/>
-[*objectName* **cget** *option*](#objectName-cget-option) <br/>
-[*objectName* **configure** *?option? ?value option value ...?*](#objectName-configure-option-value-option-value) <br/>
-[*objectName* **reset** *option*](#objectName-reset-option) <br/>
-[*objectName* **connect** *?-async?*](#objectName-connect--async) <br/>
-[*objectName* **disconnect**](#objectName-disconnect) <br/>
-[*objectName* **publish** *subject message ?args?*](#objectName-publish-subject-message-args) <br/>
-[*objectName* **subscribe** *subject ?-queue queueGroup? ?-callback cmdPrefix? ?-max_msgs maxMsgs? ?-dictmsg dictmsg?*](#objectName-subscribe-subject--queue-queueGroup--callback-cmdPrefix--max_msgs-maxMsgs--dictmsg-dictmsg) <br/>
-[*objectName* **unsubscribe** *subID ?-max_msgs maxMsgs?*](#objectName-unsubscribe-subID--max_msgs-maxMsgs) <br/>
-[*objectName* **request** *subject message ?-timeout ms? ?-callback cmdPrefix? ?-dictmsg dictmsg? ?-header header? ?-max_msgs maxMsgs?*](#objectName-request-subject-message--timeout-ms--callback-cmdPrefix--dictmsg-dictmsg--header-header--max_msgs-maxMsgs) <br/>
-[*objectName* **ping** *?-timeout ms?*](#objectName-ping--timeout-ms) <br/>
-[*objectName* **inbox**](#objectName-inbox) <br/>
-[*objectName* **current_server**](#objectName-current_server) <br/>
-[*objectName* **all_servers**](#objectName-all_servers) <br/>
-[*objectName* **server_info**](#objectName-server_info) <br/>
-[*objectName* **destroy**](#objectName-destroy)
+[**nats::connection new** ?*conn_name*? ?-logger *logger*? ?-log_chan *channel*? ?-log_level *level*?](#constructor-conn_name--logger-logger--log_chan-channel--log_level-level) <br/>
+[*objectName* cget *option*](#objectName-cget-option) <br/>
+[*objectName* configure *?option? ?value option value ...?*](#objectName-configure-option-value-option-value) <br/>
+[*objectName* reset *option*](#objectName-reset-option) <br/>
+[*objectName* connect ?*-async*?](#objectName-connect--async) <br/>
+[*objectName* disconnect](#objectName-disconnect) <br/>
+[*objectName* publish *subject message* ?-reply *replyTo*?](#objectname-publish-subject-message--reply-replyto) <br/>
+[*objectName* publish_msg *msg*](#objectname-publish_msg-msg) <br/>
+[*objectName* subscribe *subject ?-queue queueGroup? ?-callback cmdPrefix? ?-max_msgs maxMsgs? ?-dictmsg dictmsg?*](#objectName-subscribe-subject--queue-queueGroup--callback-cmdPrefix--max_msgs-maxMsgs--dictmsg-dictmsg) <br/>
+[*objectName* unsubscribe *subID ?-max_msgs maxMsgs?*](#objectName-unsubscribe-subID--max_msgs-maxMsgs) <br/>
+[*objectName* request *subject message ?args?*](#objectName-request-subject-message-args) <br/>
+[*objectName* request_msg msg ?-timeout *ms* -callback *cmdPrefix* -dictmsg *dictmsg*?]()<br/>
+[*objectName* ping *?-timeout ms?*](#objectName-ping--timeout-ms) <br/>
+[*objectName* inbox](#objectName-inbox) <br/>
+[*objectName* current_server](#objectName-current_server) <br/>
+[*objectName* all_servers](#objectName-all_servers) <br/>
+[*objectName* server_info](#objectName-server_info) <br/>
+[*objectName* destroy](#objectName-destroy) <br/>
+[*objectName* jet_stream](#objectName-jet_stream) <br/>
 
-[*objectName* **jet_stream**](#objectName-jet_stream) <br/>
+[nats::msg](#nats::msg) <br/>
+[msg create *subject* ?-data *payload*? ?-reply *replyTo*?](#msg-create-subject--data-payload--reply-replyto)<br/>
+[msg set *msgVariable option value*]()<br/>
+[msg subject *msgValue*]()<br/>
+[msg data *msgValue*]()<br/>
+[msg reply *msgValue*]()<br/>
+[msg no_responders *msgValue*]()<br/>
+[msg seq *msgValue*]()<br/>
+[msg timestamp *msgValue*]()<br/>
 
-[**msg create -subject** *subject* ?**-data** *payload*? ?**-reply** *replySubj?*](#msg-create--subject-subject--data-payload--reply-replysubj)
+[nats::header]()<br/>
+[header add *msgVariable key value*]()<br/>
+[header set *msgVariable key value ?key value?..*]()<br/>
+[header delete *msgVariable key*]()<br/>
+[header values *msgValue key*]()<br/>
+[header get *msgValue key*]()<br/>
+[header keys *msgValue ?globPattern?*]()<br/>
 
+[nats::timestamp]()
 
 ## Description
 The client relies on a running event loop to send and deliver messages and uses only non-blocking sockets. Everything works in your Tcl interpreter and no background Tcl threads or interpreters are created under the hood. So, if your application might leave the event loop for a long time (e.g. a long computation without event processing), the NATS client should be created in a separate thread.
@@ -83,10 +101,8 @@ The **configure** method accepts the following options. Make sure to set them *b
 ## Commands
 
 ### constructor ?*conn_name*? ?-logger *logger*? ?-log_chan *channel*? ?-log_level *level*?
-Creates a new instance of the TclOO object `nats::connection` with default options. If you provide a connection name (recommended!), it is sent to NATS in the `CONNECT` message.
-
+Creates a new instance of the TclOO object `nats::connection` with default options. If you provide a connection name (recommended!), it is sent to NATS in the `CONNECT` message.<br/>
 The constructor also initializes the logging functionality. With no arguments, the default severity level is `warn` and destination is `stdout`. You can configure logging in 2 ways:
-
 - either create and configure your own [logger](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/log/logger.md) object and pass it with `-logger` option
 - or set severity with `-log_level` and output channel with `-log_chan`. The class uses only 4 levels: debug, info, warn, error
 
@@ -109,19 +125,19 @@ Flushes all outgoing data, closes the TCP connection and sets `status` to `$nats
 
 ### objectName publish *subject message* ?-reply *replyTo*?
 Publishes a message to the specified subject. See the NATS [documentation](https://docs.nats.io/nats-concepts/subjects) for more details about subjects and wildcards. The client will check subject's validity before sending according to [NATS Naming Rules](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-6.md). <br/>
-`message` is the payload (can be a binary string). If you specify a `replyTo` subject, a responder will know where to send a reply. You can use the [inbox](#objectname-inbox) method to generate a transient [subject name](https://docs.nats.io/developing-with-nats/sending/replyto) starting with _INBOX. However, using asynchronous requests might accomplish the same task in an easier manner - see below.<br/>
+`message` is the payload (can be a binary string). If you specify a `replyTo` subject, a responder will know where to send a reply. You can use the [inbox](#objectname-inbox) method to generate a transient [subject name](https://docs.nats.io/developing-with-nats/sending/replyto) starting with _INBOX. However, using asynchronous requests might accomplish the same task in an easier manner - see below.
 
 ### objectName publish_msg *msg*
 Publishes a message created using [nats::msg](#natsmsg) commands. This method is especially useful if you need to send a message with headers.
 
 ### objectName subscribe *subject* ?-queue *queueGroup*? ?-callback *cmdPrefix*? ?-max_msgs *maxMsgs*? ?-dictmsg *dictmsg*?
-Subscribes to a subject (possibly with wildcards) and returns a subscription ID. Whenever a message arrives, the command prefix will be invoked from the event loop. It must have the following signature:
-**subscriptionCallback** *subject message replyTo*
+Subscribes to a subject (possibly with wildcards) and returns a subscription ID. Whenever a message arrives, the command prefix will be invoked from the event loop. It must have the following signature:<br/>
+**subscriptionCallback** *subject message replyTo*<br/>
 
 If you use the [-queue option](https://docs.nats.io/developing-with-nats/receiving/queues), only one subscriber in a given queueGroup will receive each message (useful for load balancing). When given `-max_msgs`, the client will automatically unsubscribe after `maxMsgs` messages have been received.<br />
 By default, only a payload is delivered in `message`. Use `-dictmsg true` to receive `message` as a dict, e.g. to access headers. You can also `configure` the connection to have `-dictmsg` as true by default.
 
-### objectName unsubscribe subID ?-max_msgs maxMsgs? 
+### objectName unsubscribe subID ?-max_msgs *maxMsgs*? 
 Unsubscribes from a subscription with a given `subID` immediately. If `-max_msgs` is given, unsubscribes after this number of messages has been received **on this `subID`**. In other words, if you have already received 10 messages, and then you call `unsubscribe $subID -max_msgs 10`, you will be unsubscribed immediately.
 
 ### objectName request subject message ?args?
@@ -135,12 +151,9 @@ You can provide the following options:
 
 Depending if there's a callback, the method works in a sync or async manner.
 
-If no callback is given, the request is synchronous and blocks in a (coroutine-aware) `vwait` and then returns a reply. If `-max_msgs` >1, the returned value is a list of message dicts. If no response arrives within `timeout`, it raises the error `ErrTimeout`. When using NATS server version 2.2+, `ErrNoResponders` is raised if nobody is subscribed to `subject`.
-
-If a callback is given, the call returns immediately, and when a reply is received or a timeout fires, the callback will be invoked from the event loop. It must have the following signature:
-
-**asyncRequestCallback** *timedOut message*
-
+If no callback is given, the request is synchronous and blocks in a (coroutine-aware) `vwait` and then returns a reply. If `-max_msgs` >1, the returned value is a list of message dicts. If no response arrives within `timeout`, it raises the error `ErrTimeout`. When using NATS server version 2.2+, `ErrNoResponders` is raised if nobody is subscribed to `subject`.<br/>
+If a callback is given, the call returns immediately, and when a reply is received or a timeout fires, the callback will be invoked from the event loop. It must have the following signature:<br/>
+**asyncRequestCallback** *timedOut message*<br/>
 `timedOut` is a boolean equal to 1, if the request timed out or no responders are available.
 
 `response` is the received message. If `-max_msgs` >1, the callback is invoked for each message.

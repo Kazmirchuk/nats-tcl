@@ -7,7 +7,7 @@ All commands are defined in and exported from the `::nats` namespace.
 [**nats::connection new** ?*conn_name*? ?-logger *logger*? ?-log_chan *channel*? ?-log_level *level*?](#constructor-conn_name--logger-logger--log_chan-channel--log_level-level) <br/>
 [*objectName* cget *option*](#objectName-cget-option) <br/>
 [*objectName* configure *?option? ?value option value ...?*](#objectName-configure-option-value-option-value) <br/>
-[*objectName* reset *option*](#objectName-reset-option) <br/>
+[*objectName* reset *option*](#objectname-reset-option--) <br/>
 [*objectName* connect ?*-async*?](#objectName-connect--async) <br/>
 [*objectName* disconnect](#objectName-disconnect) <br/>
 [*objectName* publish *subject message* ?-reply *replyTo*?](#objectname-publish-subject-message--reply-replyto) <br/>
@@ -15,7 +15,7 @@ All commands are defined in and exported from the `::nats` namespace.
 [*objectName* subscribe *subject ?-queue queueGroup? ?-callback cmdPrefix? ?-max_msgs maxMsgs? ?-dictmsg dictmsg?*](#objectName-subscribe-subject--queue-queueGroup--callback-cmdPrefix--max_msgs-maxMsgs--dictmsg-dictmsg) <br/>
 [*objectName* unsubscribe *subID ?-max_msgs maxMsgs?*](#objectName-unsubscribe-subID--max_msgs-maxMsgs) <br/>
 [*objectName* request *subject message ?args?*](#objectName-request-subject-message-args) <br/>
-[*objectName* request_msg msg ?-timeout *ms* -callback *cmdPrefix* -dictmsg *dictmsg*?]()<br/>
+[*objectName* request_msg msg ?-timeout *ms* -callback *cmdPrefix* -dictmsg *dictmsg*?](#objectname-request_msg-msg--timeout-ms--callback-cmdprefix--dictmsg-dictmsg)<br/>
 [*objectName* ping *?-timeout ms?*](#objectName-ping--timeout-ms) <br/>
 [*objectName* inbox](#objectName-inbox) <br/>
 [*objectName* current_server](#objectName-current_server) <br/>
@@ -24,25 +24,25 @@ All commands are defined in and exported from the `::nats` namespace.
 [*objectName* destroy](#objectName-destroy) <br/>
 [*objectName* jet_stream](#objectName-jet_stream) <br/>
 
-[nats::msg](#nats::msg) <br/>
-[msg create *subject* ?-data *payload*? ?-reply *replyTo*?](#msg-create-subject--data-payload--reply-replyto)<br/>
-[msg set *msgVariable option value*]()<br/>
-[msg subject *msgValue*]()<br/>
-[msg data *msgValue*]()<br/>
-[msg reply *msgValue*]()<br/>
-[msg no_responders *msgValue*]()<br/>
-[msg seq *msgValue*]()<br/>
-[msg timestamp *msgValue*]()<br/>
+[nats::msg](#natsmsg) <br/>
+[msg create *subject* ?-data *payload*? ?-reply *replyTo*?](#msg-create-subject--data-payload--reply-replysubj)<br/>
+[msg set *msgVariable option value*](#msg-set-msgvariable-option-value)<br/>
+[msg subject *msgValue*](#msg-subject-msgvalue)<br/>
+[msg data *msgValue*](#msg-data-msgvalue)<br/>
+[msg reply *msgValue*](#msg-reply-msgvalue)<br/>
+[msg no_responders *msgValue*](#msg-no_responders-msgvalue)<br/>
+[msg seq *msgValue*](#msg-seq-msgvalue)<br/>
+[msg timestamp *msgValue*](#msg-timestamp-msgvalue)<br/>
 
-[nats::header]()<br/>
-[header add *msgVariable key value*]()<br/>
-[header set *msgVariable key value ?key value?..*]()<br/>
-[header delete *msgVariable key*]()<br/>
-[header values *msgValue key*]()<br/>
-[header get *msgValue key*]()<br/>
-[header keys *msgValue ?globPattern?*]()<br/>
+[nats::header](#natsheader)<br/>
+[header add *msgVariable key value*](#header-add-msgvariable-key-value)<br/>
+[header set *msgVariable key value ?key value?..*](#header-set-msgvariable-key-value-key-value)<br/>
+[header delete *msgVariable key*](#header-delete-msgvariable-key)<br/>
+[header values *msgValue key*](#header-values-msgvalue-key)<br/>
+[header get *msgValue key*](#header-get-msgvalue-key)<br/>
+[header keys *msgValue ?globPattern?*](#header-keys-msgvalue-globpattern)<br/>
 
-[nats::timestamp]()
+[nats::timestamp](#natstimestamp)
 
 ## Description
 The client relies on a running event loop to send and deliver messages and uses only non-blocking sockets. Everything works in your Tcl interpreter and no background Tcl threads or interpreters are created under the hood. So, if your application might leave the event loop for a long time (e.g. a long computation without event processing), the NATS client should be created in a separate thread.

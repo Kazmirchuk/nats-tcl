@@ -19,7 +19,6 @@ All commands are defined in and exported from the `::nats` namespace.
 [*objectName* **current_server**](#objectName-current_server) <br/>
 [*objectName* **all_servers**](#objectName-all_servers) <br/>
 [*objectName* **server_info**](#objectName-server_info) <br/>
-[*objectName* **logger**](#objectName-logger) <br/>
 [*objectName* **destroy**](#objectName-destroy)
 
 [*objectName* **jet_stream**](#objectName-jet_stream) <br/>
@@ -28,12 +27,9 @@ All commands are defined in and exported from the `::nats` namespace.
 
 
 ## Description
+The client relies on a running event loop to send and deliver messages and uses only non-blocking sockets. Everything works in your Tcl interpreter and no background Tcl threads or interpreters are created under the hood. So, if your application might leave the event loop for a long time (e.g. a long computation without event processing), the NATS client should be created in a separate thread.
 
-## Callbacks
-All callbacks are treated as command prefixes (like [trace](https://www.tcl.tk/man/tcl8.6/TclCmd/trace.htm) callbacks), so in addition to a command itself they may include user-supplied arguments. They are invoked from the event loop as follows:
-### Core NATS: <br/>
-**subscriptionCallback** *subject message replyTo*<br/>
-**asyncRequestCallback** *timedOut message* <br/>
+Calls to blocking API (synchronous versions of `connect`, `request`, `ping`) involve `vwait` under the hood, so that other event processing can continue. If the API is called from a coroutine, `coroutine::util vwait` is used instead of a plain `vwait` to avoid nested event loops.
 
 ## Message headers
 When using NATS server version 2.2 and later, you can publish and receive messages with [headers](https://pkg.go.dev/github.com/nats-io/nats.go?utm_source=godoc#Header). Please, keep in mind that:
@@ -41,54 +37,30 @@ When using NATS server version 2.2 and later, you can publish and receive messag
 - duplicate keys are allowed (just like standard HTTP headers). In Tcl this is represented as a key pointing to a *list* of values, mimicking the same API as in nats.go and nats.java.
 - `Status` and `Description` keys are reserved by the NATS protocol, in particular for implementation of the [no-responders](https://docs.nats.io/whats_new_22#react-quicker-with-no-responder-notifications) feature.
 
-Examples of valid headers:
-```Tcl
-set h [dict create hdr1 val1 hdr2 val2]
-# values must be wrapped using [list] if they have spaces
-set h [dict create hdr1 [list "val 1"] hdr2 val2]
-# multiple values for the same key
-set h [dict create hdr1 [list val1 val2] hdr2 val3]
-```
 
 ## Receiving a message as a Tcl dict
-Typically the package delivers a message as a string, be it the `message` argument to the above callbacks or a return value from `request`. <br />  When publishing a message, its body and header are specified as separate arguments to `publish` or `request`. And when subscribing, you can pass `-dictmsg true` to indicate that the package should deliver `message` as a dict. Besides access to the headers, this approach also provides for better API extensibility in future.<br/>
-The dict has 5 keys:
-- header - a dict as shown above
-- data - a message body (string)
-- subject - subject of the message
-- reply - the reply-to subject
-- sub_id - subscription ID
+For simplicity, an incoming message is returned by `request` or a subscription callback as a string. This is only the payload. If you need more advanced access, e.g. to get message headers, you can pass the `-dictmsg true` argument to indicate that the package should deliver `message` as a dict. Then you can work with this variable using the [nats::msg ensemble](#natsmsg).
 
-All keys are always present in the dict, but some of them can be empty. <br />
-Instead of passing `-dictmsg true` to every call, you can `configure` your connection to return messages always as dicts.<br />
-If you have received a message with a header, but have *not* used `-dictmsg true`, this is not an error: the header is discarded, and you get back only the message body as a string, as usual.<br />
+Also, instead of passing `-dictmsg true` to every call, you can `configure` your connection to return messages always as dicts.
+
 Note that the JetStream API **always** returns messages as dicts.
 
 ## Public variables
 The connection object exposes 3 "public" read-only variables:
 - `last_error` - used to deliver asynchronous errors, e.g. if the network fails. It is a dict with 2 keys similar to the arguments for `throw`:
-  - code: error code 
-  - errorMessage: error message
+  - code: error code, e.g. {NATS ErrAuthorization}
+  - errorMessage: human-readable error message
 - `status` - connection status, one of `$nats::status_closed`, `$nats::status_connecting`, `$nats::status_connected` or `$nats::status_reconnecting`.
 - `serverInfo` - array with INFO from the current server. Intended only for tracing. Note there is `server_info` method that returns a dict with the same data.
 
-You can set up traces on these variables to get notified e.g. when a connection status changes or NATS server enters `ldm` - lame duck mode. For example:
-```Tcl
-package require lambda
-set conn [nats::connection new]
-trace add variable ${conn}::status write [lambda {var idx op } {
-    upvar $var s
-    puts "New status: $s"
-}]
-```
-
+You can set up traces on these variables to get notified e.g. when a connection status changes or NATS server enters `ldm` - lame duck mode. 
 ## Options
 
 The **configure** method accepts the following options. Make sure to set them *before* calling **connect**.
 
 | Option        | Type   | Default | Comment |
 | ------------- |--------|---------|---------|
-| -servers (mandatory)      | list   |         | URLs of NATS servers|
+| -servers      | list   | (mandatory) | URLs of NATS servers|
 | -name          | string |         | Client name sent to NATS server when connecting|
 | -pedantic      | boolean |false   | Pedantic protocol mode. If true some extra checks will be performed by NATS server|
 | -verbose       | boolean | false | If true, every protocol message is echoed by the server with +OK. Has no effect on functioning of the client itself |
@@ -105,68 +77,84 @@ The **configure** method accepts the following options. Make sure to set them *b
 | -token | string | | Default authentication token|
 | -secure | boolean | false | If secure=true, connection will fail if a server can't provide a TLS connection |
 | -check_subjects | boolean | true | Enable client-side checking of subjects when publishing or subscribing |
-| -check_connection | boolean | true | By default, all calls to `publish`, `subscribe`, `request` etc will throw an error if the client is not connected yet. Setting this option to `false` allows to call these methods while the client is still establishing a connection. They will be buffered, and once the connection is ready, they will be flushed. |
 | -dictmsg | boolean | false | Return messages from `subscribe` and `request` as dicts by default |
 | -utf8_convert | boolean | false | By default, the client does not change a message body when it is sent or received. Setting this option to `true` will encode outgoing messages to UTF-8 and decode incoming messages from UTF-8 |
-| -? | | | Provides interactive help with all options|
 
 ## Commands
 
-### constructor ?conn_name?
-Creates a new instance of the TclOO object `nats::connection` with default options and initialises a [logger](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/log/logger.md) instance with the severity level set to `warn`. If you pass in a connection name, it is sent to NATS in a `CONNECT` message, and is indicated in the logger name.
+### constructor ?*conn_name*? ?-logger *logger*? ?-log_chan *channel*? ?-log_level *level*?
+Creates a new instance of the TclOO object `nats::connection` with default options. If you provide a connection name (recommended!), it is sent to NATS in the `CONNECT` message.
 
-### objectName cget option
+The constructor also initializes the logging functionality. With no arguments, the default severity level is `warn` and destination is `stdout`. You can configure logging in 2 ways:
+
+- either create and configure your own [logger](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/log/logger.md) object and pass it with `-logger` option
+- or set severity with `-log_level` and output channel with `-log_chan`. The class uses only 4 levels: debug, info, warn, error
+
+See also the [examples](examples) folder.
+
+### objectName cget *option*
 Returns the current value of an option as described above. 
 
-### objectName configure ?option? ?value option value...?
-When given no arguments, returns a dict of all options with their current values. When given one option, returns its current value (same as `cget`). When given more arguments, assigns each value to an option. The only mandatory option is `servers`, and others have reasonable defaults. Under the hood it is implemented using the [cmdline::getoptions](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/cmdline/cmdline.md#3) command, so it understands the special `-?` option for interactive help.
+### objectName configure *?option? ?value option value...?*
+When given no arguments, returns a dict of all options with their current values. When given one option, returns its current value (same as `cget`). When given more arguments, assigns each value to an option. The only mandatory option is `servers`, and others have reasonable defaults.
 
-### objectName reset ?option ... ?
+### objectName reset ?*option* ... ?
 Resets the option(s) to default values.
 
 ### objectName connect ?-async? 
-Opens a TCP connection to one of the NATS servers specified in the `servers` list. Unless the `-async` option is given, this call blocks in a (coroutine-aware) `vwait` loop until the connection is completed, including a TLS handshake if needed.
+Opens a TCP connection to one of the NATS servers specified in the `servers` list. Unless the `-async` option is given, this call blocks in a (coroutine-aware) `vwait` loop until the connection is completed, including a TLS handshake if needed. With `-async` you can setup a trace on the `status` variable to get notified when the connection succeeds or fails.
 
 ### objectName disconnect 
-Flushes all outgoing data, closes the TCP connection and sets the `status` to `$nats::status_closed`. Pending asynchronous requests are cancelled.
+Flushes all outgoing data, closes the TCP connection and sets `status` to `$nats::status_closed`. Pending asynchronous requests are cancelled.
 
-### objectName publish subject message ?args?
-This method can be used in 2 ways. The simple way:
-```Tcl
-objectName publish subject message ?reply?
-```
-and if you need extra options:
-```Tcl
-objectName publish subject message ?-header header? ?-reply reply?
-```
-Publishes a message to the specified subject. See the NATS [documentation](https://docs.nats.io/nats-concepts/subjects) for more details about subjects and wildcards. The client will check subject's validity before sending. Allowed characters are Latin-1 characters, digits, dot, dash and underscore. <br/>
-`message` is sent as is, and it can be a binary string. If you specify a `reply` subject, a responder will know where to send a reply. You can use the `inbox` method to generate a transient [subject name](https://docs.nats.io/developing-with-nats/sending/replyto) starting with _INBOX. However, using asynchronous requests might accomplish the same task in an easier manner - see below.<br/>
-When using NATS server version 2.2 and later, you can provide a `header` with the message. 
+### objectName publish *subject message* ?-reply *replyTo*?
+Publishes a message to the specified subject. See the NATS [documentation](https://docs.nats.io/nats-concepts/subjects) for more details about subjects and wildcards. The client will check subject's validity before sending according to [NATS Naming Rules](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-6.md). <br/>
+`message` is the payload (can be a binary string). If you specify a `replyTo` subject, a responder will know where to send a reply. You can use the [inbox](#objectname-inbox) method to generate a transient [subject name](https://docs.nats.io/developing-with-nats/sending/replyto) starting with _INBOX. However, using asynchronous requests might accomplish the same task in an easier manner - see below.<br/>
 
-### objectName subscribe subject ?-queue queueGroup? ?-callback cmdPrefix? ?-max_msgs maxMsgs? ?-dictmsg dictmsg?
-Subscribes to a subject (possibly with wildcards) and returns a subscription ID. Whenever a message arrives, the command prefix will be invoked from the event loop with 3 additional arguments: `subject`, `message` and `replyTo` (might be empty). If you use the [-queue option](https://docs.nats.io/developing-with-nats/receiving/queues), only one subscriber in a given queueGroup will receive each message (useful for load balancing). When given `-max_msgs`, the client will automatically unsubscribe after `maxMsgs` messages have been received.<br />
-By default, `message` is delivered as a string. Use `-dictmsg true` to receive `message` as a dict, e.g. to access headers. You can also `configure` the connection to have `-dictmsg` as true by default for all calls.
+### objectName publish_msg *msg*
+Publishes a message created using [nats::msg](#natsmsg) commands. This method is especially useful if you need to send a message with headers.
+
+### objectName subscribe *subject* ?-queue *queueGroup*? ?-callback *cmdPrefix*? ?-max_msgs *maxMsgs*? ?-dictmsg *dictmsg*?
+Subscribes to a subject (possibly with wildcards) and returns a subscription ID. Whenever a message arrives, the command prefix will be invoked from the event loop. It must have the following signature:
+**subscriptionCallback** *subject message replyTo*
+
+If you use the [-queue option](https://docs.nats.io/developing-with-nats/receiving/queues), only one subscriber in a given queueGroup will receive each message (useful for load balancing). When given `-max_msgs`, the client will automatically unsubscribe after `maxMsgs` messages have been received.<br />
+By default, only a payload is delivered in `message`. Use `-dictmsg true` to receive `message` as a dict, e.g. to access headers. You can also `configure` the connection to have `-dictmsg` as true by default.
 
 ### objectName unsubscribe subID ?-max_msgs maxMsgs? 
 Unsubscribes from a subscription with a given `subID` immediately. If `-max_msgs` is given, unsubscribes after this number of messages has been received **on this `subID`**. In other words, if you have already received 10 messages, and then you call `unsubscribe $subID -max_msgs 10`, you will be unsubscribed immediately.
 
-### objectName request subject message ?-timeout ms? ?-callback cmdPrefix? ?-dictmsg dictmsg? ?-header header? ?-max_msgs maxMsgs?
-Sends a message with an optional `-header` to the specified subject using an automatically generated transient `replyTo` subject (inbox). 
-- If no callback is given, the request is synchronous and blocks in a (coroutine-aware) `vwait` until a response is received. The response is the return value of the method. If no response arrives within `timeout`, it raises the error `ErrTimeout`. When using NATS server version 2.2 and later,  `ErrNoResponders` is raised if nobody is subscribed to `subject`.
-- If a callback is given, the call returns immediately, and when a response is received or a timeout fires, the command prefix will be invoked from the event loop with 2 additional arguments: `timedOut` (equal to 1, if the request timed out or no responders are available) and a `response`.
+### objectName request subject message ?args?
+Sends `message` (payload) to the specified `subject` with an automatically generated transient reply-to (inbox).
 
-The request is done using the "new" style (in NATS terms), i.e. with one wildcard subscription serving all requests.<br />
-By default, `response` is delivered as a string. Use `-dictmsg true` to receive `response` as a dict, e.g. to access headers. You can also `configure` the connection to have `-dictmsg` as true by default for all calls.<br />
-Default timeout is unlimited. <br />
-In case multiple responses are received, only the first one is returned. If you need to gather all responses, you can specify the expected number with the `-max_msgs` option, and in this case the callback becomes mandatory. If `timeout` is specified, it will fire if not all `maxMsgs` have been received. Note that using the `-max_msgs` option will create an "old" style request, with a separate subscription per each request.
+You can provide the following options:
+- -timeout ms - expire the request after X ms (recommended!). Default timeout is infinite.
+- -callback cmdPrefix - do not block and deliver the reply to this callback
+- -dictmsg dictmsg - return the reply as a dict accessible to [nats::msg](#natsmsg).
+- -max_msgs maxMsgs - gather multiple replies. If this option is not used, the 'new-style' request is triggered under the hood (uses a shared subscription for all requests), and only the first reply is returned. If this option is used (even with `maxMsgs`=1), it triggers the 'old-style' request that creates its own subscription. `-dictmsg` is always true in this case.
 
-### objectName ping ?-timeout ms?
-A blocking call that triggers a ping-pong exchange with the NATS server and returns true upon success. If the server does not reply within the specified timeout (ms), it raises `ErrTimeout`. Default timeout is 10s. You can use this method to check if the server is alive. Note that in other NATS clients this function is usually called "flush".
+Depending if there's a callback, the method works in a sync or async manner.
+
+If no callback is given, the request is synchronous and blocks in a (coroutine-aware) `vwait` and then returns a reply. If `-max_msgs` >1, the returned value is a list of message dicts. If no response arrives within `timeout`, it raises the error `ErrTimeout`. When using NATS server version 2.2+, `ErrNoResponders` is raised if nobody is subscribed to `subject`.
+
+If a callback is given, the call returns immediately, and when a reply is received or a timeout fires, the callback will be invoked from the event loop. It must have the following signature:
+
+**asyncRequestCallback** *timedOut message*
+
+`timedOut` is a boolean equal to 1, if the request timed out or no responders are available.
+
+`response` is the received message. If `-max_msgs` >1, the callback is invoked for each message.
+
+### objectName request_msg msg ?-timeout *ms* -callback *cmdPrefix* -dictmsg *dictmsg*?
+Sends a request with a message created using [nats::msg](#natsmsg).
+
+### objectName ping ?-timeout *ms*?
+Triggers a ping-pong exchange with the NATS server, enters (coroutine-aware) `vwait` and returns true upon success. If the server does not reply within the specified timeout (ms), it raises `ErrTimeout`. Default timeout is 10s. You can use this method to check if the server is alive or ensure all prior calls to `publish` and `subscribe` are flushed to NATS. Note that in other NATS clients this function is usually called "flush".
 
 ### objectName inbox 
 Returns a new inbox - random subject starting with _INBOX.
 
-### objectName current_server 
+### objectName current_server
 Returns a 2-element list with host and port of the current NATS server.
 
 ### objectName all_servers
@@ -175,20 +163,17 @@ Returns a list with all servers in the pool.
 ### objectName server_info
 Returns a dict with the INFO message from the current server.
 
-### objectName logger 
-Returns a logger instance.
-
 ### objectName destroy
 TclOO destructor. It calls `disconnect` and then destroys the object.
 
 ### objectName jet_stream
-Returns `jetStreamObject` TclOO object to work with [JetStream](https://docs.nats.io/jetstream/jetstream).
+Returns [jetStreamObject](JsAPI.md) to work with [JetStream](https://docs.nats.io/jetstream/jetstream). Remember to destroy this object when it is no longer needed - there's no built-in garbage collection in `connection`.
 
 ## nats::msg
 This ensemble encapsulates all commands to work with a NATS message. Accessing it as a dict is deprecated. 
-### **msg create** *subject* ?-data *payload*? ?-reply *replySubj*?
+### msg create *subject* ?-data *payload*? ?-reply *replySubj*?
 Returns a new message with the specified subject, payload and reply subject.
-### **msg set** *msgVariable option value*
+### msg set *msgVariable option value*
 Updates the message. Possible `options` are `-subject`, `-data` and `-reply`.
 ### msg subject *msgValue*
 Returns the message subject.
@@ -202,10 +187,22 @@ Returns true if this is a no-responders message (status 503).
 Returns the message sequence number (only for messages returned by `stream_msg_get`).
 ### msg timestamp *msgValue*
 Returns the message timestamp in the ISO format, e.g. 2022-11-22T13:31:35.4514983Z (only for messages returned by `stream_msg_get`).
-### header
-
-### timestamp
-
+## nats::header
+This ensemble encapsulates all commands to work with message headers. Accessing them as a dict is deprecated. 
+### header add *msgVariable key value*
+Appends a new value to the `key` header in the message. If this header does not exist yet, it is created.
+### header set *msgVariable key value ?key value?..*
+Sets the `key` header to `value`. Multiple headers can be set at once by repeating key-value arguments (like in `dict create`).
+### header delete *msgVariable key*
+Deletes the `key` header from the message.
+### header values *msgValue key*
+Gets a list of all values of the `key` header.
+### header get *msgValue key*
+Gets the first value of the `key` header. This is a convenient shortcut for the `values` command, since usually each header has only one value.
+### header keys *msgValue ?globPattern?*
+Gets a list of all header keys in the message. With `globPattern`, only matching keys are returned (like in `dict keys`)
+### nats::timestamp
+Returns current local time in the ISO format, including milliseconds. Useful for logging.
 
 ## Error handling
 Error codes are similar to those from the nats.go client as much as possible. A few additional error codes provide more information about failed connection attempts to the NATS server: ErrBrokenSocket, ErrTLS, ErrConnectionRefused.
@@ -228,14 +225,13 @@ try {
 | ErrNoServers | No NATS servers available|
 | ErrInvalidArg | Invalid argument |
 | ErrBadSubject | Invalid subject for publishing or subscribing |
+| ErrBadQueueName | Invalid queue name |
 | ErrBadTimeout | Invalid timeout argument |
 | ErrMaxPayload | Message size is more than allowed by the server |
 | ErrBadSubscription | Invalid subscription ID |
 | ErrTimeout | Timeout of a synchronous request, ping or JetStream's `consume` |
 | ErrNoResponders | No responders are available for request |
 | ErrHeadersNotSupported| Headers are not supported by this server |
-| ErrInvalidJSAck | Invalid JSON when parsing a JetStream publish acknowledgement |
-| ErrJSResponse \<NATS err code\> | Negative JetStream publish acknowledgement. |
 
 Asynchronous errors are sent to the logger and can also be queried/traced using 
 `$last_error`, for example:
@@ -244,19 +240,19 @@ set err [set ${conn}::last_error]
 puts "Error code: [dict get $err code]"
 puts "Error text: [dict get $err errorMessage]"
 ```
-If the TCP connection fails, the client will try the next server from the pool.
-| Async errors     | Reason   | 
-| ------------- |--------|
-| ErrBrokenSocket | TCP socket failed |
-| ErrTLS | TLS handshake failed |
-| ErrStaleConnection | The client or server closed the connection, because the other party did not respond to PING on time |
-| ErrConnectionRefused | TCP connection to a NATS server was refused, possibly due to wrong port, or the server was not running |
-| ErrSecureConnWanted | Client requires TLS, but a NATS server does not provide TLS |
-| ErrConnectionTimeout | Connection to a server could not be established within connect_timeout ms |
-| ErrBadHeaderMsg | The client failed to parse message headers. Nevertheless, the message body is delivered |
-| ErrServer | Generic error reported by NATS server |
-| ErrPermissions | subject authorization has failed |
-| ErrAuthorization | user authorization has failed or no credentials are known for this server |
-| ErrAuthExpired | user authorization has expired |
-| ErrAuthRevoked | user authorization has been revoked |
-| ErrAccountAuthExpired | NATS server account authorization has expired |
+| Async errors     | Reason   | Terminates connection |
+| ------------- |--------|----|
+| ErrBrokenSocket | TCP socket failed | yes |
+| ErrTLS | TLS handshake failed | yes |
+| ErrStaleConnection | The client or server closed the connection, because the other party did not respond to PING on time | yes |
+| ErrConnectionRefused | TCP connection to a NATS server was refused, possibly due to wrong port, or the server was not running | yes |
+| ErrSecureConnWanted | Client requires TLS, but a NATS server does not provide TLS | yes |
+| ErrConnectionTimeout | Connection to a server could not be established within connect_timeout ms | yes| 
+| ErrBadHeaderMsg | The client failed to parse message headers. Nevertheless, the message body is delivered | no |
+| ErrServer | Generic error reported by NATS server | yes |
+| ErrBadSubject | Message had an invalid subject | no |
+| ErrPermissions | Subject authorization has failed | no |
+| ErrAuthorization | User authorization has failed or no credentials are known for this server | yes |
+| ErrAuthExpired | User authorization has expired | yes |
+| ErrAuthRevoked | User authorization has been revoked | yes |
+| ErrAccountAuthExpired | NATS server account authorization has expired | yes |

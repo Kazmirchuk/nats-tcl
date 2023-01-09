@@ -56,7 +56,9 @@ package require nats
 - Extensive test suite with 120+ unit tests, checking nominal use cases, error handling, timings and the wire protocol ensures that the Tcl client behaves in line with official NATS clients
 
 ## Examples
-Look into the [examples](examples) folder. They are numbered in the order of difficulty.
+Look into the [examples](examples) folder. They are numbered in the order of difficulty.<br /> The examples cover only basic use cases, so for more details you can look into the tests.
+
+Note that the repository as a whole is licensed under Apache 2.0, but the examples are released into the public domain, so you can just copy-paste them into your work.
 
 ## Missing features (in comparison to official NATS clients)
 - The new authentication mechanism using NKey & [JWT](https://docs.nats.io/developing-with-nats/security/creds). This one will be difficult to do, because it requires support for _ed25519_ cryptography that is missing in Tcl AFAIK. Please let me know if you need it.

@@ -63,7 +63,7 @@ oo::class create ::nats::connection {
             log_chan valid_str stdout
             log_level valid_str warn
         }
-        # TODO make log_level enum
+        
         set status $nats::status_closed
         set last_error ""
 
@@ -462,12 +462,11 @@ oo::class create ::nats::connection {
     method OldStyleRequest {subject message header timeout callback max_msgs} {
         # "old-style" request with a SUB per each request is needed for JetStream,
         # because messages received from a stream have a subject that differs from our reply-to
-        # we still use the requests array to vwait on
+        # we still use the same requests array to vwait on
         set reply [my inbox]
         set reqID [incr counters(request)]
         set subID [my subscribe $reply -dictmsg 1 -callback [mymethod OldStyleRequestCb $reqID] -max_msgs $max_msgs -post false]
         my publish $subject $message -reply $reply -header $header
-        # TODO: add -timeout to method subscribe? could simplify things here?
         set timerID ""
         if {$callback ne ""} {
             if {$timeout != 0} {
@@ -487,12 +486,12 @@ oo::class create ::nats::connection {
             if {[dict lookup $sync_req timedOut 0]} {
                 break
             }
-            if {[llength [dict lookup $sync_req inMsgs ""]] == $max_msgs} {
+            if {[llength [dict lookup $sync_req inMsgs]] == $max_msgs} {
                 break
             }
         }
         unset requests($reqID)
-        set inMsgs [dict lookup $sync_req inMsgs ""]
+        set inMsgs [dict lookup $sync_req inMsgs]
         if {[dict lookup $sync_req timedOut 0]} {
             my unsubscribe $subID
             if {$inMsgs == ""} {
@@ -508,7 +507,7 @@ oo::class create ::nats::connection {
         if {$max_msgs == 1} {
             return $firstMsg
         } else {
-            return $inMsgs
+            return $inMsgs ;# this could be fewer than $max_msgs in case the timeout fired
         }
     }
     
@@ -568,7 +567,6 @@ oo::class create ::nats::connection {
             #log::debug "NewStyleRequestCb got [string range $msg 0 15] on reqID $reqID - discarded"
             return
         }
-        #TODO check status 408
         set callback [dict lookup $requests($reqID) callback]
         if {$callback eq ""} {
             # resume from vwait in NewStyleRequest; the "requests" array will be cleaned up there
@@ -750,8 +748,10 @@ oo::class create ::nats::connection {
             }
             if {[info exists serverInfo(auth_required)] && $serverInfo(auth_required)} {
                 lappend connectParams {*}[$serverPool format_credentials]
-            } 
-            set jsonMsg [::nats::_json_write_object {*}$connectParams]
+            }
+            json::write::indented false
+            json::write::aligned false
+            set jsonMsg [json::write::object {*}$connectParams]
         } trap {NATS ErrAuthorization} err {
             # no credentials could be found for this server, try next one
             my AsyncError ErrAuthorization $err 1
@@ -790,7 +790,6 @@ oo::class create ::nats::connection {
             # example connect_urls : ["192.168.2.5:4222", "192.168.91.1:4222", "192.168.157.1:4223", "192.168.2.5:4223"]
             # by default each server will advertise IPs of all network interfaces, so the server pool may seem bigger than it really is
             # --client_advertise NATS option can be used to make it clearer
-            #TODO invoke callback - discovered servers/LDM
             array set serverInfo [json::json2dict $cmd]
             if {[info exists serverInfo(connect_urls)]} {
                 set urls $serverInfo(connect_urls)
@@ -1035,7 +1034,6 @@ oo::class create ::nats::connection {
             log::error "Unexpected error: $msg $opts"
         }
         set status $nats::status_closed
-        # TODO call disconnect?
         log::debug "Finished coroutine $coro"
         set coro ""
     }
@@ -1062,7 +1060,7 @@ oo::class create ::nats::connection {
                 # when reading from the socket, it's easier to let Tcl do EOL translation, unless we are in method MSG
                 # when writing to the socket, we need to turn off the translation when sending a message payload
                 # but outBuffer doesn't know which element is a message, so it's easier to write CR+LF ourselves
-                # TODO: configure -buffersize?
+                # -buffersize is probably not needed, because we call flush regularly anyway
                 chan configure $sock -translation {crlf binary} -blocking 0 -buffering full -encoding binary
                 chan event $sock readable [list $coro readable]
             }
@@ -1352,21 +1350,6 @@ proc ::nats::_format_header { header } {
     }
     # don't append one more \r\n here! the header is put into outBuffer as a separate element
     # so \r\n will be added when flushing
-    return $result
-}
-
-# preserve json::write variables
-proc ::nats::_json_write_object {args} {    
-    set ind [json::write::indented]
-    set ali [json::write::aligned]
-
-    json::write::indented false
-    json::write::aligned false
-    set result [json::write::object {*}$args]
-
-    json::write::indented $ind
-    json::write::aligned $ali
-
     return $result
 }
 

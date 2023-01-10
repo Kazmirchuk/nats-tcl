@@ -146,8 +146,6 @@ oo::class create ::nats::jet_stream {
         $conn publish [dict get $message reply] "+WPI"
     }
     
-    # TODO?
-    # JetStream Publish Retries on No Responders https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-22.md
     # nats schema info --yaml io.nats.jetstream.api.v1.pub_ack_response
     method publish {subject message args} {
         set msg [nats::msg create $subject -data $message]
@@ -267,7 +265,6 @@ oo::class create ::nats::jet_stream {
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_names_request
     # the schema suggests possibility to filter by subject, but it doesn't work!
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_names_response
-    # TODO: check subject filter not working?
     method consumer_names {stream} {        
         set response [json::json2dict [$conn request "\$JS.API.CONSUMER.NAMES.$stream" "" -timeout $_timeout]]
         nats::_checkJsError $response
@@ -276,7 +273,6 @@ oo::class create ::nats::jet_stream {
 
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_create_request
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_create_response
-    # TODO update_stream?
     method add_stream {stream args} {
         # follow the same order of fields as in https://github.com/nats-io/nats.py/blob/main/nats/js/api.py
         set spec {name             valid_str NATS_TCL_REQUIRED

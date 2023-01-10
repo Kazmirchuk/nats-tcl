@@ -22,7 +22,7 @@ All commands are defined in and exported from the `::nats` namespace.
 [*objectName* all_servers](#objectName-all_servers) <br/>
 [*objectName* server_info](#objectName-server_info) <br/>
 [*objectName* destroy](#objectName-destroy) <br/>
-[*objectName* jet_stream](#objectName-jet_stream) <br/>
+[*objectName* jet_stream](#objectname-jet_stream--timeout-ms) <br/>
 
 [nats::msg](#natsmsg) <br/>
 [msg create *subject* ?-data *payload*? ?-reply *replyTo*?](#msg-create-subject--data-payload--reply-replysubj)<br/>
@@ -118,7 +118,11 @@ When given no arguments, returns a dict of all options with their current values
 Resets the option(s) to default values.
 
 ### objectName connect ?-async? 
-Opens a TCP connection to one of the NATS servers specified in the `servers` list. Unless the `-async` option is given, this call blocks in a (coroutine-aware) `vwait` loop until the connection is completed, including a TLS handshake if needed. With `-async` you can setup a trace on the `status` variable to get notified when the connection succeeds or fails.
+Opens a TCP connection to one of the NATS servers specified in the `servers` list. 
+
+Without the `-async` option, this call blocks in a (coroutine-aware) `vwait` loop until the connection is completed, including a TLS handshake if needed. 
+
+With `-async` the call does not block. `status` becomes `$status_connecting` and you can call `publish` & `subscribe` straightaway - they will be flushed once the connection succeeds. You can `vwait` or setup a trace on the `status` variable to get notified when the connection succeeds or fails.
 
 ### objectName disconnect 
 Flushes all outgoing data, closes the TCP connection and sets `status` to `$nats::status_closed`. Pending asynchronous requests are cancelled.
@@ -144,19 +148,19 @@ Unsubscribes from a subscription with a given `subID` immediately. If `-max_msgs
 Sends `message` (payload) to the specified `subject` with an automatically generated transient reply-to (inbox).
 
 You can provide the following options:
-- -timeout ms - expire the request after X ms (recommended!). Default timeout is infinite.
-- -callback cmdPrefix - do not block and deliver the reply to this callback
-- -dictmsg dictmsg - return the reply as a dict accessible to [nats::msg](#natsmsg).
-- -max_msgs maxMsgs - gather multiple replies. If this option is not used, the 'new-style' request is triggered under the hood (uses a shared subscription for all requests), and only the first reply is returned. If this option is used (even with `maxMsgs`=1), it triggers the 'old-style' request that creates its own subscription. `-dictmsg` is always true in this case.
+- `-timeout ms` - expire the request after X ms (recommended!). Default timeout is infinite.
+- `-callback cmdPrefix` - do not block and deliver the reply to this callback
+- `-dictmsg dictmsg` - return the reply as a dict accessible to [nats::msg](#natsmsg).
+- `-max_msgs maxMsgs` - gather multiple replies. If this option is not used, the 'new-style' request is triggered under the hood (uses a shared subscription for all requests), and only the first reply is returned. If this option is used (even with `maxMsgs`=1), it triggers the 'old-style' request that creates its own subscription. `-dictmsg` is always true in this case.
 
 Depending if there's a callback, the method works in a sync or async manner.
 
-If no callback is given, the request is synchronous and blocks in a (coroutine-aware) `vwait` and then returns a reply. If `-max_msgs` >1, the returned value is a list of message dicts. If no response arrives within `timeout`, it raises the error `ErrTimeout`. When using NATS server version 2.2+, `ErrNoResponders` is raised if nobody is subscribed to `subject`.<br/>
+If no callback is given, the request is synchronous and blocks in a (coroutine-aware) `vwait` and then returns a reply. If `-max_msgs` >1, the returned value is a list of message dicts. If no response arrives within `timeout`, it raises the error `ErrTimeout`. When using NATS server version 2.2+, `ErrNoResponders` is raised if nobody is subscribed to `subject`.
+
 If a callback is given, the call returns immediately, and when a reply is received or a timeout fires, the callback will be invoked from the event loop. It must have the following signature:<br/>
 **asyncRequestCallback** *timedOut message*<br/>
-`timedOut` is a boolean equal to 1, if the request timed out or no responders are available.
-
-`response` is the received message. If `-max_msgs` >1, the callback is invoked for each message.
+`timedOut` is a boolean equal to 1, if the request timed out or no responders are available.<br/>
+`response` is the received message. If `-max_msgs` >1, the callback is invoked for each message. If the timeout fires before `-max_msgs` are received, the callback is invoked with `timedOut`=1.
 
 ### objectName request_msg *msg* ?-timeout *ms* -callback *cmdPrefix* -dictmsg *dictmsg*?
 Sends a request with a message created using [nats::msg](#natsmsg).
@@ -180,7 +184,7 @@ Returns a dict with the INFO message from the current server.
 TclOO destructor. It calls `disconnect` and then destroys the object.
 
 ### objectName jet_stream ?-timeout *ms*?
-This 'factory' method returns [jetStreamObject](JsAPI.md) to work with [JetStream](https://docs.nats.io/jetstream/jetstream). `-timeout` (default 5s) is applied for all requests to JetStream NATS API.
+This 'factory' method creates [jetStreamObject](JsAPI.md) to work with [JetStream](https://docs.nats.io/jetstream/jetstream). `-timeout` (default 5s) is applied for all requests to JetStream NATS API.
 
 Remember to destroy this object when it is no longer needed - there's no built-in garbage collection in `connection`.
 
@@ -236,7 +240,7 @@ try {
 ```
 | Synchronous errors     | Reason   | 
 | ------------- |--------|
-| ErrConnectionClosed | Attempt to subscribe or send a message before calling `connect` |
+| ErrConnectionClosed | Attempt to subscribe or publish a message before calling `connect` |
 | ErrNoServers | No NATS servers available|
 | ErrInvalidArg | Invalid argument |
 | ErrBadSubject | Invalid subject for publishing or subscribing |
@@ -244,7 +248,7 @@ try {
 | ErrBadTimeout | Invalid timeout argument |
 | ErrMaxPayload | Message size is more than allowed by the server |
 | ErrBadSubscription | Invalid subscription ID |
-| ErrTimeout | Timeout of a synchronous request, ping or JetStream's `consume` |
+| ErrTimeout | Timeout of a synchronous request or ping |
 | ErrNoResponders | No responders are available for request |
 | ErrHeadersNotSupported| Headers are not supported by this server |
 
@@ -260,11 +264,11 @@ puts "Error text: [dict get $err errorMessage]"
 | ErrBrokenSocket | TCP socket failed | yes |
 | ErrTLS | TLS handshake failed | yes |
 | ErrStaleConnection | The client or server closed the connection, because the other party did not respond to PING on time | yes |
-| ErrConnectionRefused | TCP connection to a NATS server was refused, possibly due to wrong port, or the server was not running | yes |
-| ErrSecureConnWanted | Client requires TLS, but a NATS server does not provide TLS | yes |
-| ErrConnectionTimeout | Connection to a server could not be established within connect_timeout ms | yes| 
+| ErrConnectionRefused | TCP connection to the server was refused, possibly due to a wrong port, DNS resolution failure, or the server was not running | yes |
+| ErrSecureConnWanted | Client requires TLS, but the server does not provide TLS | yes |
+| ErrConnectionTimeout | Connection to a server could not be established within `-connect_timeout` ms | yes| 
 | ErrBadHeaderMsg | The client failed to parse message headers. Nevertheless, the message body is delivered | no |
-| ErrServer | Generic error reported by NATS server | yes |
+| ErrServer | Generic error reported by NATS | yes |
 | ErrBadSubject | Message had an invalid subject | no |
 | ErrPermissions | Subject authorization has failed | no |
 | ErrAuthorization | User authorization has failed or no credentials are known for this server | yes |

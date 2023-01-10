@@ -16,7 +16,6 @@ source test_utils.tcl
 startNats NATS1 --cluster nats://localhost:4248 --cluster_name "TCL_TEST" --client_advertise "localhost:4222"
   
 set conn [nats::connection new "Cluster" -log_chan [tcltest::outputChannel]]
-#debugLogging $conn
 
 # I don't know if there is a reliable way to trigger a NATS server to send out INFO with connect_urls
 # if I start with creating a cluster and then connect with the client, I often don't get it for a long time

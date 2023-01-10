@@ -4,7 +4,7 @@
 All commands are defined in and exported from the `::nats` namespace.
 
 ## Synopsis
-[**nats::connection new** ?*conn_name*? ?-logger *logger*? ?-log_chan *channel*? ?-log_level *level*?](#constructor-conn_name--logger-logger--log_chan-channel--log_level-level) <br/>
+[nats::connection new ?*conn_name*? ?-logger *logger*? ?-log_chan *channel*? ?-log_level *level*?](#constructor-conn_name--logger-logger--log_chan-channel--log_level-level) <br/>
 [*objectName* cget *option*](#objectName-cget-option) <br/>
 [*objectName* configure *?option? ?value option value ...?*](#objectName-configure-option-value-option-value) <br/>
 [*objectName* reset *option*](#objectname-reset-option--) <br/>
@@ -137,10 +137,10 @@ Subscribes to a subject (possibly with wildcards) and returns a subscription ID.
 If you use the [-queue option](https://docs.nats.io/developing-with-nats/receiving/queues), only one subscriber in a given queueGroup will receive each message (useful for load balancing). When given `-max_msgs`, the client will automatically unsubscribe after `maxMsgs` messages have been received.<br />
 By default, only a payload is delivered in `message`. Use `-dictmsg true` to receive `message` as a dict, e.g. to access headers. You can also `configure` the connection to have `-dictmsg` as true by default.
 
-### objectName unsubscribe subID ?-max_msgs *maxMsgs*? 
+### objectName unsubscribe *subID* ?-max_msgs *maxMsgs*? 
 Unsubscribes from a subscription with a given `subID` immediately. If `-max_msgs` is given, unsubscribes after this number of messages has been received **on this `subID`**. In other words, if you have already received 10 messages, and then you call `unsubscribe $subID -max_msgs 10`, you will be unsubscribed immediately.
 
-### objectName request subject message ?args?
+### objectName request *subject message* ?*args*?
 Sends `message` (payload) to the specified `subject` with an automatically generated transient reply-to (inbox).
 
 You can provide the following options:
@@ -158,7 +158,7 @@ If a callback is given, the call returns immediately, and when a reply is receiv
 
 `response` is the received message. If `-max_msgs` >1, the callback is invoked for each message.
 
-### objectName request_msg msg ?-timeout *ms* -callback *cmdPrefix* -dictmsg *dictmsg*?
+### objectName request_msg *msg* ?-timeout *ms* -callback *cmdPrefix* -dictmsg *dictmsg*?
 Sends a request with a message created using [nats::msg](#natsmsg).
 
 ### objectName ping ?-timeout *ms*?
@@ -179,8 +179,10 @@ Returns a dict with the INFO message from the current server.
 ### objectName destroy
 TclOO destructor. It calls `disconnect` and then destroys the object.
 
-### objectName jet_stream
-Returns [jetStreamObject](JsAPI.md) to work with [JetStream](https://docs.nats.io/jetstream/jetstream). Remember to destroy this object when it is no longer needed - there's no built-in garbage collection in `connection`.
+### objectName jet_stream ?-timeout *ms*?
+This 'factory' method returns [jetStreamObject](JsAPI.md) to work with [JetStream](https://docs.nats.io/jetstream/jetstream). `-timeout` (default 5s) is applied for all requests to JetStream NATS API.
+
+Remember to destroy this object when it is no longer needed - there's no built-in garbage collection in `connection`.
 
 ## nats::msg
 This ensemble encapsulates all commands to work with a NATS message. Accessing it as a dict is deprecated. 
@@ -268,4 +270,4 @@ puts "Error text: [dict get $err errorMessage]"
 | ErrAuthorization | User authorization has failed or no credentials are known for this server | yes |
 | ErrAuthExpired | User authorization has expired | yes |
 | ErrAuthRevoked | User authorization has been revoked | yes |
-| ErrAccountAuthExpired | NATS server account authorization has expired | yes |
+| ErrAccountAuthExpired | NATS server account authorization has expired| yes |

@@ -45,7 +45,6 @@ set ::nats::_option_spec {
     token str ""
     secure bool false
     check_subjects bool true
-    check_connection bool true
     dictmsg bool false
     utf8_convert bool false
 }
@@ -692,11 +691,12 @@ oo::class create ::nats::connection {
                 puts -nonewline $sock $msg
             }
             flush $sock
-            set outBuffer [list] ;# do NOT clear the buffer unless we had a successful flush!
         } on error err {
             lassign [my current_server] host port
             my AsyncError ErrBrokenSocket "Failed to send data to $host:$port: $err" 1
         }
+        # in any case the buffer must be cleared to guarantee at-most-once delivery
+        set outBuffer [list]
     }
     
     method CoroVwait {var} {

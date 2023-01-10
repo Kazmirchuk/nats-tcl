@@ -13,7 +13,6 @@ source test_utils.tcl
 startNats NATS
 
 set conn [nats::connection new "ExtraConfigOptions" -log_chan [tcltest::outputChannel]]
-#debugLogging $conn
 
 $conn configure -servers nats://localhost:4222
 
@@ -92,6 +91,34 @@ test extra_opts-3 "PING/PONG protocol initiated by client" -body {
 
 stopNats NATS
 
+package require tcl::transform::core
+
+# replace/delete data passed through the channel using [string map]
+proc intercept {channel read_mapping write_mapping} {
+    chan push $channel [interceptor new $read_mapping $write_mapping]
+}
+
+oo::class create interceptor {
+    superclass tcl::transform::core
+    variable read_map
+    variable write_map
+    
+    constructor {read_mapping write_mapping} {
+        set read_map $read_mapping
+        set write_map $write_mapping
+    }
+    method write {c data} {
+        return [string map $write_map $data]
+    }
+
+    method read {c data} {
+        return [string map $read_map $data]
+    }
+}
+
+set conn [nats::connection new "ExtraConfigOptions" -log_chan [tcltest::outputChannel]]
+$conn configure -servers nats://localhost:4222
+
 test extra_opts-4.1 "PING/PONG protocol initiated by server" -body {
     # I can't pass ping_interval as a command line argument to the NATS server, so have to create a config file
     # older NATS (v1.4) doesn't accept ping_interval: 2s, so just use int
@@ -107,24 +134,13 @@ test extra_opts-4.1 "PING/PONG protocol initiated by server" -body {
     # check that the exchange occurred exactly once
     assert {[lsearch -all $writtenData "PONG"] == 0}
     assert {[lsearch -all $readData "PING"] == 0}
-} -cleanup {
-    tcltest::removeFile quick_ping.conf
 }
 
 test extra_opts-4.2 "PING/PONG - no response from the client" -body {
-    set bufferTrace [lambda {var idx op } {
-        upvar 1 $var buffer
-        set pos [lsearch $buffer "PONG"]
-        if {$pos == -1} {
-            return
-        }
-        set buffer [lsearch -inline -all -not -exact $buffer "PONG"] ;# do not send PONG to the server
-    }]
-    # access to a private variable only for test purposes!
-    trace add variable ${conn}::outBuffer write $bufferTrace
     # wait for the next PING/PONG exchange initiated by the server
-    # we do not respond to PING, so the server will report an error with -ERR and close the socket
+    # the interceptor will delete all PONGs sent by the client, so the server will report an error with -ERR and close the socket
     # which will make the client go into the reconnecting mode
+    intercept [set ${conn}::sock] "" [dict create "PONG\r\n" {}]
     duration {
         wait_for ${conn}::status 6000
     } elapsed
@@ -133,46 +149,29 @@ test extra_opts-4.2 "PING/PONG - no response from the client" -body {
     # after sending PING, the server will wait for 2s more before declaring 'Stale Connection'
     assert {$elapsed < 5000}
 } -cleanup {
-    $conn disconnect
-    trace remove variable ${conn}::outBuffer write $bufferTrace
+    $conn disconnect ;# the interceptor object is automatically destroyed, when the socket is closed
 }
 
-stopNats quick_ping
-
-#test extra_opts-5 "PING/PONG - no response from the server" -setup {
-#    # make a fake NATS server that does not respond to PING
-#    # but ensure the first round goes ok for "connect" to succeed
-#    startFakeServer
-#    set handler {
-#        proc handler {channel line} {
-#            if {$line eq "PING"} {
-#                incr ::ping_count
-#                if {$::ping_count == 1} {
-#                    puts $channel PONG
-#                } else {
-#                    puts $channel FAKE_PONG
-#                }
-#            }
-#        }
-#    }
-#    sendFakeServer $handler
-#} -body {
-#    $conn configure -ping_interval 1000
-#    # default max_outstanding_pings=2
-#    $conn connect
-#    duration {
-#        # the client will send 2 PINGs without reply; when Pinger runs for the 3rd time, it will raise the error
-#        # and the client will go into reconnecting
-#        wait_for ${conn}::status 4000
-#    } elapsed
-#    assert {[dict get [set ${conn}::last_error] code] eq [list NATS ErrStaleConnection]}
-#    assert {[set ${conn}::status] == $nats::status_reconnecting} 1
-#    assert {[approx $elapsed 3000]}
-#} -cleanup {
-#    $conn disconnect
-#    $conn reset -ping_interval
-#    stopFakeServer
-#}
+test extra_opts-4.3 "PING/PONG - no response from the server" -body {
+    $conn configure -ping_interval 1000
+    # default max_outstanding_pings=2
+    $conn connect
+    # delete all PONGs sent by the server
+    intercept [set ${conn}::sock] [dict create "PONG\r\n" {}] ""
+    duration {
+        # the client will send 2 PINGs without reply; when Pinger runs for the 3rd time, it will raise the error
+        # and the client will go into reconnecting
+        wait_for ${conn}::status 4000
+    } elapsed
+    assert {[dict get [set ${conn}::last_error] code] eq [list NATS ErrStaleConnection]}
+    assert {[set ${conn}::status] == $nats::status_reconnecting} 1
+    assert {[approx $elapsed 3000]}
+} -cleanup {
+    $conn disconnect
+    $conn reset -ping_interval
+    stopNats quick_ping
+    tcltest::removeFile quick_ping.conf
+}
 
 startNats NATS
 # this is "Eivør Pálsdóttir" encoded in UTF-8

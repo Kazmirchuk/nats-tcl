@@ -18,7 +18,6 @@ test tls-1.1 "Try connecting to NATS without CA" -constraints tls -setup {
     startNats NATS --tlscert=server-cert.pem --tlskey=server-key.pem
     set conn [nats::connection new TLS_NATS -log_chan [tcltest::outputChannel]]
     $conn configure -servers localhost:4222
-    #debugLogging $conn
 } -body {
     $conn connect
 } -result {*certificate verify failed*} -match glob -errorCode {NATS ErrTLS}

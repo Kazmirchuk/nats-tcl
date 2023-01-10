@@ -14,7 +14,6 @@ source test_utils.tcl
 startNats NATS_user --user bilbo --pass ring
 
 set conn [nats::connection new "auth_test" -log_chan [tcltest::outputChannel]]
-#debugLogging $conn
 
 test auth-1.1 "Connect to NATS using login/password in URL" -body {
     $conn configure -servers nats://bilbo:ring@localhost:4222

@@ -108,7 +108,6 @@ test server_pool-14.1 "Reconnecting timings and counters" -body {
     startNats NATS1
     $conn configure -servers [list nats://localhost:4222 nats://localhost:5222 nats://localhost:6222] -randomize false
     $conn configure -max_reconnect_attempts 1 -connect_timeout 500 -reconnect_time_wait 3000
-    #debugLogging $conn
     
     set all_errors [list]
     set error_trace [lambda {var idx op } {

@@ -15,8 +15,6 @@ $conn configure -servers nats://localhost:4222
 $conn connect
 set js [$conn jet_stream -timeout 2000]
 
-#debugLogging $conn
-
 # duplicate_window is in ms
 set stream_config [dict create \
                      description "My test stream" \

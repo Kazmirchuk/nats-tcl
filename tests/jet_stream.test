@@ -16,7 +16,6 @@ set consumer_name PULL_CONSUMER
 startNats NATS_JS -js
 
 set conn [nats::connection new "JS" -log_chan [tcltest::outputChannel]]
-#debugLogging $conn
 
 $conn configure -servers nats://localhost:4222
 $conn connect

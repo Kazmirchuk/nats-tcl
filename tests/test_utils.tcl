@@ -141,31 +141,6 @@ namespace eval test_utils {
         set pos [string first " " $data] ;# skip CONNECT straight to the beginning of JSON
         return [json::json2dict [string range $data $pos+1 end]]
     }
-    # WARNING: debug logging must be off when running under Tcl debugger, otherwise the debugger bugs out
-    proc debugLogging {conn} {
-        # available logger severity levels: debug info notice warn error critical alert emergency
-        # default is "warn"
-        [$conn logger]::setlevel debug
-        trace add variable ${conn}::status write [lambda {var idx op } {
-            upvar 1 $var s
-            puts "[nats::_timestamp] New status: $s"
-        }]
-        trace add variable ${conn}::subscriptions write [lambda {var idx op } {
-            upvar 1 ${var}($idx) s
-            puts "[nats::_timestamp] sub($idx): $s"
-        }]
-        trace add variable ${conn}::subscriptions unset [lambda {var idx op } {
-            puts "[nats::_timestamp] sub($idx) unset"
-        }]
-        trace add variable ${conn}::requests write [lambda {var idx op } {
-            upvar 1 ${var}($idx) r
-            puts "[nats::_timestamp] req($idx): $r"
-        }]
-        trace add variable ${conn}::requests unset [lambda {var idx op } {
-            puts "[nats::_timestamp] req($idx) unset"
-        }]
-    }
-    
     proc subCallback {subj msg reply} {
         set ::inMsg $msg
     }

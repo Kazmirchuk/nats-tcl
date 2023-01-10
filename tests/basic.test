@@ -16,7 +16,6 @@ source test_utils.tcl
 startNats NATS
 
 set conn [nats::connection new "BasicNats" -log_chan [tcltest::outputChannel]]
-#debugLogging $conn
 
 $conn configure -servers nats://localhost:4222
 

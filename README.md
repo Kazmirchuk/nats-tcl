@@ -56,28 +56,8 @@ package require nats
 - Extensive test suite with 120+ unit tests, checking nominal use cases, error handling, timings and the wire protocol ensures that the Tcl client behaves in line with official NATS clients
 
 ## Examples
-Look into the [examples](examples) folder. They are numbered in the order of difficulty.<br /> The examples cover only basic use cases, so for more details you can look into the tests.
-
-Note that the repository as a whole is licensed under Apache 2.0, but the examples are released into the public domain, so you can just copy-paste them into your work.
+Look into the [examples](examples) folder.
 
 ## Missing features (in comparison to official NATS clients)
 - The new authentication mechanism using NKey & [JWT](https://docs.nats.io/developing-with-nats/security/creds). This one will be difficult to do, because it requires support for _ed25519_ cryptography that is missing in Tcl AFAIK. Please let me know if you need it.
-
-## Running tests
-
-The library has been tested on Windows 10 using the latest pre-built Tcl available from ActiveState (Tcl 8.6.12, Tcllib 1.20, TLS 1.7.16) and on OpenSUSE LEAP 15.4 using Tcl from the distribution repos (Tcl 8.6.12, Tcllib 1.20, TLS 1.7.22). It might work on earlier versions too.
-
-Regarding the NATS server version, all tests pass against v2.9.6. "Core NATS" tests (all *.test files except jet_stream.test, jet_stream_mgmt.test, pubsub.test, cluster.test) also pass against NATS v1.4.1. Of course, JetStream and message headers require NATS 2.2+.
-
-Both `nats-server` and `nats` [CLI](https://github.com/nats-io/natscli) must be available in your `$PATH`. I've tested with NATS CLI v0.0.34.
-
-The tests are based on the standard Tcl unit testing framework, [tcltest](https://www.tcl.tk/man/tcl8.6/TclCmd/tcltest.htm). Simply run `tclsh tests/all.tcl` and the tests will be executed one after another. 
-
-And this is how you can run just one test script and save the log to a file:
-```bash
-tclsh tests/all.tcl -file basic.test -outfile test.log
-```
-
-To run the TLS tests, you will need to provide certificates yourself in `tests/cert` subfolder. E.g. you can generate them using [mkcert](https://docs.nats.io/nats-server/configuration/securing_nats/tls#self-signed-certificates-for-testing).
-
-If you get debug output in stderr from C code in the TLS package, it must have been compiled with `#define TCLEXT_TCLTLS_DEBUG` (seems to be default in the CentOS/EPEL repo). You'll need to recompile TclTLS yourself without this flag.
+- WebSocket is not supported. The only available transport is TCP.

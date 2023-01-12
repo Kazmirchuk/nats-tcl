@@ -16,7 +16,6 @@ source test_utils.tcl
 startNats NATS
 
 set conn [nats::connection new "BasicNats" -log_chan [tcltest::outputChannel]]
-
 $conn configure -servers nats://localhost:4222
 
 test basic-1 "Connect to NATS" -body {
@@ -134,33 +133,32 @@ test basic-4.1 "Subscribe and unsubscribe with -max_msgs" -body {
 set resp [responder new]
     
 test basic-5.1 "Synchronous request" -body {
-    # trying to sniff here causes Tcl to crash
-    #sniffer $conn {
+    sniffer $conn {
         duration {
             set result [$conn request service "0 hello"]
         } elapsed
-    #} rdata wdata -all_lines 1
+    } rdata wdata -all_lines 1
     assert {$elapsed < 200}  ;# actual roundtrip time on localhost ~40ms
     set result
 } -result "hello"
 
-#test basic-5.2 "Synchronous request - written to socket" -body {
-#    lassign $wdata sub pub payload
-#    # the first request starts with subscribing to INBOX.<random>.*
-#    assert {[regexp {SUB _INBOX.*.\*  ([[:digit:]]+)} $sub -> subID]}
-#    assert {[regexp {PUB service _INBOX.*.1 (.*)} $pub -> msg_length]}
-#    assert {$msg_length == [string length $payload]}
-#    set payload
-#} -result {0 hello} 
-#
-#test basic-5.3 "Synchronous request - read from socket" -body {
-#    lassign $rdata msg payload
-#    assert {[regexp {MSG _INBOX.*.([[:digit:]]+) ([[:digit:]]+) (.*)} $msg -> req_id subID2 msg_length]}
-#    assert {$msg_length == [string length $payload]}
-#    assert {$subID == $subID2}
-#    assert {[array size ${conn}::requests] == 0}
-#    set payload
-#} -result "hello"
+test basic-5.2 "Synchronous request - written to socket" -body {
+    lassign $wdata sub pub payload
+    # the first request starts with subscribing to INBOX.<random>.*
+    assert {[regexp {SUB _INBOX.*.\*  ([[:digit:]]+)} $sub -> subID]}
+    assert {[regexp {PUB service _INBOX.*.1 (.*)} $pub -> msg_length]}
+    assert {$msg_length == [string length $payload]}
+    set payload
+} -result {0 hello} 
+
+test basic-5.3 "Synchronous request - read from socket" -body {
+    lassign $rdata msg payload
+    assert {[regexp {MSG _INBOX.*.([[:digit:]]+) ([[:digit:]]+) (.*)} $msg -> req_id subID2 msg_length]}
+    assert {$msg_length == [string length $payload]}
+    assert {$subID == $subID2}
+    assert {[array size ${conn}::requests] == 0}
+    set payload
+} -result hello
 
 test basic-6 "Synchronous request with timeout - success" -body {
     duration {

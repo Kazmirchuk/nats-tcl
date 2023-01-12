@@ -116,9 +116,6 @@ oo::class create interceptor {
     }
 }
 
-set conn [nats::connection new "ExtraConfigOptions" -log_chan [tcltest::outputChannel]]
-$conn configure -servers nats://localhost:4222
-
 test extra_opts-4.1 "PING/PONG protocol initiated by server" -body {
     # I can't pass ping_interval as a command line argument to the NATS server, so have to create a config file
     # older NATS (v1.4) doesn't accept ping_interval: 2s, so just use int

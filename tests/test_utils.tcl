@@ -95,6 +95,8 @@ namespace eval test_utils {
             if {[chan names $chanHandle] ne ""} {
                 # if the socket hasn't been closed yet, remove the transformation
                 chan pop $chanHandle
+                # workaround for this bug https://core.tcl-lang.org/tcl/tktview/ea69b0258a9833cb61ada42d1fc742d90aec04d0
+                sleep 0
             }
             close $writeChan
             close $readChan
@@ -110,13 +112,13 @@ namespace eval test_utils {
             unset ::test_utils::readData
             unset ::test_utils::writtenData
         }
-        set r_link [snifferBinToList $r_link $all_lines $filter_ping]
-        set w_link [snifferBinToList $w_link $all_lines $filter_ping]
+        set r_link [SnifferBinToList $r_link $all_lines $filter_ping]
+        set w_link [SnifferBinToList $w_link $all_lines $filter_ping]
         return
     }
         
     # private proc: convert raw data sent through socket into a list of NATS protocol tokens
-    proc snifferBinToList {binData all_lines filter_ping} {
+    proc SnifferBinToList {binData all_lines filter_ping} {
         # NATS uses \r\n as a protocol delimiter
         # [split] supports splitting only by a single character, so at first replace \r\n with plain \n
         # and since binData ends with \r\n, resulting list will have 1 empty element in the end - discard it
@@ -155,7 +157,7 @@ namespace eval test_utils {
 
     # start NATS server in the background unless it is already running; it must be available in $PATH
     proc startNats {id args} {
-        if {![needStartNats $args]} {
+        if {![NeedStartNats $args]} {
             return
         }
         variable natsPid
@@ -188,7 +190,7 @@ namespace eval test_utils {
         log::info "Stopped $id"
     }
 
-    proc needStartNats {natsArgs} {
+    proc NeedStartNats {natsArgs} {
         if {[llength $natsArgs]} {
             return 1;# always start a "custom" NATS
         }
@@ -292,8 +294,7 @@ namespace eval test_utils {
         return true
     }
     
-    namespace export sleep wait_for wait_flush sniffer duration startNats stopNats responder stopAllResponders \
-                     assert approx getConnectOpts debugLogging subCallback asyncReqCallback execNatsCmd dict_in
+    namespace export {[a-z]*}
 }
 
 namespace import ::tcltest::test

@@ -48,13 +48,9 @@ test tls-2.1 "Connect to NATS with client verification" -constraints tls -setup 
 test tls-2.2 "Connect to NATS with client verification - failed" -constraints tls -body {
     $conn configure -tls_opts [list -cafile rootCA.pem]
     catch {$conn connect} err errOpts
-    # strangely, I get different errors here
-    if {$::tcl_platform(platform) eq "windows"} {
-        assert {[dict get $errOpts -errorcode] eq {NATS ErrTLS}} 1
-        assert {[string match "*alert bad certificate*" $err]}
-    } else {
-        assert {[dict get $errOpts -errorcode] eq {NATS ErrBrokenSocket}} 1
-    }
+    # depending on Windows/Linux and Tcl/TLS patch version I get either ErrTLS or ErrBrokenSocket
+    set errCode [lindex [dict get $errOpts -errorcode] 1]
+    assert {$errCode eq "ErrTLS" || $errCode eq "ErrBrokenSocket"}
     # in either case, NATS server will log "client didn't provide a certificate"
 } -cleanup {
     $conn reset -tls_opts

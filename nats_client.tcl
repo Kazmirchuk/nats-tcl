@@ -616,9 +616,9 @@ oo::class create ::nats::connection {
         if {![info exists subscriptions($subID)]} {
             after cancel [dict get $requests($reqID) timer]
             unset requests($reqID) ;# we've received all expected messages
-        }        
+        }
     }
-    
+
     method CloseSocket { {broken 0} } {
         # this method is only for closing an established TCP connection
         # it is not convenient to re-use it for all cases of close $sock (timeout or rejected connection)
@@ -1084,7 +1084,7 @@ oo::class create ::nats::connection {
                     my AsyncError ErrBrokenSocket "Server $host:$port [lindex [dict get $errOpts -errorcode] end]" 1
                     return
                 }
-                if {$readCount < 0} {
+                if {$readCount <= 0} {
                     if {[eof $sock]} { 
                         #set err [chan configure $sock -error] - no point in this, $err will be blank
                         lassign [my current_server] host port

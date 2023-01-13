@@ -22,7 +22,7 @@ All commands are defined in and exported from the `::nats` namespace.
 [*objectName* all_servers](#objectName-all_servers) <br/>
 [*objectName* server_info](#objectName-server_info) <br/>
 [*objectName* destroy](#objectName-destroy) <br/>
-[*objectName* jet_stream](#objectname-jet_stream--timeout-ms) <br/>
+[*objectName* jet_stream ?-timeout *ms*? ?-domain *domain*?](#objectname-jet_stream--timeout-ms--domain-domain) <br/>
 
 [nats::msg](#natsmsg) <br/>
 [msg create *subject* ?-data *payload*? ?-reply *replyTo*?](#msg-create-subject--data-payload--reply-replysubj)<br/>
@@ -183,8 +183,8 @@ Returns a dict with the INFO message from the current server.
 ### objectName destroy
 TclOO destructor. It calls `disconnect` and then destroys the object.
 
-### objectName jet_stream ?-timeout *ms*?
-This 'factory' method creates [jetStreamObject](JsAPI.md) to work with [JetStream](https://docs.nats.io/jetstream/jetstream). `-timeout` (default 5s) is applied for all requests to JetStream NATS API.
+### objectName jet_stream ?-timeout *ms*? ?-domain *domain*?
+This 'factory' method creates [jetStreamObject](JsAPI.md) to work with [JetStream](https://docs.nats.io/jetstream/jetstream). `-timeout` (default 5s) is applied for all requests to JetStream NATS API. `domain` (empty string by default) specifies the JetStream [domain](https://docs.nats.io/running-a-nats-service/configuration/leafnodes/jetstream_leafnodes).
 
 Remember to destroy this object when it is no longer needed - there's no built-in garbage collection in `connection`.
 
@@ -275,3 +275,21 @@ puts "Error text: [dict get $err errorMessage]"
 | ErrAuthExpired | User authorization has expired | yes |
 | ErrAuthRevoked | User authorization has been revoked | yes |
 | ErrAccountAuthExpired | NATS server account authorization has expired| yes |
+
+## Connection status and the reconnection process
+The connection can have one of the four statuses:
+- `$nats::status_closed`: initial state after creating the object. The TCP socket is closed. Calling `subscribe`, `unsubscribe`, `publish`, `request` etc raises `ErrConnectionClosed`. Calling `disconnect` is no-op.
+- `$nats::status_connecting`: triggered by calling `connect`. The client is trying to connect to servers in the pool one by one. All servers are tried only once regardless of `-max_reconnect_attempts`. If no servers are available, the client logs the error and transitions into `$nats::status_closed`. If the synchronous version of `connect` was used, it raises `ErrNoServers` (in case of multiple servers configured in the pool) or a more specific error if the pool has only one server. Calling `subscribe`, `unsubscribe`, `publish` etc is allowed - they will be flushed as soon as the client transitions into `$nats::status_connected`.
+- `$nats::status_connected`: the TCP connection to a NATS server is established (including TLS upgrade and credentials verification, if needed). Calling `disconnect` transitions the client into `$nats::status_closed`. If the connection is lost, the client transitions into `$nats::status_reconnecting`.
+- `$nats::status_reconnecting` - triggered by any of the above asynchronous errors that terminate the connection. The client is trying to connect to servers in the pool one by one. After a full cycle, the client sleeps for `-reconnect_time_wait` ms before starting a new cycle. Every failed connection to a server increments its `reconnects` counter. Once this counter exceeds `-max_reconnect_attempts`, the server is removed from the pool. Once no servers are left in the pool, or the user calls `disconnect`, the client transitions into `$nats::status_closed`. Calling `subscribe`, `unsubscribe`, `publish` etc is allowed. As soon as the client transitions into `$nats::status_connected`, they will be flushed along with restoring all current subscriptions.
+
+Calling `connect` when the status is not `$nats::status_closed`, is no-op.<br/>
+Calling `ping` when the status is not `$nats::status_connected`, raises `ErrConnectionClosed`. 
+Calling `disconnect` cancels all pending asynchronous requests, and the callbacks will not be invoked.
+
+Official NATS clients have a few more statuses:
+- They distinguish between `DISCONNECTED` (when initial connection attempts failed) and `CLOSED` (if the user called `close` or the connection was lost). I don't see any value in this, so both statuses correspond to `$nats::status_closed`.
+- `DRAINING_PUBS` - [drain](https://docs.nats.io/using-nats/developer/receiving/drain) function has been called. The (official) client will flush all pending data to the socket and perform the PING/PONG exchange before closing the socket. With the Tcl client, calling `disconnect` always flushes pending data before closing the socket, and there's no need in a separate status. There's no final PING/PONG though.
+- `DRAINING_SUBS` - the (official) client is draining all subscriptions before closing the socket, which is equivalent to sending `UNSUB` + `PING/PONG`. With the Tcl client, calling `disconnect` discards all pending data in the socket, but already scheduled subscription callbacks will be invoked. Calling `unsubscribe` deletes the subscription immediately, so if the socket buffer still contains any `MSG` for this subscription, it will be discarded. If you have a continuous stream of incoming messages that must not be lost, you have two options:
+  - `unsubscribe -max_msgs` + `ping` and wait until the subscription callback is no longer invoked
+  - or use JetStream

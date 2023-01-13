@@ -121,10 +121,11 @@ oo::class create ::nats::server_pool {
             if {$now < $last_attempt + $wait} {
                 # other clients simply wait for reconnect_time_wait, but this approach is more precise
                 set waiting_time [expr {$wait - ($now - $last_attempt)}]
-                [info object namespace $conn]::log::debug "Waiting for $waiting_time before connecting to the next server"
+                [info object namespace $conn]::log::debug "Waiting for $waiting_time ms before connecting to the next server"
                 set timer [after $waiting_time [info coroutine]]
-                set reason [yield] ;# may be interrupted by a user calling disconnect
+                set reason [yield]
                 if {$reason eq "stop" } {
+                    # user called "disconnect"
                     after cancel $timer
                     dict set s last_attempt [clock milliseconds]
                     lappend servers $s
@@ -175,7 +176,6 @@ oo::class create ::nats::server_pool {
         throw {NATS ErrAuthorization} "No credentials known for NATS server at [dict get $s host]:[dict get $s port]"
     }
     
-    # returns a list of {host port scheme}
     method current_server {} {
         set s [lindex $servers end]
         return [list [dict get $s host] [dict get $s port] [dict get $s scheme]]

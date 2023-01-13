@@ -93,10 +93,10 @@ namespace eval test_utils {
             uplevel 1 $script
         } finally {
             if {[chan names $chanHandle] ne ""} {
+                # workaround for this bug https://core.tcl-lang.org/tcl/tktview/ea69b0258a9833cb61ada42d1fc742d90aec04d0
+                update
                 # if the socket hasn't been closed yet, remove the transformation
                 chan pop $chanHandle
-                # workaround for this bug https://core.tcl-lang.org/tcl/tktview/ea69b0258a9833cb61ada42d1fc742d90aec04d0
-                sleep 0
             }
             close $writeChan
             close $readChan

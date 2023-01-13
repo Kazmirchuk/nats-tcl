@@ -104,6 +104,10 @@ oo::class create ::nats::connection {
             # log_chan and log_level have no effect in this case
             return
         }
+        if {$log_level ni {error warn info debug}} {
+            throw {NATS ErrInvalidArg} "Invalid -log_level $log_level"
+        }
+        
         # the logger package in Tcllib is crap, so make my own by default
         # default output is stdout; default level is warn
         set loggerName $config(name)
@@ -159,14 +163,13 @@ oo::class create ::nats::connection {
         if {$servers_opt == -1} {
             return
         }
-        incr servers_opt
         if {$status != $nats::status_closed} {
             # in principle, most other config options can be changed on the fly
-            # allowing this to be changed when connected is possible, but a bit tricky
+            # allowing -servers to be changed when connected is possible, but a bit tricky
             throw {NATS ErrInvalidArg} "Cannot configure servers when already connected"
         }
         # if any URL is invalid, this function will throw an error - let it propagate
-        $serverPool set_servers [lindex $args $servers_opt]
+        $serverPool set_servers [lindex $args $servers_opt+1]
         return
     }
 
@@ -220,7 +223,6 @@ oo::class create ::nats::connection {
         set last_error ""
         # "reconnects" counter should be reset only once here rather than on every reconnect
         # e.g. if a server is in the pool, but it is down, we want to keep track of its "reconnects" counter
-        # until the NATS connection is completely closed
         $serverPool reset_counters
         
         set status $nats::status_connecting
@@ -252,22 +254,13 @@ oo::class create ::nats::connection {
         if {$status == $nats::status_closed} {
             return
         }
-        
         if {$sock eq ""} {
             # if a user calls disconnect while we are waiting for reconnect_time_wait, we only need to stop the coroutine
             $coro stop
         } else {
             my CloseSocket
         }
-        array unset subscriptions ;# make sure we don't try to "restore" subscriptions when we connect next time
-        foreach reqID [array names requests] {
-            # cancel pending async timers
-            after cancel [dict lookup $requests($reqID) timer]
-        }
-        array unset requests
-        set requestsInboxPrefix ""
-        my CancelConnectTimer
-        #CoroMain will set status to "closed"
+        # rest of cleanup is done in CoroMain
         return
     }
     
@@ -539,8 +532,9 @@ oo::class create ::nats::connection {
     method jet_stream {args} {
         nats::_parse_args $args {
             timeout timeout 5000
+            domain valid_str ""
         }
-        return [nats::jet_stream new [self] $timeout]
+        return [nats::jet_stream new [self] $timeout $domain]
     }
     
     method inbox {} {
@@ -552,7 +546,6 @@ oo::class create ::nats::connection {
     # or we got a timeout for async request
     method NewStyleRequestCb {reqID subj msg reply} {
         if {$subj eq ""} {
-            log::debug "New-style async request $reqID timed out"
             set callback [dict get $requests($reqID) callback]
             after 0 [list {*}$callback 1 ""]
             unset requests($reqID)
@@ -591,7 +584,6 @@ oo::class create ::nats::connection {
             return
         }
         if {$subj eq ""} {
-            log::debug "Old-style async request $reqID timed out"
             set subID [dict get $requests($reqID) subID]
             set callback [dict get $requests($reqID) callback]
             unset requests($reqID)
@@ -638,7 +630,7 @@ oo::class create ::nats::connection {
         } else {
             # we get here only from method disconnect
             lassign [my current_server] host port
-            log::info "Closing connection to $host:$port" ;# in case of broken socket, the error will be logged elsewhere
+            log::info "Closing connection to $host:$port" ;# in case of broken socket, the error will be logged in AsyncError
             # make sure we wait until successful flush, if connection was not broken
             chan configure $sock -blocking 1
             foreach msg $outBuffer {
@@ -647,10 +639,12 @@ oo::class create ::nats::connection {
             }
             set outBuffer [list]
         }
-        close $sock ;# all buffered input is discarded, all buffered output is flushed
+        # if the socket gets broken while flushing, "close" might throw
+        catch {close $sock} ;# all buffered input is discarded, all buffered output is flushed
         set sock ""
         after cancel $timers(ping)
         after cancel $timers(flush)
+        set timers(ping) ""
         set timers(flush) ""
         
         if {[info coroutine] ne $coro} {
@@ -779,8 +773,11 @@ oo::class create ::nats::connection {
                 lappend subsBuffer "UNSUB $subID $remainingMsgs"
             }
         }
-        # ensure SUBs are sent before any pending PUBs
-        set outBuffer [linsert $outBuffer 0 {*}$subsBuffer]
+        if {[llength $subsBuffer] > 0} {
+            # ensure SUBs are sent before any pending PUBs
+            set outBuffer [linsert $outBuffer 0 {*}$subsBuffer]
+            my ScheduleFlush
+        }
     }
     
     method INFO {cmd} {
@@ -963,7 +960,6 @@ oo::class create ::nats::connection {
             set last_error "" ;# cleanup possible error messages about prior connection attempts
             set status $nats::status_connected ;# exit from vwait in "connect"
             my RestoreSubs
-            my ScheduleFlush
             set timers(ping) [after $config(ping_interval) [mymethod Pinger]]
         }
     }
@@ -1024,15 +1020,23 @@ oo::class create ::nats::connection {
                 my ProcessEvent $reason
             }
         } trap {NATS STOP_CORO} {msg opts} {
-            # we get here after call to "disconnect" during MSG or next_server; the socket has been already closed,
-            # so we only need to update the status
-        } trap {NATS} {msg opts} {
-            # ErrNoServers error from next_server leads here; don't overwrite the real last_error
-            # need to log this in case of "connect -async"
+            # we get here after call to "disconnect"; the socket has been already closed
+        } trap {NATS ErrNoServers} {msg opts} {
+            # don't overwrite the real last_error; need to log this in case of "connect -async"
             log::error $msg
         } trap {} {msg opts} {
             log::error "Unexpected error: $msg $opts"
         }
+        
+        array unset subscriptions ;# make sure we don't try to restore subscriptions, when we connect next time
+        foreach reqID [array names requests] {
+            # cancel pending async timers
+            after cancel [dict lookup $requests($reqID) timer]
+        }
+        array unset requests
+        set requestsInboxPrefix ""
+        my CancelConnectTimer
+        
         set status $nats::status_closed
         log::debug "Finished coroutine $coro"
         set coro ""
@@ -1048,6 +1052,7 @@ oo::class create ::nats::connection {
                 set errorMsg [chan configure $sock -error]
                 if { $errorMsg ne "" } {
                     close $sock
+                    set sock ""
                     $serverPool current_server_connected false
                     my AsyncError ErrConnectionRefused "Failed to connect to $host:$port: $errorMsg"
                     my ConnectNextServer
@@ -1069,6 +1074,7 @@ oo::class create ::nats::connection {
                 # we get here both in case of TCP-level timeout and if the server does not reply to the initial PING/PONG on time
                 lassign [my current_server] host port
                 close $sock
+                set sock ""
                 $serverPool current_server_connected false
                 my AsyncError ErrConnectionTimeout "Connection timeout for $host:$port"
                 my ConnectNextServer
@@ -1107,7 +1113,7 @@ oo::class create ::nats::connection {
                 if {$protocol_op in {MSG HMSG INFO -ERR +OK PING PONG}} {
                     my $protocol_op $protocol_arg
                 } else {
-                    log::warn "Invalid protocol $protocol_op $protocol_arg"
+                    log::error "Invalid protocol $protocol_op $protocol_arg"
                 }
             }
             default {
@@ -1159,8 +1165,8 @@ oo::class create ::nats::connection {
     }
     
     method AsyncError {code msg { doReconnect 0 }} {
-        log::error $msg
-        # errorMessage used to be just "message", but I already have many other messages in the code
+        # lower severity than "error", because the client can recover and connect to another NATS
+        log::warn $msg
         set last_error [dict create code "NATS $code" errorMessage $msg]
         if {$doReconnect} {
             my CloseSocket 1
@@ -1220,6 +1226,9 @@ namespace eval ::nats::msg {
     }
     proc no_responders {msg} {
         return [expr {[dict lookup [dict get $msg header] Status 0] == 503}]
+    }
+    proc request_timeout {msg} {
+        return [expr {[dict lookup [dict get $msg header] Status 0] == 408}]
     }
     # only messages fetched using STREAM.MSG.GET will have it
     proc seq {msg} {
@@ -1445,7 +1454,7 @@ proc ::nats::_parse_args {args_list spec {doConfig 0}} {
             }
             if {$type eq "bool"} {
                 # normalized bools can be written directly to JSON
-                set val [expr $val? "true" : "false"]
+                set val [expr {$val? "true" : "false"}]
             }
             # use explicit ::set to avoid clashing with [nats::msg set]
             if {$doConfig} {

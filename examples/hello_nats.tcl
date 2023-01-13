@@ -1,4 +1,5 @@
 # EXAMPLE #1: basic publishing and subscribing
+# Remember to start nats-server before running this example; you can add -DV option to see data sent and received on the wire
 
 package require nats
 # TCP connection to a NATS server is represented as a TclOO class called nats::connection.
@@ -28,6 +29,7 @@ $conn subscribe sample_subject.* -callback onMessage
 
 # now whenever some other NATS client sends a message e.g. to "sample_subject.1", it will be delivered to our event queue, i.e. using "after 0"
 # for the sake of example, let's send a few messages ourselves
+# remember that NATS subjects are case-sensitive
 for {set i 0} { $i<10 } {incr i} {
     $conn publish sample_subject.$i "Hello $tcl_platform(user)"
 }

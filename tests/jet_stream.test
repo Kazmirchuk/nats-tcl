@@ -31,74 +31,36 @@ test jet_stream-setup "Create a stream and pull consumer" -body {
 test jet_stream-1.1 "Publish and sync consume" -body {
     $conn publish test.1 "msg 1"
     duration {
-        set msg [$jet_stream consume $stream_name $consumer_name]
+        set msg [lindex [$jet_stream consume $stream_name $consumer_name] 0]
     } elapsed
     assert {$elapsed < 100}
-    assert {[dict get $msg subject] eq "test.1"} 1
-    dict get $msg data
+    assert {[nats::msg subject $msg] eq "test.1"} 1
+    nats::msg data $msg
 } -result "msg 1"
 
 test jet_stream-1.2 "Sync consume redelivered message and ACK" -body {
     sleep 1000 ;# =ack_wait
     # message has not been ACK, so it should be redelivered
     duration {
-        set msg [$jet_stream consume $stream_name $consumer_name]
+        set msg [lindex [$jet_stream consume $stream_name $consumer_name] 0]
     } elapsed
     assert {$elapsed < 100}
     $jet_stream ack $msg
-    dict get $msg data
+    nats::msg data $msg
 } -result "msg 1"
 
 test jet_stream-1.3 "No message left after ACK - timeout" -body {
     duration {
-        # the timeout could be signalled either by a timer in the client or by NATS Server - it will return HMSG Status=408
-        # in both cases, we throw ErrTimeout, but error messages will differ
-        catch {$jet_stream consume $stream_name $consumer_name -timeout 1000} err errOpts
+        # force a client-side timeout that will raise ErrTimeout
+        catch {$jet_stream consume $stream_name $consumer_name -timeout 500 -expires 1000} err errOpts
     } elapsed
-    assert {[approx $elapsed 1000]}
+    assert {[approx $elapsed 500]}
     dict get $errOpts -errorcode
 } -result {NATS ErrTimeout}
 
-test jet_stream-2.1 "Publish and async consume" -body {
-    $conn publish test.2 "msg 2"
-    duration {
-        $jet_stream consume $stream_name $consumer_name -callback asyncReqCallback
-    } elapsed
-    assert {$elapsed < 50} ;# async request returns immediately
-    
-    wait_for ::inMsg 500
-    dict get $inMsg data
-} -result "msg 2"
-
-test jet_stream-2.2 "Async consume and ACK" -body {
-    sleep 1000 ;# =ack_wait
-    duration {
-        $jet_stream consume $stream_name $consumer_name -callback asyncReqCallback
-    } elapsed
-    assert {$elapsed < 50} ;# async request returns immediately
-    
-    wait_for ::inMsg 500
-    $jet_stream ack $inMsg
-    dict get $inMsg data
-} -result "msg 2"
-
-test jet_stream-2.3 "Async consume timeout" -body {
-    duration {
-        $jet_stream consume $stream_name $consumer_name -callback asyncReqCallback -timeout 1500
-    } elapsed
-    assert {$elapsed < 50} ;# async request returns immediately
-    
-    duration {
-        wait_for ::inMsg 2000
-    } elapsed
-    assert {[approx $elapsed 1500]}
-
-    set inMsg
-} -result "timeout"
-
 test jet_stream-5.1 "Publish message to JetStream sync" -body {
     $jet_stream publish test.3 "msg 3"
-} -result [dict create stream $stream_name seq 3]
+} -result [dict create stream $stream_name seq 2]
 
 test jet_stream-5.2 "Publish message to JetStream async" -body {
     duration {
@@ -109,7 +71,7 @@ test jet_stream-5.2 "Publish message to JetStream async" -body {
     assert {$elapsed < 50}
     
     wait_for ::pubAck 1000
-} -result [dict create stream $stream_name seq 4] -cleanup {
+} -result [dict create stream $stream_name seq 3] -cleanup {
     # we are not going to consume these messages
     $jet_stream purge_stream $stream_name
 }
@@ -134,26 +96,35 @@ test jet_stream-5.4 "Publish message to JetStream async - no such stream" -body 
 test jet_stream-9 "Consume messages in batches" -body {
     # publish 8 messages and consume them in batches of 5
     for {set i 0} { $i < 8} {incr i} {
-        $conn publish test.1 $i
+        $jet_stream publish test.1 $i
     }
     set msg_count 0
     set cb [lambda {timedOut msg} {
-        $::jet_stream ack $msg
+        
         assert {!$timedOut}
-        assert {[dict get $msg subject] eq "test.1"} 1
-        assert {[dict get $msg data] == $::msg_count} 1
+        
         incr ::msg_count
     }]
-    $jet_stream consume $stream_name $consumer_name -batch_size 5 -callback $cb
-    while {$msg_count != 5} {
-        wait_for ::msg_count 2000
+    set msgList [$jet_stream consume $stream_name $consumer_name -batch_size 5 -timeout 1000]
+    assert {[llength $msgList] == 5} 1
+    set i 0
+    foreach msg $msgList {
+        $jet_stream ack $msg
+        assert {[nats::msg subject $msg] eq "test.1"} 1
+        assert {[nats::msg data $msg] == $i} 1
+        incr i
     }
-    $jet_stream consume $stream_name $consumer_name -batch_size 5 -callback $cb
-    while {$msg_count != 8} {
-        wait_for ::msg_count 2000
+    set msgList [$jet_stream consume $stream_name $consumer_name -batch_size 5 -timeout 1000]
+    assert {[llength $msgList] == 3}
+    foreach msg $msgList {
+        $jet_stream ack $msg
+        assert {[nats::msg subject $msg] eq "test.1"} 1
+        assert {[nats::msg data $msg] == $i} 1
+        incr i
     }
 }
 
+$jet_stream destroy
 $conn destroy
 stopNats NATS_JS
 tcltest::cleanupTests

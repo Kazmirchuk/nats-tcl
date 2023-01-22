@@ -5,7 +5,7 @@
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
 oo::class create ::nats::jet_stream {
-    variable conn _timeout api_prefix
+    variable conn _timeout api_prefix fetch_wait fetch_count
     
     # do NOT call directly! instead use connection::jet_stream
     constructor {c t d} {
@@ -16,6 +16,8 @@ oo::class create ::nats::jet_stream {
         } else {
             set api_prefix \$JS.$d.API
         }
+        array set fetch_wait {}
+        set fetch_count 0
     }
 
     # JetStream wire API Reference https://docs.nats.io/reference/reference-protocols/nats_api_reference
@@ -67,55 +69,78 @@ oo::class create ::nats::jet_stream {
         }
 
         set subject "$api_prefix.CONSUMER.MSG.NEXT.$stream.$consumer"
-
+        # -callback is not supported! this function is already very complex
         nats::_parse_args $args {
             timeout timeout null
-            callback str ""
             batch_size pos_int 1
-            no_wait bool false
+            expires timeout null
+        }
+        # timeout specifies the client-side timeout; if not given, this is a no_wait fetch
+        # expires specifies the server-side timeout (undocumented arg only for testing)
+        if {[info exists timeout]} {
+            set no_wait false
+            if {![info exists expires]} {
+                set expires [expr {$timeout >= 20 ? $timeout - 10 : $timeout}] ;# same as in nats.go
+            }
+        } else {
+            set no_wait true
+            set timeout $_timeout
+        }
+        # implementation in official clients is overly complex and is done in 2 steps:
+        # 1. a no_wait fetch
+        # 2. followed by a long fetch
+        # and they have a special optimized case for batch=1.
+        # I don't see a need for such intricacies in this client
+
+        set inMsgs [list]
+        set json_spec {
+            expires ns null
+            batch   int null
+            no_wait bool null
         }
         set batch $batch_size
 
-        if {![info exists timeout]} {
-            set timeout $_timeout
-        }
-        if {!$no_wait} {
-            # no_wait conflicts with expires
-            set expires [expr {$timeout >= 20 ? $timeout - 10 : $timeout}]  ;# same as in nats.go
-        }
-        
-        set message [nats::_local2json {
-                    expires ns null
-                    batch   int null
-                    no_wait bool null}]
-        
-        set req_opts [list -dictmsg true -timeout $timeout -max_msgs $batch_size]
-        if {$callback ne ""} {
-            $conn request $subject $message -callback [mymethod ConsumeCb $callback] {*}$req_opts
-            return
-        }
-        set result [$conn request $subject $message {*}$req_opts] ;# it may be a single message or a list
-        if {$batch_size == 1} {
-            if {[nats::msg request_timeout $result]} {
-                throw {NATS ErrTimeout} [nats::header get $result Description]
+        # if there are no messages at all, I get a single 404
+        # if there are some messages, I get them followed by 408
+        # if there are all needed messages, there's no additional status message
+        # if we've got no messages:
+        # - server-side timeout raises no error, and we return an empty list
+        # - client-side timeout raises ErrTimeout - this is consistent with nats.py
+        set fetchID [incr fetch_count] ;# allow multiple fetches in coroutines
+        set reqID [$conn request $subject [nats::_local2json $json_spec] -dictmsg true -timeout $timeout -max_msgs $batch -callback [mymethod ConsumeCb $fetchID]]
+        while {1} {
+            nats::_coroVwait [self object]::fetch_wait($fetchID)
+            lassign $fetch_wait($fetchID) timedOut msg
+            if {$timedOut} {
+                if {[llength $inMsgs]} {
+                    break
+                }
+                # probably wrong stream/consumer - see also https://github.com/nats-io/nats-server/issues/2107
+                throw {NATS ErrTimeout} "Consume timeout! stream=$stream consumer=$consumer"
             }
-            return $result
-        }
-        foreach msg $result {
-            if {[nats::msg request_timeout $msg]} {
-                throw {NATS ErrTimeout} [nats::header get $msg Description]
+            set status [dict lookup [dict get $msg header] Status 0]
+            switch -- $status {
+                404 - 408 - 409 {
+                    [info object namespace $conn]::log::debug "fetchID $fetchID got status message $status"
+                    if {$batch - [llength $inMsgs] > 1} {
+                        # no need to cancel the request if this was the last expected message
+                        $conn cancel_request $reqID
+                    }
+                    break
+                }
+                default {
+                    lappend inMsgs $msg
+                    if {[llength $inMsgs] == $batch} {
+                        break
+                    }
+                }
             }
         }
-        return $result
+        return $inMsgs
     }
-
-    method ConsumeCb {userCb timedOut msg} {
-        if {!$timedOut} {
-            if {[dict lookup [dict get $msg header] Status] == 408} {
-                set timedOut 1 ;# Request Timeout
-            }
-        }
-        {*}$userCb $timedOut $msg
+    
+    method ConsumeCb {fetchID timedOut msg} {
+        set fetch_wait($fetchID) [list $timedOut $msg]
     }
     
     # metadata is encoded in the reply field:
@@ -214,27 +239,34 @@ oo::class create ::nats::jet_stream {
                   mem_storage      bool null}
                   
         nats::_parse_args $args $spec
-        set consumer_config [nats::_local2json $spec]
-        set msg [json::write::object stream_name [json::write string $stream] config $consumer_config]
-        
+        if {[info exists name]} {
+            if {![my CheckFilenameSafe $name]} {
+                throw {NATS ErrInvalidArg} "Invalid consumer name $name"
+            }
+        }
+
         set version_cmp [package vcompare 2.9.0 [dict get [$conn server_info] version]]
+        set check_subj true
         if {($version_cmp < 1) && [info exists name]} {
             ;# starting from NATS 2.9.0, all consumers should have a name
             if {[info exists filter_subject] && $filter_subject ne ">"} {
                 set subject "$api_prefix.CONSUMER.CREATE.$stream.$name.$filter_subject"
+                set check_subj false ;# if filter_subject has * or >, it can't pass the check in CheckSubject
             } else {
                 set subject "$api_prefix.CONSUMER.CREATE.$stream.$name"
             }
         } elseif {[info exists durable_name]} {
             set subject "$api_prefix.CONSUMER.DURABLE.CREATE.$stream.$durable_name"
         } elseif {[info exists name]} {
-            # I think, nats.py should do it too
             set subject "$api_prefix.CONSUMER.DURABLE.CREATE.$stream.$name"
+            set durable_name $name ;# back-compat with NATS < 2.9
         } else {
             set subject "$api_prefix.CONSUMER.CREATE.$stream"  ;# ephemeral consumer
         }
+        set consumer_config [nats::_local2json $spec]
+        set msg [json::write::object stream_name [json::write string $stream] config $consumer_config]
         
-        set response [json::json2dict [$conn request $subject $msg -timeout $_timeout]]
+        set response [json::json2dict [$conn request $subject $msg -timeout $_timeout -check_subj $check_subj]]
         nats::_checkJsError $response
         dict unset response type
         set result_config [dict get $response config]
@@ -310,6 +342,10 @@ oo::class create ::nats::jet_stream {
                   allow_direct     bool null
                   mirror_direct    bool null}
         
+        if {![my CheckFilenameSafe $stream]} {
+            throw {NATS ErrInvalidArg} "Invalid stream name $stream"
+        }
+            
         dict set args name $stream
         set msg [nats::_dict2json $spec $args]
         set response [json::json2dict [$conn request "$api_prefix.STREAM.CREATE.$stream" $msg -timeout $_timeout]]

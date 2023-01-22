@@ -229,6 +229,7 @@ test js_mgmt-11.1 "Delete a message directly from a stream" -body {
     $js stream_msg_delete MY_STREAM -seq [nats::msg seq $msg]  ;# if not found, this will throw ErrJSResponse 400
 } -result true
 
+$js destroy
 $conn destroy
 stopNats NATS_JS
 tcltest::cleanupTests

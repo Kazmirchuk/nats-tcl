@@ -150,20 +150,20 @@ Sends `message` (payload) to the specified `subject` with an automatically gener
 You can provide the following options:
 - `-timeout ms` - expire the request after X ms (recommended!). Default timeout is infinite.
 - `-callback cmdPrefix` - do not block and deliver the reply to this callback
-- `-dictmsg dictmsg` - return the reply as a dict accessible to [nats::msg](#natsmsg).
+- `-dictmsg dictmsg` - return the reply as a dict accessible to the [nats::msg](#natsmsg) ensemble.
 - `-max_msgs maxMsgs` - gather multiple replies. If this option is not used, the 'new-style' request is triggered under the hood (uses a shared subscription for all requests), and only the first reply is returned. If this option is used (even with `maxMsgs`=1), it triggers the 'old-style' request that creates its own subscription. `-dictmsg` is always true in this case.
 
 Depending if there's a callback, the method works in a sync or async manner.
 
-If no callback is given, the request is synchronous and blocks in a (coroutine-aware) `vwait` and then returns a reply. If `-max_msgs` >1, the returned value is a list of message dicts. If no response arrives within `timeout`, it raises the error `ErrTimeout`. When using NATS server version 2.2+, `ErrNoResponders` is raised if nobody is subscribed to `subject`.
+If no callback is given, the request is synchronous and blocks in a (coroutine-aware) `vwait` and then returns a reply. If `-max_msgs` is used, the returned value is a list of message dicts (note: if the timeout has fired, this list contains only the messages received so far). If no response arrives within `timeout`, it raises the error `ErrTimeout`. When using NATS server version 2.2+, `ErrNoResponders` is raised if nobody is subscribed to `subject`.
 
 If a callback is given, the call returns immediately, and when a reply is received or a timeout fires, the callback will be invoked from the event loop. It must have the following signature:<br/>
 **asyncRequestCallback** *timedOut message*<br/>
 `timedOut` is a boolean equal to 1, if the request timed out or no responders are available.<br/>
-`response` is the received message. If `-max_msgs` >1, the callback is invoked for each message. If the timeout fires before `-max_msgs` are received, the callback is invoked with `timedOut`=1.
+`response` is the received message. If `-max_msgs`>1, the callback is invoked for each message. If the timeout fires before `-max_msgs` are received, the callback is invoked one last time with `timedOut`=1.
 
 ### objectName request_msg *msg* ?-timeout *ms* -callback *cmdPrefix* -dictmsg *dictmsg*?
-Sends a request with a message created using [nats::msg](#natsmsg).
+Sends a request with a message created using [nats::msg](#natsmsg). The rest of arguments work the same as in `request`.
 
 ### objectName ping ?-timeout *ms*?
 Triggers a ping-pong exchange with the NATS server, enters (coroutine-aware) `vwait` and returns true upon success. If the server does not reply within the specified timeout (ms), it raises `ErrTimeout`. Default timeout is 10s. You can use this method to check if the server is alive or ensure all prior calls to `publish` and `subscribe` are flushed to NATS. Note that in other NATS clients this function is usually called "flush".

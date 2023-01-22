@@ -236,7 +236,7 @@ oo::class create ::nats::connection {
             # so we shouldn't vwait in this case
             if {$status == $nats::status_connecting} {
                 log::debug "Waiting for connection status"
-                my CoroVwait [self object]::status
+                nats::_coroVwait [self object]::status
                 log::debug "Finished waiting for connection status"
             }
             if {$status != $nats::status_connected} {
@@ -277,6 +277,7 @@ oo::class create ::nats::connection {
             nats::_parse_args $args {
                 header dict ""
                 reply str ""
+                check_subj bool true
             }
         }
 
@@ -296,8 +297,11 @@ oo::class create ::nats::connection {
             }
         }
         
-        if {![my CheckSubject $subject]} {
-            throw {NATS ErrBadSubject} "Invalid subject $subject"
+        if {$check_subj} {
+            # workaround for one specific case in JS mgmt when this check must be disabled
+            if {![my CheckSubject $subject]} {
+                throw {NATS ErrBadSubject} "Invalid subject $subject"
+            }
         }
         if {$reply ne "" && ![my CheckSubject $reply]} {
             throw {NATS ErrBadSubject} "Invalid reply $reply"
@@ -400,16 +404,17 @@ oo::class create ::nats::connection {
             dictmsg bool null
             header dict ""
             max_msgs pos_int null
+            check_subj bool true
         }
 
         if {[info exists max_msgs]} {
             return [my OldStyleRequest $subject $message $header $timeout $callback $max_msgs] ;# isDictMsg always true
         } else {
-            return [my NewStyleRequest $subject $message $header $timeout $callback $dictmsg]
+            return [my NewStyleRequest $subject $message $header $timeout $callback $dictmsg $check_subj]
         }
     }
     
-    method NewStyleRequest {subject message header timeout callback dictmsg} {
+    method NewStyleRequest {subject message header timeout callback dictmsg check_subj} {
         # "new-style" request with one wildcard subscription
         # only the first response is delivered
         if {$requestsInboxPrefix eq ""} {
@@ -418,7 +423,7 @@ oo::class create ::nats::connection {
         }
         set reqID [incr counters(request)]
         # will perform more argument checking, so it may raise an error
-        my publish $subject $message -reply "$requestsInboxPrefix.$reqID" -header $header
+        my publish $subject $message -reply "$requestsInboxPrefix.$reqID" -header $header -check_subj $check_subj
         
         set timerID ""
         if {$callback ne ""} {
@@ -426,7 +431,7 @@ oo::class create ::nats::connection {
                 set timerID [after $timeout [mymethod NewStyleRequestCb $reqID "" "" ""]]
             }
             set requests($reqID) [dict create timer $timerID callback $callback isDictMsg $dictmsg]
-            return
+            return $reqID
         }
         # sync request
         # remember that we can get a reply after timeout, so vwait must wait on a specific reqID
@@ -434,7 +439,7 @@ oo::class create ::nats::connection {
             set timerID [after $timeout [list dict set [self object]::requests($reqID) timedOut 1]]
         }
         set requests($reqID) [dict create] ;# NewStyleRequestCb will check if it exists
-        my CoroVwait [self object]::requests($reqID)
+        nats::_coroVwait [self object]::requests($reqID)
         set sync_req $requests($reqID)
         unset requests($reqID)
         if {[dict lookup $sync_req timedOut 0]} {
@@ -466,7 +471,7 @@ oo::class create ::nats::connection {
                 set timerID [after $timeout [mymethod OldStyleRequestCb $reqID "" "" ""]]
             }
             set requests($reqID) [dict create timer $timerID callback $callback subID $subID]
-            return
+            return $reqID
         }
         #sync request
         if {$timeout != 0} {
@@ -474,7 +479,7 @@ oo::class create ::nats::connection {
         }
         set requests($reqID) "" ;# OldStyleRequestCb will check if it exists
         while {1} {
-            my CoroVwait [self object]::requests($reqID)
+            nats::_coroVwait [self object]::requests($reqID)
             set sync_req $requests($reqID)
             if {[dict lookup $sync_req timedOut 0]} {
                 break
@@ -487,7 +492,7 @@ oo::class create ::nats::connection {
         set inMsgs [dict lookup $sync_req inMsgs]
         if {[dict lookup $sync_req timedOut 0]} {
             my unsubscribe $subID
-            if {$inMsgs == ""} {
+            if {[llength $inMsgs] == 0} {
                 throw {NATS ErrTimeout} "Request to $subject timed out"
             }
         } else {
@@ -497,11 +502,19 @@ oo::class create ::nats::connection {
         if {[nats::msg no_responders $firstMsg]} {
             throw {NATS ErrNoResponders} "No responders available for request to $subject"
         }
-        if {$max_msgs == 1} {
-            return $firstMsg
-        } else {
-            return $inMsgs ;# this could be fewer than $max_msgs in case the timeout fired
+        return $inMsgs ;# this could be fewer than $max_msgs in case the timeout fired
+    }
+    
+    method cancel_request {reqID} {
+        if {![info exists requests($reqID)]} {
+            throw {NATS ErrInvalidArg} "Invalid request ID $reqID"
         }
+        after cancel [dict get $requests($reqID) timer]
+        set subID [dict lookup $requests($reqID) subID]
+        if {$subID ne ""} {
+            my unsubscribe $subID
+        }
+        unset requests($reqID)
     }
     
     #this function is called "flush" in all other NATS clients, but I find it confusing
@@ -521,7 +534,7 @@ oo::class create ::nats::connection {
         lappend outBuffer "PING"
         log::debug "sending PING"
         my ScheduleFlush
-        my CoroVwait [self object]::pong
+        nats::_coroVwait [self object]::pong
         if {$pong} {
             after cancel $timerID
             return true
@@ -689,14 +702,6 @@ oo::class create ::nats::connection {
         }
         # in any case the buffer must be cleared to guarantee at-most-once delivery
         set outBuffer [list]
-    }
-    
-    method CoroVwait {var} {
-        if {[info coroutine] eq ""} {
-            vwait $var
-        } else {
-            coroutine::util vwait $var
-        }
     }
     
     # --------- these procs execute in the coroutine ---------------
@@ -1227,9 +1232,6 @@ namespace eval ::nats::msg {
     proc no_responders {msg} {
         return [expr {[dict lookup [dict get $msg header] Status 0] == 503}]
     }
-    proc request_timeout {msg} {
-        return [expr {[dict lookup [dict get $msg header] Status 0] == 408}]
-    }
     # only messages fetched using STREAM.MSG.GET will have it
     proc seq {msg} {
         if {[dict exists $msg seq]} {
@@ -1312,6 +1314,13 @@ proc ::nats::timestamp {} {
 }
 
 # ------------------------ all following procs are private! --------------------------------------
+proc ::nats::_coroVwait {var} {
+    if {[info coroutine] eq ""} {
+        vwait $var
+    } else {
+        coroutine::util vwait $var
+    }
+}
 # returns a dict, where each key points to a list of values
 # NB! unlike HTTP headers, in NATS headers keys are case-sensitive
 proc ::nats::_parse_header {header} {

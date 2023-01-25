@@ -7,7 +7,7 @@
 oo::class create ::nats::jet_stream {
     variable conn _timeout api_prefix fetch_wait fetch_count
     
-    # do NOT call directly! instead use connection::jet_stream
+    # do NOT call directly! instead use [$connection jet_stream]
     constructor {c t d} {
         set conn $c
         set _timeout $t ;# avoid clash with -timeout option when using _parse_args
@@ -31,17 +31,15 @@ oo::class create ::nats::jet_stream {
                   next_by_subj valid_str null
                   seq          int null}
 
-        set response [json::json2dict [$conn request "$api_prefix.STREAM.MSG.GET.$stream" [nats::_dict2json $spec $args] -timeout $_timeout]]
-        nats::_checkJsError $response
+        set response [my ApiRequest "STREAM.MSG.GET.$stream" [nats::_dict2json $spec $args]]
         set encoded_msg [dict get $response message] ;# it is encoded in base64
-        set data [binary decode base64 [dict lookup $encoded_msg data ""]]
+        set data [binary decode base64 [dict lookup $encoded_msg data]]
         set msg [nats::msg create [dict get $encoded_msg subject] -data $data]
         dict set msg seq [dict get $encoded_msg seq]
         dict set msg time [dict get $encoded_msg time]
-        set header [binary decode base64 [dict lookup $encoded_msg hdrs ""]]
+        set header [binary decode base64 [dict lookup $encoded_msg hdrs]]
         if {$header ne ""} {
-            set hdr_dict [nats::_parse_header $header]
-            dict set msg header $hdr_dict
+            dict set msg header [nats::_parse_header $header]
         }
         return $msg
     }
@@ -50,9 +48,7 @@ oo::class create ::nats::jet_stream {
     method stream_msg_delete {stream args} {
         set spec {no_erase bool null
                   seq      int NATS_TCL_REQUIRED}
-
-        set response [json::json2dict [$conn request "$api_prefix.STREAM.MSG.DELETE.$stream" [nats::_dict2json $spec $args] -timeout $_timeout]]
-        nats::_checkJsError $response
+        set response [my ApiRequest "STREAM.MSG.DELETE.$stream" [nats::_dict2json $spec $args]]
         return [dict get $response success]
     }
 
@@ -159,29 +155,32 @@ oo::class create ::nats::jet_stream {
         return $mdict
     }
     
-    # Ack acknowledges a message. This tells the server that the message was
-    # successfully processed and it can move on to the next message.
+    # different types of ACKs: https://docs.nats.io/using-nats/developer/develop_jetstream/consumers#delivery-reliability
     method ack {message} {
-        $conn publish [dict get $message reply] ""
+        $conn publish [nats::msg reply $message] ""
     }
 
-    # Nak negatively acknowledges a message. This tells the server to redeliver
-    # the message. You can configure the number of redeliveries by passing
-    # nats.MaxDeliver when you Subscribe. The default is infinite redeliveries.
-    method nak {message} {
-        $conn publish [dict get $message reply] "-NAK"
+    method ack_sync {message} {
+       $conn request [nats::msg reply $message] "" -timeout $_timeout
+    }
+    
+    method nak {message args} {
+        nats::_parse_args $args {
+            delay timeout null
+        }
+        set nack_msg "-NAK"
+        if {[info exists delay]} {
+            append nack_msg " [nats::_local2json {delay ns null}]"
+        }
+        $conn publish [nats::msg reply $message] $nack_msg
     }
 
-    # Term tells the server to not redeliver this message, regardless of the value
-    # of nats.MaxDeliver.
     method term {message} {
-        $conn publish [dict get $message reply] "+TERM"
+        $conn publish [nats::msg reply $message] "+TERM"
     }
 
-    # InProgress tells the server that this message is being worked on. It resets
-    # the redelivery timer on the server.
     method in_progress {message} {
-        $conn publish [dict get $message reply] "+WPI"
+        $conn publish [nats::msg reply $message] "+WPI"
     }
     
     # nats schema info --yaml io.nats.jetstream.api.v1.pub_ack_response
@@ -202,10 +201,10 @@ oo::class create ::nats::jet_stream {
             nats::header set msg Nats-Expected-Stream $stream
         }
         if {$callback ne ""} {
-            $conn request_msg $msg -callback [mymethod PublishCallback $callback] -timeout $timeout
+            $conn request_msg $msg -callback [mymethod PublishCallback $callback] -timeout $timeout -dictmsg false
             return
         }
-        set response [json::json2dict [$conn request_msg $msg -timeout $timeout]]
+        set response [json::json2dict [$conn request_msg $msg -timeout $timeout -dictmsg false]]
         nats::_checkJsError $response
         return $response ;# fields: stream,seq,duplicate
     }
@@ -250,25 +249,22 @@ oo::class create ::nats::jet_stream {
         if {($version_cmp < 1) && [info exists name]} {
             ;# starting from NATS 2.9.0, all consumers should have a name
             if {[info exists filter_subject] && $filter_subject ne ">"} {
-                set subject "$api_prefix.CONSUMER.CREATE.$stream.$name.$filter_subject"
+                set subject "CONSUMER.CREATE.$stream.$name.$filter_subject"
                 set check_subj false ;# if filter_subject has * or >, it can't pass the check in CheckSubject
             } else {
-                set subject "$api_prefix.CONSUMER.CREATE.$stream.$name"
+                set subject "CONSUMER.CREATE.$stream.$name"
             }
         } elseif {[info exists durable_name]} {
-            set subject "$api_prefix.CONSUMER.DURABLE.CREATE.$stream.$durable_name"
+            set subject "CONSUMER.DURABLE.CREATE.$stream.$durable_name"
         } elseif {[info exists name]} {
-            set subject "$api_prefix.CONSUMER.DURABLE.CREATE.$stream.$name"
+            set subject "CONSUMER.DURABLE.CREATE.$stream.$name"
             set durable_name $name ;# back-compat with NATS < 2.9
         } else {
-            set subject "$api_prefix.CONSUMER.CREATE.$stream"  ;# ephemeral consumer
+            set subject "CONSUMER.CREATE.$stream"  ;# ephemeral consumer
         }
-        set consumer_config [nats::_local2json $spec]
-        set msg [json::write::object stream_name [json::write string $stream] config $consumer_config]
-        
-        set response [json::json2dict [$conn request $subject $msg -timeout $_timeout -check_subj $check_subj]]
-        nats::_checkJsError $response
-        dict unset response type
+
+        set msg [json::write::object stream_name [json::write string $stream] config [nats::_local2json $spec]]        
+        set response [my ApiRequest $subject $msg $check_subj]
         set result_config [dict get $response config]
         nats::_ns2ms result_config ack_wait idle_heartbeat inactive_threshold
         dict set response config $result_config
@@ -290,17 +286,14 @@ oo::class create ::nats::jet_stream {
     # no request body
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_delete_response
     method delete_consumer {stream consumer} {
-        set response [json::json2dict [$conn request "$api_prefix.CONSUMER.DELETE.$stream.$consumer" "" -timeout $_timeout]]
-        nats::_checkJsError $response
+        set response [my ApiRequest "CONSUMER.DELETE.$stream.$consumer" ""]
         return [dict get $response success]  ;# probably will always be true
     }
     
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_info_response
     method consumer_info {stream consumer} {
-        set response [json::json2dict [$conn request "$api_prefix.CONSUMER.INFO.$stream.$consumer" "" -timeout $_timeout]]
-        nats::_checkJsError $response
-        dict unset response type
-        # remaining fields: name, stream_name, created, config and some others
+        set response [my ApiRequest "CONSUMER.INFO.$stream.$consumer" ""]
+        # response fields: name, stream_name, created, config and some others
         set result_config [dict get $response config]
         nats::_ns2ms result_config ack_wait idle_heartbeat inactive_threshold
         dict set response config $result_config
@@ -310,9 +303,8 @@ oo::class create ::nats::jet_stream {
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_names_request
     # the schema suggests possibility to filter by subject, but it doesn't work!
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_names_response
-    method consumer_names {stream} {        
-        set response [json::json2dict [$conn request "$api_prefix.CONSUMER.NAMES.$stream" "" -timeout $_timeout]]
-        nats::_checkJsError $response
+    method consumer_names {stream} {
+        set response [my ApiRequest "CONSUMER.NAMES.$stream" ""]
         return [dict get $response consumers]
     }
 
@@ -347,10 +339,8 @@ oo::class create ::nats::jet_stream {
         }
             
         dict set args name $stream
-        set msg [nats::_dict2json $spec $args]
-        set response [json::json2dict [$conn request "$api_prefix.STREAM.CREATE.$stream" $msg -timeout $_timeout]]
-        nats::_checkJsError $response
-        dict unset response type ;# remaining fields: config, created (timestamp), state, did_create
+        set response [my ApiRequest "STREAM.CREATE.$stream" [nats::_dict2json $spec $args]]
+        # response fields: config, created (timestamp), state, did_create
         set result_config [dict get $response config]
         nats::_ns2ms result_config duplicate_window max_age
         dict set response config $result_config
@@ -359,8 +349,7 @@ oo::class create ::nats::jet_stream {
     # no request body
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_delete_response
     method delete_stream {stream} {
-        set response [json::json2dict [$conn request "$api_prefix.STREAM.DELETE.$stream" "" -timeout $_timeout]]
-        nats::_checkJsError $response
+        set response [my ApiRequest "STREAM.DELETE.$stream" ""]
         return [dict get $response success]  ;# probably will always be true
     }
     
@@ -372,18 +361,14 @@ oo::class create ::nats::jet_stream {
                   keep   pos_int   null
                   seq    pos_int   null }
         nats::_parse_args $args $spec
-        set msg [nats::_local2json $spec]
-        set response [json::json2dict [$conn request "$api_prefix.STREAM.PURGE.$stream" $msg -timeout $_timeout]]
-        nats::_checkJsError $response
+        set response [my ApiRequest "STREAM.PURGE.$stream" [nats::_local2json $spec]]
         return [dict get $response purged]
     }
     
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_info_request
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_info_response
     method stream_info {stream} {
-        set response [json::json2dict [$conn request "$api_prefix.STREAM.INFO.$stream" "" -timeout $_timeout]]
-        nats::_checkJsError $response
-        dict unset response type
+        set response [my ApiRequest "STREAM.INFO.$stream" ""]
         dict unset response total
         dict unset response offset
         dict unset response limit
@@ -399,9 +384,7 @@ oo::class create ::nats::jet_stream {
     method stream_names {args} {
         set spec {subject valid_str null}
         nats::_parse_args $args $spec
-        set msg [nats::_local2json $spec]
-        set response [json::json2dict [$conn request "$api_prefix.STREAM.NAMES" $msg -timeout $_timeout]]
-        nats::_checkJsError $response
+        set response [my ApiRequest "STREAM.NAMES" [nats::_local2json $spec]]
         if {[dict get $response total] == 0} {
             # in this case "streams" contains JSON null instead of an empty list; this is a bug in NATS server
             return [list]
@@ -417,20 +400,26 @@ oo::class create ::nats::jet_stream {
             return
         }
         set response [json::json2dict $msg]
-        if {[dict exists $response error]} {
-            # make the same dict as in AsyncError, with extra field err_code
-            set js_error [dict get $response error]
-            dict set js_error errorMessage [dict get $js_error description]
-            dict unset js_error description
-            after 0 [list {*}$userCallback 0 "" $js_error]
+        if {![dict exists $response error]} {
+            after 0 [list {*}$userCallback 0 $response ""]
             return
         }
-        after 0 [list {*}$userCallback 0 $response ""]
+        # make the same dict as in AsyncError, with extra field err_code
+        set js_error [dict get $response error]
+        dict set js_error errorMessage [dict get $js_error description]
+        dict unset js_error description
+        after 0 [list {*}$userCallback 0 "" $js_error]
     }
     # https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-6.md
     # only the Unix variant, also no " [] {}
     method CheckFilenameSafe {str} {
         return [regexp -- {^[-[:alnum:]!#$%&()+,:;<=?@^_`|~]+$} $str]
+    }
+    method ApiRequest {subj msg {checkSubj true}} {
+        set response [json::json2dict [$conn request "$api_prefix.$subj" $msg -timeout $_timeout -dictmsg false -check_subj $checkSubj]]
+        nats::_checkJsError $response
+        dict unset response type ;# no-op if the key doesn't exist
+        return $response
     }
 }
 

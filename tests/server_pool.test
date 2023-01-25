@@ -105,7 +105,7 @@ test server_pool-13.2 "DNS resolution failure" -body {
 } -result {Failed to connect*} -match glob -errorCode {NATS ErrConnectionRefused}
 
 test server_pool-14.1 "Reconnecting timings and counters" -body {
-    startNats NATS1
+    startNats NATS
     $conn configure -servers [list nats://localhost:4222 nats://localhost:5222 nats://localhost:6222] -randomize false
     $conn configure -max_reconnect_attempts 1 -connect_timeout 500 -reconnect_time_wait 3000
     
@@ -119,9 +119,9 @@ test server_pool-14.1 "Reconnecting timings and counters" -body {
     trace add variable ${conn}::last_error write $error_trace
     
     $conn connect
-    stopNats NATS1 ;# the client goes into reconnecting
+    stopNats NATS ;# the client goes into reconnecting
     duration {
-        startNats NATS1
+        startNats NATS
         test_utils::log::info "Waiting for the client to go into reconnecting"
         while {[set ${conn}::status] != $nats::status_reconnecting} {
             wait_for ${conn}::status 5000
@@ -146,8 +146,8 @@ test server_pool-14.1 "Reconnecting timings and counters" -body {
 }
 
 test server_pool-14.2 "Remove servers from the pool when they reach max_reconnect_attempts" -body {
-    stopNats NATS1 ;# the client goes into reconnecting    
-    startNats NATS1
+    stopNats NATS ;# the client goes into reconnecting    
+    startNats NATS
     test_utils::log::info "Waiting for the client to go into reconnecting"
     while {[set ${conn}::status] != $nats::status_reconnecting} {
         wait_for ${conn}::status 5000
@@ -160,7 +160,7 @@ test server_pool-14.2 "Remove servers from the pool when they reach max_reconnec
     assert {[llength [$conn all_servers]] == 1} 1
 } -cleanup {
     $conn disconnect
-    stopNats NATS1
+    stopNats NATS
 }
     
 $conn destroy

@@ -107,7 +107,7 @@ test auth-2.3 "Try connecting with no credentials" -body {
     $conn reset -servers
 }
 
-startNats NATS -p 4223
+startNats NATS_open -p 4223
 
 test auth-2.4 "Try connecting to a cluster with no credentials - OK" -body {
     # the first server will reject the connection, the second server will accept
@@ -126,6 +126,6 @@ test auth-2.4 "Try connecting to a cluster with no credentials - OK" -body {
 }
 
 $conn destroy
-stopNats NATS
+stopNats NATS_open
 stopNats NATS_token
 tcltest::cleanupTests

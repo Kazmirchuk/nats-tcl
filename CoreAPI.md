@@ -284,7 +284,7 @@ The connection can have one of the four statuses:
 - `$nats::status_reconnecting` - triggered by any of the above asynchronous errors that terminate the connection. The client is trying to connect to servers in the pool one by one. After a full cycle, the client sleeps for `-reconnect_time_wait` ms before starting a new cycle. Every failed connection to a server increments its `reconnects` counter. Once this counter exceeds `-max_reconnect_attempts`, the server is removed from the pool. Once no servers are left in the pool, or the user calls `disconnect`, the client transitions into `$nats::status_closed`. Calling `subscribe`, `unsubscribe`, `publish` etc is allowed. As soon as the client transitions into `$nats::status_connected`, they will be flushed along with restoring all current subscriptions.
 
 Calling `connect` when the status is not `$nats::status_closed`, is no-op.<br/>
-Calling `ping` when the status is not `$nats::status_connected`, raises `ErrConnectionClosed`. 
+Calling `ping` when the status is not `$nats::status_connected`, raises `ErrConnectionClosed`.<br/>
 Calling `disconnect` cancels all pending asynchronous requests, and the callbacks will not be invoked.
 
 Official NATS clients have a few more statuses:

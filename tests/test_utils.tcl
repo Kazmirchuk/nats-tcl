@@ -157,8 +157,10 @@ namespace eval test_utils {
 
     # start NATS server in the background unless it is already running; it must be available in $PATH
     proc startNats {id args} {
-        if {![NeedStartNats $args]} {
-            return
+        if {$id eq "NATS"} {
+            if {![NeedStartNats $args]} {
+                return
+            }
         }
         variable natsPid
         # tcltest -singleproc 0 considers stderr from NATS as a test failure; we don't need these logs, so just send them to /dev/null
@@ -189,11 +191,8 @@ namespace eval test_utils {
         after 500
         log::info "Stopped $id"
     }
-
+    # suitable only for tests that start only one NATS instance
     proc NeedStartNats {natsArgs} {
-        if {[llength $natsArgs]} {
-            return 1;# always start a "custom" NATS
-        }
         if {$::tcl_platform(platform) eq "windows"} {
             set count [llength [twapi::get_process_ids -name nats-server.exe]]
         } else {

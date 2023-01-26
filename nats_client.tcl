@@ -127,7 +127,7 @@ oo::class create ::nats::connection {
         proc log::suppressed {level msg} {}
         
         set belowLogLevel 0
-        # we use only these 4 logging levels
+        # provide the same interface as Tcllib's logger; we use only these 4 logging levels
         foreach level {error warn info debug} {
             if {$belowLogLevel} {
                 interp alias {} [self object]::log::${level} {} [self object]::log::suppressed $level
@@ -273,6 +273,7 @@ oo::class create ::nats::connection {
         if {[llength $args] == 1} {
             set reply [lindex $args 0]
             set header ""
+            set check_subj true
         } else {
             nats::_parse_args $args {
                 header dict ""

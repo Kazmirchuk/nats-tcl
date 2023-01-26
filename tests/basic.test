@@ -293,7 +293,7 @@ test basic-16 "Queue groups and publish with replyTo" -body {
         assert {$replyTo eq ""}
         incr ::msg_count
     }]]
-    
+    # use the old syntax for "publish" without -reply to test back-compatibility
     $conn publish test_qg "0 queue group test" $myReplyTo
     sleep 200
     set msg_count

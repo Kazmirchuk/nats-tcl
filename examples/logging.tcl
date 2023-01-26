@@ -26,6 +26,9 @@ logger::utils::applyAppender -appender console -service main -appenderArgs {-con
 # and natsLogger will print to a file:
 set logFile [open nats.log w]
 logger::utils::applyAppender -appender fileAppend -service main::nats -appenderArgs {-outputChannel $::logFile -conversionPattern {\[[nats::timestamp] %c %p\] %m}}
+# Note: as of Tcllib 1.20/logger 0.9.4, there's a bug in the logger package regarding logprocs inheritance
+# to work around it, I have to apply appenders explicitly to each logger service
+# https://stackoverflow.com/questions/75029609/tcl-logger-package-bug-when-inheriting-logproc/75060526#
 
 ${mainLogger}::setlevel info ;# changing a logging level of a parent logger propagates to children
 

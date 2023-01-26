@@ -201,8 +201,7 @@ oo::class create ::nats::jet_stream {
             nats::header set msg Nats-Expected-Stream $stream
         }
         if {$callback ne ""} {
-            $conn request_msg $msg -callback [mymethod PublishCallback $callback] -timeout $timeout -dictmsg false
-            return
+            return [$conn request_msg $msg -callback [mymethod PublishCallback $callback] -timeout $timeout -dictmsg false]
         }
         set response [json::json2dict [$conn request_msg $msg -timeout $timeout -dictmsg false]]
         nats::_checkJsError $response
@@ -271,14 +270,14 @@ oo::class create ::nats::jet_stream {
         return $response
     }
     
-    method add_pull_consumer {stream name args} {
+    method add_pull_consumer {stream consumer args} {
         set config $args
-        dict set config name $name
+        dict set config name $consumer
         return [my add_consumer $stream {*}$config]
     }
     
-    method add_push_consumer {stream name deliver_subject args} {
-        dict set args name $name 
+    method add_push_consumer {stream consumer deliver_subject args} {
+        dict set args name $consumer
         dict set args deliver_subject $deliver_subject
         return [my add_consumer $stream {*}$args]
     }

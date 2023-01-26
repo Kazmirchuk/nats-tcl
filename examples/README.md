@@ -1,4 +1,6 @@
 # Examples
+All examples assume that you have the NATS server running on localhost and default TCP port 4222.
+
 The examples cover only basic use cases, so for more details you can look into the tests.
 1. [hello_nats.tcl](hello_nats.tcl) - basic publishing and subscribing
 2. [requests.tcl](requests.tcl) - sending requests and responding to them; using lambdas for callbacks

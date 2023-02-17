@@ -16,9 +16,9 @@ oo::class create ::nats::jet_stream {
         } else {
             set api_prefix \$JS.$d.API
         }
-        array set pull_reqs {} ;# reqID -> value, depends on:
-        # sync pull requests: timedOut: bool, response: dictMsg
-        # async pull requests: recMsgs: int
+        array set pull_reqs {} ;# reqID -> dict
+        # sync pull requests: timedOut: bool, inMsgs: list (excluding status messages)
+        # async pull requests: recMsgs: int, callback: str, batch: int
     }
 
     # JetStream wire API Reference https://docs.nats.io/reference/reference-protocols/nats_api_reference
@@ -105,40 +105,39 @@ oo::class create ::nats::jet_stream {
         # - client-side timeout raises ErrTimeout - this is consistent with nats.py
         set reqID [set ${conn}::counters(request)] 
         incr reqID ;# need to know the next req ID to pass it to the callback
-        set req_args [list $subject [nats::_local2json $json_spec] -dictmsg true -timeout $timeout -max_msgs $batch]
-        if {$callback eq ""} {
-            set inMsgs [list]
-            $conn request {*}$req_args -callback [mymethod SyncConsumeCb $reqID]
-        } else {
-            $conn request {*}$req_args -callback [mymethod AsyncConsumeCb $reqID $callback $batch]
-            set pull_reqs($reqID) 0
+        
+        $conn request $subject [nats::_local2json $json_spec] -dictmsg true -timeout $timeout -max_msgs $batch -callback [mymethod ConsumeCb $reqID]
+        if {$callback ne ""} {
+            set pull_reqs($reqID) [dict create recMsgs 0 callback $callback batch $batch]
             return $reqID
         }
         
+        set pull_reqs($reqID) [dict create]
         while {1} {
             nats::_coroVwait [self object]::pull_reqs($reqID)
-            lassign $pull_reqs($reqID) timedOut msg
-            if {$timedOut} {
-                if {[llength $inMsgs]} {
-                    break
+            set sync_pull $pull_reqs($reqID)
+            #puts "sync_pull: $sync_pull"
+            set inMsgs [dict lookup $sync_pull inMsgs]
+            set msgCount [llength $inMsgs]
+            switch -- [dict lookup $sync_pull timedOut -1] {
+                1 {
+                    if {$msgCount > 0} {
+                        break ;# we've received at least some messages - return them
+                    }
+                    unset pull_reqs($reqID)
+                    # probably wrong stream/consumer - see also https://github.com/nats-io/nats-server/issues/2107
+                    throw {NATS ErrTimeout} "Consume timeout! stream=$stream consumer=$consumer"
                 }
-                unset pull_reqs($reqID)
-                # probably wrong stream/consumer - see also https://github.com/nats-io/nats-server/issues/2107
-                throw {NATS ErrTimeout} "Consume timeout! stream=$stream consumer=$consumer"
-            }
-            set msgStatus [nats::header lookup $msg Status 0]
-            switch -- $msgStatus {
-                404 - 408 - 409 {
-                    [info object namespace $conn]::log::debug "Pull request $reqID got status message $msgStatus"
-                    if {$batch - [llength $inMsgs] > 1} {
+                0 {
+                    # we've received a status message, which means that the pull request is done
+                    if {$batch - $msgCount > 1} {
                         # no need to cancel the request if this was the last expected message
                         $conn cancel_request $reqID
                     }
                     break
                 }
                 default {
-                    lappend inMsgs $msg
-                    if {[llength $inMsgs] == $batch} {
+                    if {$msgCount == $batch} {
                         break
                     }
                 }
@@ -148,37 +147,61 @@ oo::class create ::nats::jet_stream {
         return $inMsgs
     }
     
-    method SyncConsumeCb {reqID timedOut msg} {
-        set pull_reqs($reqID) [list $timedOut $msg]
-    }
-    
-    method AsyncConsumeCb {reqID userCb batch timedOut msg} {
+    method ConsumeCb {reqID timedOut msg} {
+        #puts "ConsumeCb $reqID $timedOut $msg"
+        if {![info exists pull_reqs($reqID)]} {
+            return ;# pull request was cancelled after the callback has been already scheduled
+        }
+        set pull_req $pull_reqs($reqID)
+        set userCb [dict lookup $pull_req callback]
+        if {$userCb ne ""} {
+            set recMsgs [dict get $pull_reqs($reqID) recMsgs]
+            set batch [dict get $pull_reqs($reqID) batch]
+        }
         if {$timedOut} {
             # probably wrong stream/consumer - we get here only if no messages have been received at all
-            after 0 [list {*}$userCb 1 ""]
-            unset pull_reqs($reqID)
+            if {$userCb eq ""} {
+                dict set pull_reqs($reqID) timedOut 1
+            } else {
+                after 0 [list {*}$userCb 1 ""]
+                unset pull_reqs($reqID)
+            }
             return
-        }
-        set recMsgs $pull_reqs($reqID)
-        set msgStatus [nats::header lookup $msg Status 0]
+        } 
+        set msgStatus [nats::header lookup $msg Status ""]
         switch -- $msgStatus {
             404 - 408 - 409 {
                 [info object namespace $conn]::log::debug "Pull request $reqID got status message $msgStatus"
-                if {$batch - $recMsgs > 1} {
-                    $conn cancel_request $reqID
+                if {$userCb eq ""} {
+                    dict set pull_reqs($reqID) timedOut 0
+                } else {
+                    if {$batch - $recMsgs > 1} {
+                        $conn cancel_request $reqID
+                    }
+                    unset pull_reqs($reqID)
+                    # just like with old-style requests, inform the user that the pull request timed out
+                    after 0 [list {*}$userCb 1 $msg]
                 }
-                unset pull_reqs($reqID)
-                # just like with old-style requests, inform the user that the pull request timed out
-                after 0 [list {*}$userCb 1 $msg]
             }
             default {
-                incr pull_reqs($reqID)
-                after 0 [list {*}$userCb 0 $msg]
-                if {$pull_reqs($reqID) == $batch} {
-                    unset pull_reqs($reqID)
+                if {$userCb eq ""} {
+                    dict lappend pull_reqs($reqID) inMsgs $msg
+                } else {
+                    incr recMsgs
+                    after 0 [list {*}$userCb 0 $msg]
+                    if {$recMsgs == $batch} {
+                        unset pull_reqs($reqID)
+                    } else {
+                        dict set pull_reqs($reqID) recMsgs $recMsgs
+                    }
                 }
             }
         }
+    }
+    
+    method cancel_pull_request {reqID} {
+        unset pull_reqs($reqID)
+        $conn cancel_request $reqID
     }
     
     # metadata is encoded in the reply field:

@@ -516,6 +516,7 @@ oo::class create ::nats::connection {
             my unsubscribe $subID
         }
         unset requests($reqID)
+        log::debug "Cancelled request $reqID"
     }
     
     #this function is called "flush" in all other NATS clients, but I find it confusing
@@ -1300,6 +1301,14 @@ namespace eval ::nats::header {
             return [dict keys [dict get $msg header] $pattern]
         }
     }
+    # get the first value or default
+    proc lookup {msg key def} {
+        ::set h [dict get $msg header]
+        if {![dict exists $h $key]} {
+            return $def
+        }
+        return [lindex [dict get $h $key] 0]
+    }
     namespace export *
     namespace ensemble create
 }
@@ -1490,8 +1499,6 @@ proc ::nats::_parse_args {args_list spec {doConfig 0}} {
 namespace eval ::nats {
     namespace export connection msg header timestamp
 }
-
-package provide nats 1.0
 
 # Let me respectfully remind you:
 # Birth and death are of supreme importance.

@@ -194,7 +194,7 @@ test jet_stream-4.2 "Fetch with expires - no messages - client-side timeout" -bo
 
 test jet_stream-4.3 "Fetch with expires - get some messages" -setup {
     foreach msg { 1 2 3 } {
-        $jet_stream publish test.3 $msg -stream MY_STREAM
+        $jet_stream publish test.4 $msg -stream MY_STREAM
     }
 } -body {
     duration {
@@ -202,6 +202,7 @@ test jet_stream-4.3 "Fetch with expires - get some messages" -setup {
     } elapsed
     foreach msg $msgList {
         $jet_stream ack_sync $msg
+        assert {[nats::msg subject $msg] eq "test.4"} 1
     }
     assert {[approx $elapsed 500]}
     assert {[llength $msgList] == 3}
@@ -209,7 +210,7 @@ test jet_stream-4.3 "Fetch with expires - get some messages" -setup {
 
 test jet_stream-4.4 "Fetch with expires - get all messages" -setup {
     foreach msg { 1 2 3 4 5 6 7 8 9 10 } {
-        $jet_stream publish test.3 $msg -stream MY_STREAM
+        $jet_stream publish test.4 $msg -stream MY_STREAM
     }
 } -body {
     duration {
@@ -217,15 +218,91 @@ test jet_stream-4.4 "Fetch with expires - get all messages" -setup {
     } elapsed
     foreach msg $msgList {
         $jet_stream ack_sync $msg
-        assert {[nats::msg subject $msg] eq "test.3"} 1
+        assert {[nats::msg subject $msg] eq "test.4"} 1
         assert {[nats::msg data $msg] <= 10}
     }
     assert {$elapsed < 100}
     llength $msgList
-} -result 10 -output "" -cleanup {
+} -result 10 -output ""
+
+# I skip tests for async fetch with no_wait
+test jet_stream-5.1 "Async fetch - no messages" -body {
+    duration {
+        $jet_stream consume $stream_name $consumer_name -batch_size 10 -timeout 1000 -expires 500 -callback asyncReqCallback
+        wait_for ::inMsg 1000
+    } elapsed
+    assert {[approx $elapsed 500]}
+    assert {$inMsg eq "timeout"}
+} -output "*got status message 408*" -match glob
+
+test jet_stream-5.2 "Async fetch - no messages - client-side timeout" -body {
+    duration {
+        $jet_stream consume $stream_name $consumer_name -batch_size 10 -timeout 500 -expires 1000 -callback asyncReqCallback
+        wait_for ::inMsg 1000
+    } elapsed
+    assert {[approx $elapsed 500]}
+    assert {$inMsg eq "timeout"}
+} -output ""
+
+set autoAckCallback [lambda {js timedOut msg} {
+    lappend ::gotMsgs [list $timedOut $msg]
+    if {!$timedOut} {
+        $js ack_sync $msg
+    }
+} $jet_stream]
+
+set gotMsgs [list]
+
+test jet_stream-5.3 "Async fetch - get some messages" -setup {
+    foreach msg { 1 2 3 } {
+        $jet_stream publish test.5 $msg -stream MY_STREAM
+    }
+} -body {
+    duration {
+        # the callback will be invoked 3 times with a message and the 4th time with timedOut=1
+        $jet_stream consume $stream_name $consumer_name -batch_size 10 -timeout 1000 -expires 500 -callback $autoAckCallback
+        # note that while+wait_for each individual message is unreliable,
+        # because the callback may be invoked many times before wait_for returns, so we would miss some messages
+        while {[llength $gotMsgs] < 4} {
+            wait_for ::gotMsgs 1000
+        }
+    } elapsed
+    assert {[approx $elapsed 500]}
+    assert {[llength $gotMsgs] == 4} 1
+    for {set i 0} {$i < 3} {incr i} {
+        lassign [lindex $gotMsgs $i] timedOut msg
+        assert {[nats::msg subject $msg] eq "test.5"} 1
+        assert {!$timedOut}
+    }
+    lassign [lindex $gotMsgs 3] timedOut msg
+    assert {$timedOut}
+} -output "*got status message 408*" -match glob
+
+test jet_stream-5.4 "Async fetch - get all messages" -setup {
+    set gotMsgs [list]
+    foreach msg { 1 2 3 4 5 6 7 8 9 10 } {
+        $jet_stream publish test.5 $msg -stream MY_STREAM
+    }
+} -body {
+    duration {
+        $jet_stream consume $stream_name $consumer_name -batch_size 10 -timeout 1000 -expires 500 -callback $autoAckCallback
+        while {[llength $gotMsgs] < 10} {
+            wait_for ::gotMsgs 1000
+        }
+    } elapsed
+    assert {$elapsed < 500}
+    assert {[llength $gotMsgs] == 10} 1
+    foreach elem $gotMsgs {
+        lassign $elem timedOut msg
+        assert {!$timedOut}
+        assert {[nats::msg subject $msg] eq "test.5"}
+    }
+    array size ${jet_stream}::pull_reqs
+} -result 0 -output "" -cleanup {
     ${natsLogger}::setlevel warn
 }
 
+$jet_stream delete_stream $stream_name
 $jet_stream destroy
 $conn destroy
 stopNats NATS

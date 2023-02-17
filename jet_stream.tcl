@@ -5,7 +5,7 @@
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
 oo::class create ::nats::jet_stream {
-    variable conn _timeout api_prefix fetch_wait fetch_count
+    variable conn _timeout api_prefix pull_reqs
     
     # do NOT call directly! instead use [$connection jet_stream]
     constructor {c t d} {
@@ -16,8 +16,9 @@ oo::class create ::nats::jet_stream {
         } else {
             set api_prefix \$JS.$d.API
         }
-        array set fetch_wait {}
-        set fetch_count 0
+        array set pull_reqs {} ;# reqID -> value, depends on:
+        # sync pull requests: timedOut: bool, response: dictMsg
+        # async pull requests: recMsgs: int
     }
 
     # JetStream wire API Reference https://docs.nats.io/reference/reference-protocols/nats_api_reference
@@ -70,6 +71,7 @@ oo::class create ::nats::jet_stream {
             timeout timeout null
             batch_size pos_int 1
             expires timeout null
+            callback valid_str ""
         }
         # timeout specifies the client-side timeout; if not given, this is a no_wait fetch
         # expires specifies the server-side timeout (undocumented arg only for testing)
@@ -88,7 +90,6 @@ oo::class create ::nats::jet_stream {
         # and they have a special optimized case for batch=1.
         # I don't see a need for such intricacies in this client
 
-        set inMsgs [list]
         set json_spec {
             expires ns null
             batch   int null
@@ -102,22 +103,33 @@ oo::class create ::nats::jet_stream {
         # if we've got no messages:
         # - server-side timeout raises no error, and we return an empty list
         # - client-side timeout raises ErrTimeout - this is consistent with nats.py
-        set fetchID [incr fetch_count] ;# allow multiple fetches in coroutines
-        set reqID [$conn request $subject [nats::_local2json $json_spec] -dictmsg true -timeout $timeout -max_msgs $batch -callback [mymethod ConsumeCb $fetchID]]
+        set reqID [set ${conn}::counters(request)] 
+        incr reqID ;# need to know the next req ID to pass it to the callback
+        set req_args [list $subject [nats::_local2json $json_spec] -dictmsg true -timeout $timeout -max_msgs $batch]
+        if {$callback eq ""} {
+            set inMsgs [list]
+            $conn request {*}$req_args -callback [mymethod SyncConsumeCb $reqID]
+        } else {
+            $conn request {*}$req_args -callback [mymethod AsyncConsumeCb $reqID $callback $batch]
+            set pull_reqs($reqID) 0
+            return $reqID
+        }
+        
         while {1} {
-            nats::_coroVwait [self object]::fetch_wait($fetchID)
-            lassign $fetch_wait($fetchID) timedOut msg
+            nats::_coroVwait [self object]::pull_reqs($reqID)
+            lassign $pull_reqs($reqID) timedOut msg
             if {$timedOut} {
                 if {[llength $inMsgs]} {
                     break
                 }
+                unset pull_reqs($reqID)
                 # probably wrong stream/consumer - see also https://github.com/nats-io/nats-server/issues/2107
                 throw {NATS ErrTimeout} "Consume timeout! stream=$stream consumer=$consumer"
             }
-            set status [dict lookup [dict get $msg header] Status 0]
-            switch -- $status {
+            set msgStatus [nats::header lookup $msg Status 0]
+            switch -- $msgStatus {
                 404 - 408 - 409 {
-                    [info object namespace $conn]::log::debug "fetchID $fetchID got status message $status"
+                    [info object namespace $conn]::log::debug "Pull request $reqID got status message $msgStatus"
                     if {$batch - [llength $inMsgs] > 1} {
                         # no need to cancel the request if this was the last expected message
                         $conn cancel_request $reqID
@@ -132,11 +144,41 @@ oo::class create ::nats::jet_stream {
                 }
             }
         }
+        unset pull_reqs($reqID)
         return $inMsgs
     }
     
-    method ConsumeCb {fetchID timedOut msg} {
-        set fetch_wait($fetchID) [list $timedOut $msg]
+    method SyncConsumeCb {reqID timedOut msg} {
+        set pull_reqs($reqID) [list $timedOut $msg]
+    }
+    
+    method AsyncConsumeCb {reqID userCb batch timedOut msg} {
+        if {$timedOut} {
+            # probably wrong stream/consumer - we get here only if no messages have been received at all
+            after 0 [list {*}$userCb 1 ""]
+            unset pull_reqs($reqID)
+            return
+        }
+        set recMsgs $pull_reqs($reqID)
+        set msgStatus [nats::header lookup $msg Status 0]
+        switch -- $msgStatus {
+            404 - 408 - 409 {
+                [info object namespace $conn]::log::debug "Pull request $reqID got status message $msgStatus"
+                if {$batch - $recMsgs > 1} {
+                    $conn cancel_request $reqID
+                }
+                unset pull_reqs($reqID)
+                # just like with old-style requests, inform the user that the pull request timed out
+                after 0 [list {*}$userCb 1 $msg]
+            }
+            default {
+                incr pull_reqs($reqID)
+                after 0 [list {*}$userCb 0 $msg]
+                if {$pull_reqs($reqID) == $batch} {
+                    unset pull_reqs($reqID)
+                }
+            }
+        }
     }
     
     # metadata is encoded in the reply field:

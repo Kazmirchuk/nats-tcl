@@ -1,4 +1,7 @@
 package ifneeded nats 1.0 \
-   "source \[file join [list $dir] server_pool.tcl\] ; \
-    source \[file join [list $dir] nats_client.tcl\] ; \
-    source \[file join [list $dir] jet_stream.tcl\]"
+[list apply {{dir} {
+    source [file join $dir server_pool.tcl]
+    source [file join $dir nats_client.tcl]
+    source [file join $dir jet_stream.tcl]
+    package provide nats 1.0
+}} $dir]

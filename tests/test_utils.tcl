@@ -33,7 +33,7 @@ namespace eval test_utils {
     
     # sleep $delay ms in the event loop
     proc sleep {delay} {
-        after $delay [list set ::test_utils::sleepVar 1]
+        after $delay {set ::test_utils::sleepVar 1}
         vwait ::test_utils::sleepVar
     }
 

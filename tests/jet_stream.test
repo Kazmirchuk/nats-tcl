@@ -7,7 +7,7 @@
 # Test summary:
 # - sync, async publishing to a stream
 # - fetching from a durable pull consumer with various ACK's
-# - fetching a batch under various scenarios
+# - fetching a batch of messages under various scenarios
 
 source test_utils.tcl
 

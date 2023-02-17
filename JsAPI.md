@@ -4,33 +4,33 @@ JetStream functionality of NATS can be accessed by creating the `nats::jet_strea
 
 ## Synopsis
 
-[*js* publish *subject message ?args?*]()<br/>
-[*js* publish_msg *message ?args?*]()<br/>
-[*js* consume *stream consumer* ?-timeout *ms*? ?-batch_size *batch_size*?]()<br/>
-[*js* ack *message*]()<br/>
-[*js* ack_sync *message*]()<br/>
-[*js* nak *message* ?-delay *ms*?]()<br/>
-[*js* in_progress *message*]()<br/>
-[*js* term *message*]()<br/>
-[*js* metadata *message*]()<br/>
+[*js* publish *subject message ?args?*](#js-publish-subject-message-args)<br/>
+[*js* publish_msg *message ?args?*](#js-publish_msg-message-args)<br/>
+[*js* consume *stream consumer* ?-timeout *ms*? ?-batch_size *batch_size*?](#js-consume-stream-consumer--timeout-ms--batch_size-batch_size)<br/>
+[*js* ack *message*](#js-ack-message)<br/>
+[*js* ack_sync *message*](#js-ack_sync-message)<br/>
+[*js* nak *message* ?-delay *ms*?](#js-nak-message--delay-ms)<br/>
+[*js* in_progress *message*](#js-in_progress-message)<br/>
+[*js* term *message*](#js-term-message)<br/>
+[*js* metadata *message*](#js-metadata-message)<br/>
 
-[*js* add_stream *stream* ?-option *value*?..]()<br/>
-[*js* delete_stream *stream*]()<br/>
-[*js* purge_stream *stream* ?-filter *subject*? ?-keep *int*? ?-seq *int*?]()<br/>
-[*js* stream_info *stream*]()<br/>
-[*js* stream_names ?-subject *subject*?]()<br/>
+[*js* add_stream *stream* ?-option *value*?..](#js-add_stream-stream--option-value)<br/>
+[*js* delete_stream *stream*](#js-delete_stream-stream)<br/>
+[*js* purge_stream *stream* ?-filter *subject*? ?-keep *int*? ?-seq *int*?](#js-purge_stream-stream--filter-subject--keep-int--seq-int)<br/>
+[*js* stream_info *stream*](#js-stream_info-stream)<br/>
+[*js* stream_names ?-subject *subject*?](#js-stream_names--subject-subject)<br/>
 
-[*js* add_consumer *stream ?args?*]()<br/>
-[*js* add_pull_consumer *stream consumer ?args?*]()<br/>
-[*js* add_push_consumer *stream consumer deliver_subject ?args?*]()<br/>
-[*js* delete_consumer *stream consumer*]()<br/>
-[*js* consumer_info *stream consumer*]()<br/>
-[*js* consumer_names *stream*]()<br/>
+[*js* add_consumer *stream* ?-option *value*?..](#js-add_consumer-stream--option-value)<br/>
+[*js* add_pull_consumer *stream consumer ?args?*](#js-add_pull_consumer-stream-consumer-args)<br/>
+[*js* add_push_consumer *stream consumer deliver_subject ?args?*](#js-add_push_consumer-stream-consumer-deliver_subject-args)<br/>
+[*js* delete_consumer *stream consumer*](#js-delete_consumer-stream-consumer)<br/>
+[*js* consumer_info *stream consumer*](#js-consumer_info-stream-consumer)<br/>
+[*js* consumer_names *stream*](#js-consumer_names-stream)<br/>
 
-[*js* stream_msg_get *stream ?args?*]()<br/>
-[*js* stream_msg_delete *stream* -seq *sequence* ?-no_erase *no_erase*?]()<br/>
+[*js* stream_msg_get *stream* ?-last_by_subj *subj*? ?-next_by_subj *subj*? ?-seq *int*?](#js-stream_msg_get-stream--last_by_subj-subj--next_by_subj-subj--seq-int)<br/>
+[*js* stream_msg_delete *stream* -seq *sequence* ?-no_erase *no_erase*?](#js-stream_msg_delete-stream--seq-sequence--no_erase-no_erase)<br/>
 
-[*js* destroy]()<br/>
+[*js* destroy](#js-destroy)<br/>
 
 ## Description
 The [Core NATS](CoreAPI.md) pub/sub functionality offers the at-most-once delivery guarantee based on TCP. This is sufficient for many applications, where an individual message doesn't have much value. In case of a transient network disconnection, a subscriber simply waits until the connection is restored and a new message is delivered. 
@@ -46,17 +46,17 @@ Unlike the core NATS server functionality that is simple, stable and well-docume
 - `nats-server` in tracing mode (-DV)
 - and of course studying source code of nats.go, nats.c and nats.py
 
-Note that API of the official NATS clients (`JetStreamContext`) is designed in a way that allows to create a consumer implicitly with a subscription (e.g. `JetStreamContext.pull_subscribe` in nats.py). I find such design somewhat confusing, so the Tcl API clearly distinguishes between creating a consumer and a subscription.
-
 Unfortunately, I don't have enough capacity to cover the whole JetStream functionality or keep up with Synadia's development. So, I've decided to focus on the most useful functions:
 - publishing messages to streams with confirmations
 - fetching messages from pull consumers
 - support for all kinds of message acknowledgement
 - JetStream asset management (streams and pull/push consumers)
 
-The implementation can tolerate minor changes in JetStream API. E.g. if a publish acknowledgment is returned just as a dict parsed from JSON. So, if in future the JSON schema gets a new field, it will be automatically available in this dict.
+The implementation can tolerate minor changes in JetStream API. E.g. a publish acknowledgment is returned just as a dict parsed from JSON. So, if in future the JSON schema gets a new field, it will be automatically available in this dict.
 
 If you need other JetStream functions, e.g. the Key/Value Store or Object Store, you can easily implement them yourself using core NATS requests. No need to interact directly with the TCP socket. Of course, PRs are always welcome.
+
+Note that API of the official NATS clients (`JetStreamContext`) is designed in a way that allows to create a consumer implicitly with a subscription (e.g. `JetStreamContext.pull_subscribe` in nats.py). I find such design somewhat confusing, so the Tcl API clearly distinguishes between creating a consumer and a subscription.
 
 ## JetStream Wire Format
 The JetStream wire format uses nanoseconds for timestamps and durations in all requests and replies. To be consistent with the rest of the Tcl API, the client converts them to milliseconds before returning to a user. And vice versa: all function arguments are accepted as ms and converted to ns before sending.
@@ -64,21 +64,21 @@ The JetStream wire format uses nanoseconds for timestamps and durations in all r
 Paging with total/offset/limit is not supported.
 ## Commands
 ### js publish *subject message ?args?*
-Publishes `message` (payload) to a [stream](https://docs.nats.io/jetstream/concepts/streams) on the specified `subject` and returns an acknowledgement (`pubAck`) from the NATS server. The method works based on the [request](CoreAPI.md#objectName-request-subject-message-args) method.
+Publishes `message` (payload) to a [stream](https://docs.nats.io/jetstream/concepts/streams) on the specified `subject` and returns an acknowledgement (`pubAck`) from the NATS server. The method uses [request](CoreAPI.md#objectName-request-subject-message-args) under the hood.
 
 You can provide the following options:
 - `-timeout ms` - timeout for the underlying NATS request. Default timeout is taken from the `jet_stream` object.
 - `-callback cmdPrefix` - do not block and deliver the acknowledgement to this callback.
 - `-stream stream` - set the expected target stream (recommended!). If the subject does not match the stream, NATS will return an error.
 
-If no callback is given, the returned value is a dict with following fields:
-- stream - stream name where the message was saved
+If no callback is given, the returned `pubAck` is a dict with following fields:
+- stream - stream name where the message has been saved
 - seq - sequence number
 - duplicate - optional boolean indicating that this message is a duplicate
 
-If no stream exists on specified `subject`, the call will raise `ErrNoResponders`. If JetStream reported an error, it raises `ErrJSResponse`.
+If no stream exists on the specified `subject`, the call will raise `ErrNoResponders`. If JetStream reported an error, it will raise `ErrJSResponse`.
 
-If a callback is given, the call returns immediately. When a reply from JetStream is received or a timeout fires, the callback will be invoked from the event loop. It must have the following signature:<br/>
+If a callback is given, the call returns immediately. When a reply from JetStream is received or the timeout fires, the callback will be invoked from the event loop. It must have the following signature:<br/>
 **cmdPrefix** *timedOut pubAck pubError*<br/>
 
 - `timedOut` is a boolean equal to 1, if the request timed out or this was `ErrNoResponders`.<br/>
@@ -87,6 +87,8 @@ If a callback is given, the call returns immediately. When a reply from JetStrea
   - code: high-level HTTP-like code e.g. 404 if a stream wasn't found
   - err_code: more specific JetStream code, e.g. 10060
   - errorMessage: human-readable error message, e.g. "expected stream does not match"
+
+Note that you can publish messages to a stream using [nats::connection publish](CoreAPI.md#objectname-publish-subject-message--reply-replyto) as well. But in this case you have no confirmation that the message has reached the NATS server, so it misses the whole point of using JetStream.
 ### js publish_msg *message ?args?*
 Publishes `message` (created with [nats::msg create](CoreAPI.md#msg-create-subject--data-payload--reply-replysubj)) to a stream. Other options are the same as above. Use this method to publish a message with headers.
 ### js consume *stream consumer* ?-timeout *ms*? ?-batch_size *batch_size*?
@@ -198,8 +200,8 @@ Returns consumer information as a dict.
 Returns a list of all consumers defined on this stream.
 ### js stream_msg_get *stream* ?-last_by_subj *subj*? ?-next_by_subj *subj*? ?-seq *int*?
 'Direct Get' a message from stream `stream` by given `subject` or `sequence`. See also [ADR-31](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-31.md).
-### js stream_msg_delete *stream* -seq *sequence* ?-no_erase *no_erase*?
-Delete message from stream `stream` with given `sequence`.
+### js stream_msg_delete *stream* -seq *int* ?-no_erase *no_erase*?
+Delete message from `stream` with the given `sequence` number.
 ### js destroy
 TclOO destructor. Remember to call it before destroying the parent `nats::connection`.
 

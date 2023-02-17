@@ -32,7 +32,7 @@ proc jsPublishCallback {timedOut pubAck pubError} {
     puts "JS publish error: $pubError"
 }
 
-$js publish foo.1 "confirmed message 2" -callback jsPublishCallback
+$js publish bar.1 "confirmed message 2" -callback jsPublishCallback
 vwait ::cbInvoked
 
 # publish_msg is more flexible: you can add message headers and specify the expected stream, if you know it
@@ -44,9 +44,9 @@ puts "Confirmed sequence # [dict get $confirm seq]"
 set msg [$js stream_msg_get MY_STREAM -last_by_subj foo.1]
 puts "Message # [nats::msg seq $msg] was published on [nats::msg timestamp $msg]"
 # but this is a backdoor reserved only for niche use cases. The standard approach is to create a pull or a push consumer.
-# Let's create a pull consumer that receives only messages sent to foo.1 :
-set consumer_info [$js add_pull_consumer MY_STREAM PULL_CONSUMER -filter_subject foo.1 -ack_policy all]
-puts "Number of pending messages for PULL_CONSUMER: [dict get $consumer_info num_pending]" ;# prints "4"
+# Let's create a pull consumer that receives only messages sent to foo.* :
+set consumer_info [$js add_pull_consumer MY_STREAM PULL_CONSUMER -filter_subject foo.* -ack_policy all]
+puts "Number of pending messages for PULL_CONSUMER: [dict get $consumer_info num_pending]" ;# prints "3", because one message was published on bar.1
 
 # Having created a durable consumer, you can now consume messages.
 puts "Fetching messages:"
@@ -55,7 +55,7 @@ set msg [$js consume MY_STREAM PULL_CONSUMER]
 # They are always returned as dicts regardless of -dictmsg config option.
 puts [nats::msg data $msg]
 # or a batch of messages:
-foreach msg [$js consume MY_STREAM PULL_CONSUMER -batch_size 3] {
+foreach msg [$js consume MY_STREAM PULL_CONSUMER -batch_size 2] {
     puts [nats::msg data $msg]
 }
 # remember to acknowledge the consumed message

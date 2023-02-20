@@ -41,6 +41,7 @@ All commands are defined in and exported from the `::nats` namespace.
 [header values *msgValue key*](#header-values-msgvalue-key)<br/>
 [header get *msgValue key*](#header-get-msgvalue-key)<br/>
 [header keys *msgValue ?globPattern?*](#header-keys-msgvalue-globpattern)<br/>
+[header lookup *msgValue key default*](#header-lookup-msgValue-key-default)<br/>
 
 [nats::timestamp](#natstimestamp)
 
@@ -157,13 +158,16 @@ Depending if there's a callback, the method works in a sync or async manner.
 
 If no callback is given, the request is synchronous and blocks in a (coroutine-aware) `vwait` and then returns a reply. If `-max_msgs` is used, the returned value is a list of message dicts (note: if the timeout has fired, this list contains only the messages received so far). If no response arrives within `timeout`, it raises the error `ErrTimeout`. When using NATS server version 2.2+, `ErrNoResponders` is raised if nobody is subscribed to `subject`.
 
-If a callback is given, the call returns immediately, and when a reply is received or a timeout fires, the callback will be invoked from the event loop. It must have the following signature:<br/>
+If a callback is given, the call returns immediately. Return value is a unique request ID that can be used to cancel the request. When a reply is received or a timeout fires, the callback will be invoked from the event loop. It must have the following signature:<br/>
 **asyncRequestCallback** *timedOut message*<br/>
 `timedOut` is a boolean equal to 1, if the request timed out or no responders are available.<br/>
 `response` is the received message. If `-max_msgs`>1, the callback is invoked for each message. If the timeout fires before `-max_msgs` are received, the callback is invoked one last time with `timedOut`=1.
 
 ### objectName request_msg *msg* ?-timeout *ms* -callback *cmdPrefix* -dictmsg *dictmsg*?
 Sends a request with a message created using [nats::msg](#natsmsg). The rest of arguments work the same as in `request`.
+
+### objectName cancel_request *reqID*
+Cancels the asynchronous request with the given `reqID`.
 
 ### objectName ping ?-timeout *ms*?
 Triggers a ping-pong exchange with the NATS server, enters (coroutine-aware) `vwait` and returns true upon success. If the server does not reply within the specified timeout (ms), it raises `ErrTimeout`. Default timeout is 10s. You can use this method to check if the server is alive or ensure all prior calls to `publish` and `subscribe` are flushed to NATS. Note that in other NATS clients this function is usually called "flush".
@@ -180,13 +184,13 @@ Returns a list with all servers in the pool.
 ### objectName server_info
 Returns a dict with the INFO message from the current server.
 
-### objectName destroy
-TclOO destructor. It calls `disconnect` and then destroys the object.
-
 ### objectName jet_stream ?-timeout *ms*? ?-domain *domain*?
 This 'factory' method creates [jetStreamObject](JsAPI.md) to work with [JetStream](https://docs.nats.io/jetstream/jetstream). `-timeout` (default 5s) is applied for all requests to JetStream NATS API. `domain` (empty string by default) specifies the JetStream [domain](https://docs.nats.io/running-a-nats-service/configuration/leafnodes/jetstream_leafnodes).
 
 Remember to destroy this object when it is no longer needed - there's no built-in garbage collection in `connection`.
+
+### objectName destroy
+TclOO destructor. It calls `disconnect` and then destroys the object.
 
 ## nats::msg
 This ensemble encapsulates all commands to work with a NATS message. Accessing it as a dict is deprecated. 
@@ -220,6 +224,8 @@ Gets a list of all values of the `key` header.
 Gets the first value of the `key` header. This is a convenient shortcut for the `values` command, since usually each header has only one value.
 ### header keys *msgValue ?globPattern?*
 Gets a list of all header keys in the message. With `globPattern`, only matching keys are returned (like in `dict keys`)
+### header lookup *msgValue key default*
+Same as [header get](#header-get-msgvalue-key), but returns a default value if the key does not exist.
 ### nats::timestamp
 Returns current local time in the ISO format, including milliseconds. Useful for logging.
 

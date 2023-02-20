@@ -1,0 +1,10 @@
+{
+  "ack_policy": "explicit",
+  "deliver_policy": "all",
+  "durable_name": "PULL_CONSUMER",
+  "filter_subject": "foo.*",
+  "max_deliver": 5,
+  "ack_wait": 60000000000,
+  "replay_policy": "instant",
+  "num_replicas": 0
+}

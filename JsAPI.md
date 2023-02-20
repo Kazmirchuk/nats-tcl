@@ -6,7 +6,7 @@ JetStream functionality of NATS can be accessed by creating the `nats::jet_strea
 
 [*js* publish *subject message ?args?*](#js-publish-subject-message-args)<br/>
 [*js* publish_msg *message ?args?*](#js-publish_msg-message-args)<br/>
-[*js* consume *stream consumer* ?-timeout *ms*? ?-batch_size *batch_size*?](#js-consume-stream-consumer--timeout-ms--batch_size-batch_size)<br/>
+[*js* consume *stream consumer ?args?*](#js-consume-stream-consumer-args)<br/>
 [*js* ack *message*](#js-ack-message)<br/>
 [*js* ack_sync *message*](#js-ack_sync-message)<br/>
 [*js* nak *message* ?-delay *ms*?](#js-nak-message--delay-ms)<br/>
@@ -15,6 +15,7 @@ JetStream functionality of NATS can be accessed by creating the `nats::jet_strea
 [*js* metadata *message*](#js-metadata-message)<br/>
 
 [*js* add_stream *stream* ?-option *value*?..](#js-add_stream-stream--option-value)<br/>
+[*js* add_stream_from_json *json_config*](#js-add_stream_from_json-json_config)<br/>
 [*js* delete_stream *stream*](#js-delete_stream-stream)<br/>
 [*js* purge_stream *stream* ?-filter *subject*? ?-keep *int*? ?-seq *int*?](#js-purge_stream-stream--filter-subject--keep-int--seq-int)<br/>
 [*js* stream_info *stream*](#js-stream_info-stream)<br/>
@@ -23,6 +24,7 @@ JetStream functionality of NATS can be accessed by creating the `nats::jet_strea
 [*js* add_consumer *stream* ?-option *value*?..](#js-add_consumer-stream--option-value)<br/>
 [*js* add_pull_consumer *stream consumer ?args?*](#js-add_pull_consumer-stream-consumer-args)<br/>
 [*js* add_push_consumer *stream consumer deliver_subject ?args?*](#js-add_push_consumer-stream-consumer-deliver_subject-args)<br/>
+[*js* add_consumer_from_json *stream consumer json_config*](#js-add_consumer_from_json-stream-consumer-json_config)<br/>
 [*js* delete_consumer *stream consumer*](#js-delete_consumer-stream-consumer)<br/>
 [*js* consumer_info *stream consumer*](#js-consumer_info-stream-consumer)<br/>
 [*js* consumer_names *stream*](#js-consumer_names-stream)<br/>
@@ -35,7 +37,7 @@ JetStream functionality of NATS can be accessed by creating the `nats::jet_strea
 ## Description
 The [Core NATS](CoreAPI.md) pub/sub functionality offers the at-most-once delivery guarantee based on TCP. This is sufficient for many applications, where an individual message doesn't have much value. In case of a transient network disconnection, a subscriber simply waits until the connection is restored and a new message is delivered. 
 
-In some applications, however, each message have a real business value and must not be lost in transit. These applications should use [JetStream](https://docs.nats.io/nats-concepts/jetstream) that offers at-least-once and exactly-once delivery guarantees despite network disruptions or software crashes. Also, JetStream provides temporal decoupling of publishers and subscribers (consumers), i.e. each published message is persisted on disk and delivered to a consumer when it is ready.
+In some applications, however, each message has a real business value and must not be lost in transit. These applications should use [JetStream](https://docs.nats.io/nats-concepts/jetstream) that offers at-least-once and exactly-once delivery guarantees despite network disruptions or software crashes. Also, JetStream provides temporal decoupling of publishers and subscribers (consumers), i.e. each published message is persisted on disk and delivered to a consumer when it is ready.
 
 JetStream introduces no new elements in the NATS protocol, but builds on top of it: primarily the request-reply function, with special JSON messages and status headers.
 
@@ -62,6 +64,24 @@ Note that API of the official NATS clients (`JetStreamContext`) is designed in a
 The JetStream wire format uses nanoseconds for timestamps and durations in all requests and replies. To be consistent with the rest of the Tcl API, the client converts them to milliseconds before returning to a user. And vice versa: all function arguments are accepted as ms and converted to ns before sending.
 
 Paging with total/offset/limit is not supported.
+
+## Streams and consumers configuration in JSON format
+This client library has a unique feature compared to official NATS clients: streams and consumers can be created directly from JSON configuration rather than a long list of arguments passed to a client. It is possible with 
+[add_stream_from_json](#js-add_stream_from_json-json_config) and 
+[add_consumer_from_json](#js-add_consumer_from_json-stream-consumer-json_config) methods.
+
+This JSON is sent to NATS as-is. Also a JSON response is returned from the method unchanged (unless it was an error, in which case `ErrJSResponse` is raised as usual). You can obtain such JSON configuration using NATS CLI, e.g.:
+```bash
+nats consumer info MY_STREAM PULL_CONSUMER --json
+```
+Then you can save the `config` object to a JSON file.
+
+This approach has 2 benefits:
+- Configuration of streams and consumers is kept separately from Tcl source code. It can be saved in VCS or generated on the fly, and shared with NATS CLI or other NATS clients.
+- It is future-proof: if the Tcl client lags behind JetStream development, you still have access to the latest JetStream features, and the library still takes care of error checking.
+
+You can find an example in [js_mgmt.tcl](examples/js_mgmt.tcl).
+
 ## Commands
 ### js publish *subject message ?args?*
 Publishes `message` (payload) to a [stream](https://docs.nats.io/jetstream/concepts/streams) on the specified `subject` and returns an acknowledgement (`pubAck`) from the NATS server. The method uses [request](CoreAPI.md#objectName-request-subject-message-args) under the hood.
@@ -91,10 +111,17 @@ If a callback is given, the call returns immediately. When a reply from JetStrea
 Note that you can publish messages to a stream using [nats::connection publish](CoreAPI.md#objectname-publish-subject-message--reply-replyto) as well. But in this case you have no confirmation that the message has reached the NATS server, so it misses the whole point of using JetStream.
 ### js publish_msg *message ?args?*
 Publishes `message` (created with [nats::msg create](CoreAPI.md#msg-create-subject--data-payload--reply-replysubj)) to a stream. Other options are the same as above. Use this method to publish a message with headers.
-### js consume *stream consumer* ?-timeout *ms*? ?-batch_size *batch_size*?
-Consumes `batch_size` number of messages (default 1) from a [pull consumer](https://docs.nats.io/jetstream/concepts/consumers) defined on a [stream](https://docs.nats.io/jetstream/concepts/streams) and returns a list of messages (could be empty). This is the analogue of PullSubscribe + [fetch](https://pkg.go.dev/github.com/nats-io/nats.go#Subscription.Fetch) in official NATS clients.
+### js consume *stream consumer ?args?*
+Consumes a number of messages from a [pull consumer](https://docs.nats.io/jetstream/concepts/consumers) defined on a [stream](https://docs.nats.io/jetstream/concepts/streams). This is the analogue of PullSubscribe + [fetch](https://pkg.go.dev/github.com/nats-io/nats.go#Subscription.Fetch) in official NATS clients.
+
+You can provide the following options:
+- `-batch_size int` - number of messages to consume. Default batch is 1.
+- `-timeout ms` - pull request timeout - see below.
+- `-callback cmdPrefix` - do not block and deliver messages to this callback.
 
 The underlying JetStream API is rather intricate, so I recommend reading [ARD-13](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-13.md) for better understanding.
+
+Pulled messages are always returned as Tcl dicts irrespectively of the `-dictmsg` option.
 
 If `-timeout` is omitted, the client sends a `no_wait` request, asking NATS to deliver only currently pending messages. If there are no pending messages, the method returns an empty list.
 
@@ -102,9 +129,14 @@ If `-timeout` is given, it defines both the client-side and server-side timeouts
 - the client-side timeout is the timeout for the underlying `request`
 - the server-side timeout is 10ms shorter than `timeout`, and it is sent in the `expires` JSON field. This behaviour is consistent with nats.go
 
-In either case, the request is synchronous and blocks in a (coroutine-aware) `vwait` until all expected messages are received or the pull request expires. If the client-side timeout fires before the server-side timeout, and no messages have been received, the method raises `ErrTimeout`. In all other cases the method returns a list with as many messages as currently avaiable, but not more than `batch_size`.
+*Note:* you can specify the `-expires` option explicitly (ms), but this is an advanced use case and normally should not be needed.
 
-There is no asynchronous version of this method with `-callback`. If you do need multiple open pull requests at the same time, you can issue them in separate coroutines.
+If a callback is not given, the request is synchronous and blocks in a (coroutine-aware) `vwait` until all expected messages are received or the pull request expires. If the client-side timeout fires before the server-side timeout, and no messages have been received, the method raises `ErrTimeout`. In all other cases the method returns a list with as many messages as currently avaiable, but not more than `batch_size`.
+
+If a callback is given, the call returns immediately. When a message is pulled or a timeout fires, the callback will be invoked from the event loop. It must have the following signature:<br/>
+**asyncRequestCallback** *timedOut message*
+
+If less than `batch_size` messages are pulled before the pull request times out, the callback is invoked one last time with `timedOut=1`.
 
 The client handles status messages 404, 408 and 409 transparently. You can see them in the debug log, if needed.
 
@@ -123,7 +155,7 @@ Sends "terminate" ACK to NATS. The message will not be redelivered.
 ### js metadata *message*
 Returns a dict with metadata of the message. It is extracted from the reply-to field.
 ### js add_stream *stream* ?-option *value*?..
-Adds a new `stream` with configuration specified as option-value pairs. See the [official docs](https://docs.nats.io/nats-concepts/jetstream/streams#configuration) for explanation of these options.
+Create or update a `stream` with configuration specified as option-value pairs. See the [official docs](https://docs.nats.io/nats-concepts/jetstream/streams#configuration) for explanation of these options.
 | Option        | Type   | Default |
 | ------------- |--------|---------|
 | -description  | string |         |
@@ -149,6 +181,8 @@ Adds a new `stream` with configuration specified as option-value pairs. See the 
 
 
 Returns a JetStream response as a dict.
+### js add_stream_from_json *json_config*
+Create or update a stream with configuration specified as JSON. The stream name is taken from the JSON.
 ### js delete_stream *stream*
 Deletes the stream.
 ### js purge_stream *stream* ?-filter *subject*? ?-keep *int*? ?-seq *int*?
@@ -158,7 +192,7 @@ Returns stream information as a dict.
 ### js stream_names ?-subject *subject*?
 Returns a list of all streams or the streams matching the filter.
 ### js add_consumer *stream* ?-option *value*?..
-Adds a new pull or push consumer on the stream. See the [official docs](https://docs.nats.io/nats-concepts/jetstream/consumers#configuration) for explanation of these options.
+Create or update a pull or push consumer defined on `stream`. See the [official docs](https://docs.nats.io/nats-concepts/jetstream/consumers#configuration) for explanation of these options.
 | Option        | Type   | Default |
 | ------------- |--------|---------|
 | -name | string | |
@@ -186,12 +220,14 @@ Adds a new pull or push consumer on the stream. See the [official docs](https://
 | -mem_storage | boolean | |
 
 
-Note that starting from NATS 2.9.0, `durable_name` is deprecated. `name` should be used instead.<br/>
+Note that starting from NATS 2.9.0, `durable_name` is deprecated for pull consumers. `name` should be used instead. This does **not** apply to push consumers.<br/>
 Returns a JetStream response as a dict.
 ### js add_pull_consumer *stream consumer ?args?*
 A shortcut for `add_consumer` to create a durable pull consumer. Rest of `args` are the same as above.
 ### js add_push_consumer *stream consumer deliver_subject ?args?*
 A shortcut for `add_consumer` to create a durable push consumer. Rest of `args` are the same as above.
+### js add_consumer_from_json *stream consumer json_config*
+Create or update a `consumer` defined on a `stream` with configuration specified as JSON.
 ### js delete_consumer *stream consumer*
 Deletes the consumer.
 ### js consumer_info *stream consumer*

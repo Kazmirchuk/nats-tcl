@@ -37,7 +37,7 @@ Both forms can be loaded as:
 ```Tcl
 package require nats
 ```
-
+If you are using a "batteries-included" Tcl distribution, like [Magicsplat](https://www.magicsplat.com/tcl-installer/index.html) or [AndroWish](https://www.androwish.org/home/wiki?name=Batteries+Included), you might already have the package.
 ## Supported features
 - Publish and subscribe to messages, also with headers (NATS version 2.2+)
 - Synchronous and asynchronous requests (optimized: under the hood a single wildcard subscription is used for all requests)

@@ -117,6 +117,8 @@ test js_mgmt-5.2 "Delete a stream that doesn't exist" -body {
     $js delete_stream BLA_STREAM
 } -result {*stream not found*} -match glob -errorCode {NATS ErrJSResponse 404*}
 
+# filter_subjects of different consumers must not overlap!
+# NB! I'm using "name" here instead of "durable_name"
 set pull_consumer_config [dict create \
                          description "dummy pull consumer" \
                          filter_subject test.1 \
@@ -127,14 +129,12 @@ set pull_consumer_config [dict create \
                          replay_policy instant \
                          max_waiting 100 \
                          max_ack_pending 1000 \
-                         durable_name PULL_CONSUMER]
+                         name PULL_CONSUMER]
 
-# NB! I'm using "name" here instead of "durable_name"
+
 set push_consumer_config [dict create \
                          description "dummy push consumer" \
-                         deliver_subject PUSH_CONSUMER_SUBJECT \
-                         filter_subject test.2 \
-                         name PUSH_CONSUMER]
+                         filter_subject test.2 ]
 
 test js_mgmt-6.1 "Add a pull consumer with durable_name" -body {
     # keep this unit test to check that durable_name works properly
@@ -145,7 +145,7 @@ test js_mgmt-6.1 "Add a pull consumer with durable_name" -body {
 }
 
 test js_mgmt-6.2 "Add a pull consumer using add_pull_consumer" -body {
-    dict unset pull_consumer_config durable_name 
+    dict unset pull_consumer_config name 
     dict set pull_consumer_config filter_subject test.3
     set response [$js add_pull_consumer MY_STREAM PULL_CONSUMER_2 {*}$pull_consumer_config]
     dict get $response config name
@@ -193,7 +193,11 @@ test js_mgmt-7.1 "Get consumer info" -setup {
     set cli_config [dict get $cli_info config]
     nats::_ns2ms cli_config ack_wait
     assert {[dict get $response num_pending] == 2}
-    assert {[dict_in $api_conf $cli_config]}
+    #assert {[dict_in $api_conf $cli_config]}
+    # new NATS versions add new properties that may break the test, so check only a subset of them
+    foreach prop {name description deliver_policy ack_policy ack_wait filter_subject replay_policy num_replicas} {
+        assert {[dict get $api_conf $prop] == [dict get $cli_config $prop]}
+    }
     assert {[dict_in [dict get $response delivered] [dict get $cli_info delivered]]}
     assert {[dict_in [dict get $response ack_floor] [dict get $cli_info ack_floor]]}    
     dict get $response name

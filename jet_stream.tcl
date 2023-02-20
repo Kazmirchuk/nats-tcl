@@ -66,7 +66,6 @@ oo::class create ::nats::jet_stream {
         }
 
         set subject "$api_prefix.CONSUMER.MSG.NEXT.$stream.$consumer"
-        # -callback is not supported! this function is already very complex
         nats::_parse_args $args {
             timeout timeout null
             batch_size pos_int 1
@@ -198,7 +197,7 @@ oo::class create ::nats::jet_stream {
             }
         }
     }
-    
+    #TODO document?
     method cancel_pull_request {reqID} {
         unset pull_reqs($reqID)
         $conn cancel_request $reqID
@@ -327,7 +326,7 @@ oo::class create ::nats::jet_stream {
             set subject "CONSUMER.CREATE.$stream"  ;# ephemeral consumer
         }
 
-        set msg [json::write::object stream_name [json::write string $stream] config [nats::_local2json $spec]]        
+        set msg [json::write::object stream_name [json::write string $stream] config [nats::_local2json $spec]]
         set response [my ApiRequest $subject $msg $check_subj]
         set result_config [dict get $response config]
         nats::_ns2ms result_config ack_wait idle_heartbeat inactive_threshold
@@ -342,9 +341,18 @@ oo::class create ::nats::jet_stream {
     }
     
     method add_push_consumer {stream consumer deliver_subject args} {
-        dict set args name $consumer
+        # looks like the transition durable_name -> name applies only to pull consumers 
+        dict set args durable_name $consumer
         dict set args deliver_subject $deliver_subject
         return [my add_consumer $stream {*}$args]
+    }
+    
+    method add_consumer_from_json {stream consumer json_config} {
+        set msg [json::write::object stream_name [json::write string $stream] config $json_config]
+        set json_response [$conn request "$api_prefix.CONSUMER.DURABLE.CREATE.$stream.$consumer" $msg -timeout $_timeout -dictmsg false]
+        set dict_response [json::json2dict $json_response]
+        nats::_checkJsError $dict_response
+        return $json_response
     }
     
     # no request body
@@ -410,6 +418,15 @@ oo::class create ::nats::jet_stream {
         dict set response config $result_config
         return $response
     }
+    
+    method add_stream_from_json {json_config} {
+        set stream_name [dict get [json::json2dict $json_config] name]
+        set json_response [$conn request "$api_prefix.STREAM.CREATE.$stream_name" $json_config -timeout $_timeout -dictmsg false]
+        set dict_response [json::json2dict $json_response]
+        nats::_checkJsError $dict_response
+        return $json_response
+    }
+    
     # no request body
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_delete_response
     method delete_stream {stream} {

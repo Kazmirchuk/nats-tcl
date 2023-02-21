@@ -51,20 +51,38 @@ puts "Number of pending messages for PULL_CONSUMER: [dict get $consumer_info num
 # Having created a durable consumer, you can now consume messages.
 puts "Fetching messages:"
 # Fetch just one message:
-set msg [$js consume MY_STREAM PULL_CONSUMER]
+set msg [lindex [$js consume MY_STREAM PULL_CONSUMER] 0]
 # They are always returned as dicts regardless of -dictmsg config option.
 puts [nats::msg data $msg]
 # or a batch of messages:
 foreach msg [$js consume MY_STREAM PULL_CONSUMER -batch_size 2] {
     puts [nats::msg data $msg]
 }
-# remember to acknowledge the consumed message
-$js ack $msg
-# otherwise NATS will try to redeliver it. In this case it's enough to ack just the last message, because we've specified -ack_policy all
+# remember to acknowledge the consumed message, otherwise NATS will try to redeliver it.
+# in this case it's enough to ack just the last message, because we've specified -ack_policy all
+$js ack_sync $msg
+
 puts "Number of pending messages for PULL_CONSUMER: [dict get [$js consumer_info MY_STREAM PULL_CONSUMER] num_pending]" ;# prints "0"
 # the library provides all possible types of NATS ACKs: nak, in_progress, term
 
-# cleanup, so that the example prints reproducible output
+# push consumer example:
+$js add_push_consumer MY_STREAM PUSH_CONSUMER delivery_subj -filter_subject bar.* -idle_heartbeat 2000
+# there's no special method to subscribe to a push consumer - you can simply use the core NATS subscription
+$conn subscribe delivery_subj -callback [list pushed_msgs $js] -dictmsg true
+
+proc pushed_msgs {js subject msg reply} {
+    if {[nats::header lookup $msg Status 0] == 100} {
+        # idle heartbeats don't need ack
+        return
+    }
+    puts "Got [nats::msg data $msg]" ;# confirmed message 2
+    $js ack_sync $msg
+}
+
+# sleep for 3s
+after 3000 [list set untilDone 1]
+vwait untilDone
+
 $js delete_stream MY_STREAM
 $js destroy
 $conn destroy

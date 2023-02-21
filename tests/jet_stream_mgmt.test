@@ -129,7 +129,7 @@ set pull_consumer_config [dict create \
                          replay_policy instant \
                          max_waiting 100 \
                          max_ack_pending 1000 \
-                         name PULL_CONSUMER]
+                         durable_name PULL_CONSUMER]
 
 
 set push_consumer_config [dict create \
@@ -140,15 +140,15 @@ test js_mgmt-6.1 "Add a pull consumer with durable_name" -body {
     # keep this unit test to check that durable_name works properly
     set response [$js add_consumer MY_STREAM {*}$pull_consumer_config]
     set actual_config [dict get $response config]
-    assert {[dict get $response name] eq "PULL_CONSUMER"}
     assert {[dict_in $pull_consumer_config $actual_config]}
-}
+    dict get $response name
+} -result PULL_CONSUMER
 
 test js_mgmt-6.2 "Add a pull consumer using add_pull_consumer" -body {
-    dict unset pull_consumer_config name 
+    dict unset pull_consumer_config durable_name 
     dict set pull_consumer_config filter_subject test.3
     set response [$js add_pull_consumer MY_STREAM PULL_CONSUMER_2 {*}$pull_consumer_config]
-    dict get $response config name
+    dict get $response name
 } -result PULL_CONSUMER_2
 
 test js_mgmt-6.3 "Add a push consumer" -body {
@@ -195,7 +195,7 @@ test js_mgmt-7.1 "Get consumer info" -setup {
     assert {[dict get $response num_pending] == 2}
     #assert {[dict_in $api_conf $cli_config]}
     # new NATS versions add new properties that may break the test, so check only a subset of them
-    foreach prop {name description deliver_policy ack_policy ack_wait filter_subject replay_policy num_replicas} {
+    foreach prop {durable_name description deliver_policy ack_policy ack_wait filter_subject replay_policy num_replicas} {
         assert {[dict get $api_conf $prop] == [dict get $cli_config $prop]}
     }
     assert {[dict_in [dict get $response delivered] [dict get $cli_info delivered]]}

@@ -204,7 +204,9 @@ oo::class create ::nats::jet_stream {
     }
     
     # metadata is encoded in the reply field:
-    # $JS.ACK.<stream>.<consumer>.<delivered>.<sseq>.<cseq>.<time>.<pending>
+    # V1: $JS.ACK.<stream>.<consumer>.<delivered>.<sseq>.<cseq>.<time>.<pending>
+    # V2: $JS.ACK.<domain>.<account hash>.<stream>.<consumer>.<delivered>.<sseq>.<cseq>.<time>.<pending>.<random token>
+    # NB! I've got confirmation in Slack that as of Feb 2023, V2 metadata is not implemented yet in NATS
     method metadata {msg} {
         set mlist [split [dict get $msg reply] .]
         set mdict [dict create \
@@ -306,11 +308,10 @@ oo::class create ::nats::jet_stream {
                 throw {NATS ErrInvalidArg} "Invalid consumer name $name"
             }
         }
-
+        # see JetStreamManager.add_consumer in nats.py
         set version_cmp [package vcompare 2.9.0 [dict get [$conn server_info] version]]
         set check_subj true
         if {($version_cmp < 1) && [info exists name]} {
-            ;# starting from NATS 2.9.0, all consumers should have a name
             if {[info exists filter_subject] && $filter_subject ne ">"} {
                 set subject "CONSUMER.CREATE.$stream.$name.$filter_subject"
                 set check_subj false ;# if filter_subject has * or >, it can't pass the check in CheckSubject
@@ -319,11 +320,8 @@ oo::class create ::nats::jet_stream {
             }
         } elseif {[info exists durable_name]} {
             set subject "CONSUMER.DURABLE.CREATE.$stream.$durable_name"
-        } elseif {[info exists name]} {
-            set subject "CONSUMER.DURABLE.CREATE.$stream.$name"
-            set durable_name $name ;# back-compat with NATS < 2.9
         } else {
-            set subject "CONSUMER.CREATE.$stream"  ;# ephemeral consumer
+            set subject "CONSUMER.CREATE.$stream"
         }
 
         set msg [json::write::object stream_name [json::write string $stream] config [nats::_local2json $spec]]
@@ -336,12 +334,11 @@ oo::class create ::nats::jet_stream {
     
     method add_pull_consumer {stream consumer args} {
         set config $args
-        dict set config name $consumer
+        dict set config durable_name $consumer
         return [my add_consumer $stream {*}$config]
     }
     
     method add_push_consumer {stream consumer deliver_subject args} {
-        # looks like the transition durable_name -> name applies only to pull consumers 
         dict set args durable_name $consumer
         dict set args deliver_subject $deliver_subject
         return [my add_consumer $stream {*}$args]

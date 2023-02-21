@@ -58,9 +58,14 @@ The implementation can tolerate minor changes in JetStream API. E.g. a publish a
 
 If you need other JetStream functions, e.g. the Key/Value Store or Object Store, you can easily implement them yourself using core NATS requests. No need to interact directly with the TCP socket. Of course, PRs are always welcome.
 
-Note that API of the official NATS clients (`JetStreamContext`) is designed in a way that allows to create a consumer implicitly with a subscription (e.g. `JetStreamContext.pull_subscribe` in nats.py). I find such design somewhat confusing, so the Tcl API clearly distinguishes between creating a consumer and a subscription.
+## Notable differences from official NATS clients
+Note that API of official NATS clients (`JetStreamContext`) is designed in a way that allows to create a consumer implicitly with a subscription (e.g. `JetStreamContext.pull_subscribe` in nats.py). I find such design somewhat confusing, so the Tcl API clearly distinguishes between creating a consumer and a subscription.
 
-## JetStream Wire Format
+Also, official NATS clients often provide an auto-acknowledgment option (and sometimes even default to it!) - I find it potentially harmful, so it's missing from this client. Always remember to acknoledge JetStream messages according to your policy.
+
+The Tcl client does not provide a dedicated method to subscribe to push consumers. The core NATS subscription is perfectly adequate for the task. If your push consumer is configured with idle heartbeats, you will need to filter them out based on the status header = 100. You can find an example of such subscription in [js_msg.tcl](examples/js_msg.tcl)
+
+## JetStream wire format
 The JetStream wire format uses nanoseconds for timestamps and durations in all requests and replies. To be consistent with the rest of the Tcl API, the client converts them to milliseconds before returning to a user. And vice versa: all function arguments are accepted as ms and converted to ns before sending.
 
 Paging with total/offset/limit is not supported.
@@ -219,8 +224,7 @@ Create or update a pull or push consumer defined on `stream`. See the [official 
 | -num_replicas | int | |
 | -mem_storage | boolean | |
 
-
-Note that starting from NATS 2.9.0, `durable_name` is deprecated for pull consumers. `name` should be used instead. This does **not** apply to push consumers.<br/>
+Note that starting from NATS 2.9.0, there is a new option `-name` that is not fully equivalent to `-durable_name`. If you provide `-durable_name`, the consumer's default `InactiveThreshold` is unlimited. But if you provide `-name`, the default `InactiveThreshold` is only 5s.<br/>
 Returns a JetStream response as a dict.
 ### js add_pull_consumer *stream consumer ?args?*
 A shortcut for `add_consumer` to create a durable pull consumer. Rest of `args` are the same as above.

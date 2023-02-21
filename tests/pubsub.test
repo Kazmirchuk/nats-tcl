@@ -21,7 +21,7 @@ $conn connect
 test pubsub-1 "Publish and receive a message with a header" -body {
     set msg_received 0
     sniffer $conn {
-        set sid [$conn subscribe nats_2.2 -callback subCallback -dictmsg true]
+        set subID [$conn subscribe nats_2.2 -callback subCallback -dictmsg true]
         set msg_out [nats::msg create "nats_2.2" -data "payload"]
         nats::header set msg_out hdr1 "val 1" hdr2 "val2"
         $conn publish_msg $msg_out
@@ -36,9 +36,9 @@ test pubsub-1 "Publish and receive a message with a header" -body {
 
     # remove the first element in the list with SUB
     assert {[lrange $writtenData 1 end] eq [list {HPUB nats_2.2  37 44} NATS/1.0 {hdr1: val 1} {hdr2: val2} {} payload]} 1
-    assert {$readData eq [list "HMSG nats_2.2 $sid 37 44" "NATS/1.0" "hdr1: val 1" "hdr2: val2" "" "payload"]}
+    assert {$readData eq [list "HMSG nats_2.2 $subID 37 44" "NATS/1.0" "hdr1: val 1" "hdr2: val2" "" "payload"]}
 } -cleanup {
-    $conn unsubscribe $sid
+    $conn unsubscribe $subID
 }
 
 test pubsub-2 "Send requests with headers" -setup {
@@ -70,7 +70,7 @@ test pubsub-2 "Send requests with headers" -setup {
 
 test pubsub-3 "Receive a message with a header from NATS CLI" -body {
     set msg_received 0
-    $conn subscribe nats_cli -dictmsg true -callback [lambda {subject message replyTo} {
+    set subID [$conn subscribe nats_cli -dictmsg true -callback [lambda {subject message replyTo} {
         assert {$subject eq "nats_cli"}
         assert {[nats::msg data $message] eq "payload"}
         assert {$replyTo eq ""}
@@ -81,19 +81,23 @@ test pubsub-3 "Receive a message with a header from NATS CLI" -body {
         assert {"val2" in $hdr_values}
         assert {"val3" in $hdr_values}
         set ::msg_received 1
-    }]
+    }]]
     wait_flush $conn
     execNatsCmd pub -H hdr1:val1 -H hdr2:val2 -H hdr2:val3 nats_cli payload 2>@1
     wait_for ::msg_received 1000
     set msg_received
-} -result 1
+} -result 1 -cleanup {
+    $conn unsubscribe $subID
+}
 
 test pubsub-4 "Receive no-responders from a subscription" -body {
     set inbox [$conn inbox]
-    $conn subscribe $inbox -callback subCallback -dictmsg true
+    set subID [$conn subscribe $inbox -callback subCallback -dictmsg true]
     $conn publish "unknown_subject" "" -reply $inbox
     wait_for ::inMsg
-    assert {[nats::msg no_responders $inMsg]} 1
+    nats::msg no_responders $inMsg
+} -result 1 -cleanup {
+    $conn unsubscribe $subID
 }
 
 test pubsub-5 "Receive no-responders from a sync request" -body {
@@ -203,6 +207,37 @@ test pubsub-7.6 "Old-style request - sync - timeout" -body {
 } -result 0 -cleanup {
     stopAllResponders
     sleep 500
+}
+
+test pubsub-8.1 "Cancel a new-style request" -setup {
+    set resp [responder new]
+} -body {
+    set inMsg ""
+    set reqID [$conn request service "500 cancel" -callback asyncReqCallback -timeout 600]
+    sleep 100
+    $conn cancel_request $reqID
+    after 1000 {set inMsg "cancelled1"}
+    duration {
+        wait_for ::inMsg 2000
+    } elapsed
+    assert {[approx $elapsed 1000]}
+    set inMsg
+} -result "cancelled1"
+
+test pubsub-8.2 "Cancel an old-style request" -body {
+    set inMsg ""
+    set reqID [$conn request service "500 cancel" -callback asyncReqCallback -timeout 600 -max_msgs 1]
+    sleep 100
+    $conn cancel_request $reqID
+    after 1000 {set inMsg "cancelled2"}
+    duration {
+        wait_for ::inMsg 2000
+    } elapsed
+    assert {[approx $elapsed 1000]}
+    assert {[array size ${conn}::subscriptions] == 1} 1
+    set inMsg
+} -result "cancelled2" -cleanup {
+    $resp destroy
 }
 
 test pubsub-9 "Send 2 sync requests in coroutines" -setup {

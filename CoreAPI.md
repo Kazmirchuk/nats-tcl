@@ -15,7 +15,7 @@ All commands are defined in and exported from the `::nats` namespace.
 [*objectName* subscribe *subject ?-queue queueGroup? ?-callback cmdPrefix? ?-max_msgs maxMsgs? ?-dictmsg dictmsg?*](#objectName-subscribe-subject--queue-queueGroup--callback-cmdPrefix--max_msgs-maxMsgs--dictmsg-dictmsg) <br/>
 [*objectName* unsubscribe *subID ?-max_msgs maxMsgs?*](#objectName-unsubscribe-subID--max_msgs-maxMsgs) <br/>
 [*objectName* request *subject message ?args?*](#objectName-request-subject-message-args) <br/>
-[*objectName* request_msg msg ?-timeout *ms* -callback *cmdPrefix* -dictmsg *dictmsg*?](#objectname-request_msg-msg--timeout-ms--callback-cmdprefix--dictmsg-dictmsg)<br/>
+[*objectName* request_msg msg ?-timeout *ms* ?-callback *cmdPrefix*? ?-dictmsg *dictmsg*?](#objectname-request_msg-msg--timeout-ms--callback-cmdprefix--dictmsg-dictmsg)<br/>
 [*objectName* ping *?-timeout ms?*](#objectName-ping--timeout-ms) <br/>
 [*objectName* inbox](#objectName-inbox) <br/>
 [*objectName* current_server](#objectName-current_server) <br/>
@@ -163,7 +163,7 @@ If a callback is given, the call returns immediately. Return value is a unique r
 `timedOut` is a boolean equal to 1, if the request timed out or no responders are available.<br/>
 `response` is the received message. If `-max_msgs`>1, the callback is invoked for each message. If the timeout fires before `-max_msgs` are received, the callback is invoked one last time with `timedOut`=1.
 
-### objectName request_msg *msg* ?-timeout *ms* -callback *cmdPrefix* -dictmsg *dictmsg*?
+### objectName request_msg *msg* ?-timeout *ms*? ?-callback *cmdPrefix*? ?-dictmsg *dictmsg*?
 Sends a request with a message created using [nats::msg](#natsmsg). The rest of arguments work the same as in `request`.
 
 ### objectName cancel_request *reqID*

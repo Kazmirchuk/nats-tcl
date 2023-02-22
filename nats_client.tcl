@@ -254,6 +254,9 @@ oo::class create ::nats::connection {
         if {$status == $nats::status_closed} {
             return
         }
+        foreach reqID [array names requests] {
+            after cancel [dict lookup $requests($reqID) timer]
+        }
         if {$sock eq ""} {
             # if a user calls disconnect while we are waiting for reconnect_time_wait, we only need to stop the coroutine
             $coro stop
@@ -537,8 +540,8 @@ oo::class create ::nats::connection {
         log::debug "sending PING"
         my ScheduleFlush
         nats::_coroVwait [self object]::pong
+        after cancel $timerID
         if {$pong} {
-            after cancel $timerID
             return true
         }
         throw {NATS ErrTimeout} "PING timeout"
@@ -958,7 +961,7 @@ oo::class create ::nats::connection {
     method PONG {cmd} {
         set pong 1
         set counters(pendingPings) 0
-        log::debug "received PONG"
+        log::debug "received PONG, status: $status"
         if {$status != $nats::status_connected} {
             # auth OK: finalise the connection process
             $serverPool current_server_connected true
@@ -1031,19 +1034,22 @@ oo::class create ::nats::connection {
         } trap {NATS ErrNoServers} {msg opts} {
             # don't overwrite the real last_error; need to log this in case of "connect -async"
             log::error $msg
+            # mark all pending async requests as timed out
+            foreach reqID [array names requests] {
+                set callback [dict lookup $requests($reqID) callback]
+                if {$callback ne ""} {
+                    log::debug "Force timeout of request $reqID"
+                    after 0 [list {*}$callback 1 ""]
+                    after cancel [dict get $requests($reqID) timer]
+                }
+            }
         } trap {} {msg opts} {
             log::error "Unexpected error: $msg $opts"
         }
-        
         array unset subscriptions ;# make sure we don't try to restore subscriptions, when we connect next time
-        foreach reqID [array names requests] {
-            # cancel pending async timers
-            after cancel [dict lookup $requests($reqID) timer]
-        }
         array unset requests
         set requestsInboxPrefix ""
         my CancelConnectTimer
-        
         set status $nats::status_closed
         log::debug "Finished coroutine $coro"
         set coro ""

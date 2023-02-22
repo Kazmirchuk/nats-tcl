@@ -170,7 +170,7 @@ namespace eval test_utils {
         } else {
             set natsPid($id) [exec nats-server {*}$args 2> /dev/null &]
         }
-        sleep 500 
+        sleep 500
         log::info "Started $id"
     }
     
@@ -185,7 +185,6 @@ namespace eval test_utils {
             twapi::end_process $natsPid($id)
         } else {
             exec kill $natsPid($id)
-            
         }
         unset natsPid($id)
         after 500
@@ -220,6 +219,7 @@ namespace eval test_utils {
                 id valid_str ""
                 subject valid_str service
                 queue valid_str ""
+                servers valid_str ""
             }
             if {$id eq ""} {
                 set id [namespace tail [self object]]
@@ -233,7 +233,7 @@ namespace eval test_utils {
             
             set responderThread [thread::create -joinable -preserved $thread_script]
             # return value of thread::send is the same as [catch]
-            if {[thread::send $responderThread [list responder::init $id $subject $queue] result] == 1} {
+            if {[thread::send $responderThread [list responder::init $id $subject $queue $servers] result] == 1} {
                 error "Failed to initialise responder $id: $result"
             }
             set log_msg "Responder $id listening on $subject"

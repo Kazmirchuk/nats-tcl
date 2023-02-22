@@ -68,7 +68,6 @@ test tls-3.1 "Connect to NATS without TLS" -constraints tls -setup {
     stopNats NATS
 }
 
-
 # This should be the last test case in the file!
 test tls-99 "Finalize the tests" -constraints tls -body {
     # because of the tls constraint, this cleanup can't be done in the global scope

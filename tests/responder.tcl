@@ -27,11 +27,16 @@ proc ::responder::echo {subj msg reply} {
     after $delay [list $responder::conn publish_msg $msg]
 }
 
-proc ::responder::init {id subj queue} {
+proc ::responder::init {id subj queue servers} {
     variable conn
     set conn [nats::connection new "responder $id"]
     # don't try to reconnect if the connection is lost
-    $conn configure -servers nats://localhost:4222 -max_reconnect_attempts 1 -connect_timeout 500 -dictmsg true
+    $conn configure -max_reconnect_attempts 1 -connect_timeout 500 -dictmsg true
+    if {$servers eq ""} {
+        $conn configure -servers nats://localhost:4222
+    } else {
+        $conn configure -servers $servers
+    }
     $conn connect
     if {$queue eq "" } {
         $conn subscribe $subj -callback responder::echo

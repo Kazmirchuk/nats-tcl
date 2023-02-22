@@ -8,7 +8,9 @@
 # - treating a received message as a dict
 # - the no-responders feature
 # - old-style requests with -max_msgs option
+# - cancelling async requests
 # - coroutine-aware sync request
+
 source test_utils.tcl
 
 startNats NATS

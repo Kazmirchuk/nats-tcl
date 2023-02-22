@@ -133,7 +133,7 @@ test server_pool-14.1 "Reconnecting timings and counters" -body {
     } elapsed
     assert {[approx $elapsed 3000 1000]} ;# should be equal to reconnect_time_wait
     # on Windows I get ErrConnectionTimeout, and on Linux I get ErrConnectionRefused
-    assert {$all_errors eq [list ErrBrokenSocket ErrConnectionTimeout ErrConnectionTimeout] || $all_errors eq [list ErrBrokenSocket ErrConnectionRefused ErrConnectionRefused] }
+    assert {$all_errors eq {ErrBrokenSocket ErrConnectionTimeout ErrConnectionTimeout} || $all_errors eq {ErrBrokenSocket ErrConnectionRefused ErrConnectionRefused}}
     foreach s [$conn all_servers] {
         if {[dict get $s port] == 4222} {
             assert {[dict get $s reconnects] == 0}
@@ -156,7 +156,7 @@ test server_pool-14.2 "Remove servers from the pool when they reach max_reconnec
     while {[set ${conn}::status] != $nats::status_connected} {
         wait_for ${conn}::status 5000
     }
-    # you should see "Removed N from the server pool" in the log...
+    # you should see "Removed N from the server pool" in the debug log...
     assert {[llength [$conn all_servers]] == 1} 1
 } -cleanup {
     $conn disconnect

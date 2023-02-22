@@ -91,8 +91,6 @@ test extra_opts-3 "PING/PONG protocol initiated by client" -body {
 
 stopNats NATS
 
-package require tcl::transform::core
-
 # replace/delete data passed through the channel using [string map]
 proc intercept {channel read_mapping write_mapping} {
     chan push $channel [interceptor new $read_mapping $write_mapping]
@@ -197,13 +195,13 @@ test extra_opts-7.1 "Error handling when connection is closed" -body {
 test extra_opts-7.2 "connect -async allows to PUB/SUB" -body {
     # PUB/SUB/UNSUB are buffered and flushed after a connection is established
     $conn connect -async
+    assert {[set ${conn}::status] == $nats::status_connecting}
     $conn subscribe subject1 -callback subCallback
     $conn publish subject1 "hello"
     wait_for ::inMsg 1000
 } -result "hello" -cleanup {
     $conn disconnect
 }
-
 
 $conn destroy
 stopNats NATS

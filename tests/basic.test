@@ -271,7 +271,7 @@ test basic-15 "Asynchronous request with multiple responders" -body {
         wait_for ::msg_count
     } elapsed
     assert {$elapsed < 300}
-    sleep 500 ;# ensure we receive the other 4 replies - you will see them in the debug log
+    sleep 500 ;# ensure we receive the other 4 replies
     set msg_count ;# check the lambda was called only once
 } -result 1
 
@@ -322,10 +322,12 @@ test basic-18 "Disconnection cancels pending async requests" -body {
     wait_flush $conn
     $conn disconnect
     sleep 1500  ;# more than -timeout
-    assert {$inMsg == -1} ;# asyncReqCallback was not invoked
-} -cleanup {
+    set inMsg ;# asyncReqCallback was not invoked
+} -result -1 -cleanup {
     $resp destroy
 }
+
+# see also cluster.test for more tests of how requests react to disconnections
 
 $conn destroy
 stopNats NATS

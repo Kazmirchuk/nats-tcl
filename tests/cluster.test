@@ -142,32 +142,25 @@ test cluster-4 "Requests can transfer from one server to another within a cluste
     $conn configure -servers [list nats://localhost:4222 nats://localhost:5222] -randomize false
     $conn connect
     set resp [responder new -subject cluster -servers nats://localhost:5222]
+    sleep 500 ;# give time for both servers to exchange the subscription interest graph, otherwise we may get no-responders to our request
 } -body {
     assert {[$conn current_server] eq {localhost 4222}} 1
-    set replyMsg ""
-
-    $conn request cluster "1500 hello" -timeout 3000 -callback [lambda {timedOut msg} {
-        if {$timedOut} {
-            set ::replyMsg "timeout"
-        } else {
-            set ::replyMsg $msg
-        }
-    }]
+    $conn request cluster "1500 hello" -timeout 3000 -callback asyncReqCallback
     $conn ping
-    stopNats NATS1
+    stopNats NATS1 ;# takes 500ms
     # $conn ping - involves vwait, so the whole failover process can succeed by the time we return from 'ping'
     $conn publish foo bar ;# find out about the failure
     while {[set ${conn}::status] != $nats::status_reconnecting} {
-        wait_for ${conn}::status 5000
+        wait_for ${conn}::status 2000
     }
     test_utils::log::info "The client is reconnecting..."
     duration {
-        wait_for ::replyMsg 5000
+        wait_for ::inMsg 2000
     } elapsed
-    assert {[approx $elapsed 1000 100]}
+    assert {$elapsed < 1200} ;# should be ~1000ms
     assert {[set ${conn}::status] == $nats::status_connected} 1
     assert {[$conn current_server] eq {localhost 5222}} 1
-    set replyMsg
+    set inMsg
 } -result "hello" -cleanup {
     $resp destroy
     $conn destroy

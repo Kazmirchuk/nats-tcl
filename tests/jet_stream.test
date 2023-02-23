@@ -22,6 +22,18 @@ logger::utils::applyAppender -appender fileAppend -service nats -appenderArgs {-
 ${natsLogger}::setlevel warn
 set conn [nats::connection new "JS" -logger $natsLogger] ;# -log_chan [tcltest::outputChannel] -log_level debug]
 
+# a test case with -output does not produce this output on the console, but sometimes it is useful for troubleshooting
+set do_test_stdout 1
+proc test_stdout {str} {
+    if {!$::do_test_stdout} {
+        return ""
+    }
+    if {$str eq ""} {
+        return [list -output ""]
+    }
+    return [list -output "*$str*" -match glob]
+}
+
 $conn configure -servers nats://localhost:4222 -dictmsg true
 $conn connect
 set jet_stream [$conn jet_stream -timeout 1000]
@@ -114,7 +126,7 @@ test jet_stream-2.4 "Pull a message and send in-progress" -body {
     llength [$jet_stream consume $stream_name $consumer_name]
 } -result 0 ;# NATS doesn't redeliver yet
 
-test jet_stream-2.5 "send nack with delay" -body {
+test jet_stream-2.5 "Send nack with delay" -body {
     $jet_stream nak $msg -delay 2000
     duration {
         set msg [lindex [$jet_stream consume $stream_name $consumer_name -batch_size 1 -expires 2100 -timeout 3000] 0]
@@ -124,7 +136,7 @@ test jet_stream-2.5 "send nack with delay" -body {
     dict get [$jet_stream metadata $msg] num_delivered
 } -result 2
 
-test jet_stream-2.6 "send term" -body {
+test jet_stream-2.6 "Send term" -body {
     assert {$term_msgs == 0}
     $jet_stream term $msg
     wait_for ::term_msgs
@@ -139,8 +151,8 @@ test jet_stream-3.1 "Fetch with no_wait - no messages" -setup {
         set msgList [$jet_stream consume $stream_name $consumer_name -batch_size 10]
     } elapsed
     assert {$elapsed < 100}
-    assert {[llength $msgList] == 0}
-} -output "*got status message 404*" -match glob
+    llength $msgList
+} -result 0 {*}[test_stdout "got status message 404"]
 
 test jet_stream-3.2 "Fetch with no_wait - get some messages" -setup {
     foreach msg { 1 2 3 } {
@@ -154,8 +166,8 @@ test jet_stream-3.2 "Fetch with no_wait - get some messages" -setup {
         $jet_stream ack_sync $msg
     }
     assert {$elapsed < 100}
-    assert {[llength $msgList] == 3}
-} -output "*got status message 408*" -match glob
+    llength $msgList
+} -result 3 {*}[test_stdout "got status message 408"]
 
 test jet_stream-3.3 "Fetch with no_wait - get all messages" -setup {
     foreach msg { 1 2 3 4 5 6 7 8 9 10 } {
@@ -170,7 +182,7 @@ test jet_stream-3.3 "Fetch with no_wait - get all messages" -setup {
     }
     assert {$elapsed < 100}
     llength $msgList
-} -result 10 -output "" -cleanup {
+} -result 10 {*}[test_stdout ""] -cleanup {
     ${natsLogger}::setlevel warn
 }
 
@@ -181,16 +193,16 @@ test jet_stream-4.1 "Fetch with expires - no messages" -setup {
         set msgList [$jet_stream consume $stream_name $consumer_name -batch_size 10 -timeout 1000 -expires 500]
     } elapsed
     assert {[approx $elapsed 500]}
-    assert {[llength $msgList] == 0}
-} -output "*got status message 408*" -match glob
+    llength $msgList
+} -result 0 {*}[test_stdout "got status message 408"]
 
 test jet_stream-4.2 "Fetch with expires - no messages - client-side timeout" -body {
     duration {
         catch {$jet_stream consume $stream_name $consumer_name -batch_size 10 -timeout 500 -expires 1000} err errOpts
     } elapsed
     assert {[approx $elapsed 500]}
-    assert {[dict get $errOpts -errorcode] eq {NATS ErrTimeout}}
-} -output ""
+    dict get $errOpts -errorcode
+} -result {NATS ErrTimeout} {*}[test_stdout "Pull request*timed out"]
 
 test jet_stream-4.3 "Fetch with expires - get some messages" -setup {
     foreach msg { 1 2 3 } {
@@ -205,8 +217,8 @@ test jet_stream-4.3 "Fetch with expires - get some messages" -setup {
         assert {[nats::msg subject $msg] eq "test.4"} 1
     }
     assert {[approx $elapsed 500]}
-    assert {[llength $msgList] == 3}
-} -output "*got status message 408*" -match glob
+    llength $msgList
+} -result 3 {*}[test_stdout "got status message 408"]
 
 test jet_stream-4.4 "Fetch with expires - get all messages" -setup {
     foreach msg { 1 2 3 4 5 6 7 8 9 10 } {
@@ -223,17 +235,20 @@ test jet_stream-4.4 "Fetch with expires - get all messages" -setup {
     }
     assert {$elapsed < 100}
     llength $msgList
-} -result 10 -output ""
+} -result 10 {*}[test_stdout ""] -cleanup {
+    ${natsLogger}::setlevel warn
+}
 
-# I skip tests for async fetch with no_wait
-test jet_stream-5.1 "Async fetch - no messages" -body {
+test jet_stream-5.1 "Async fetch - no messages - expire" -setup {
+    ${natsLogger}::setlevel debug
+} -body {
     duration {
         $jet_stream consume $stream_name $consumer_name -batch_size 10 -timeout 1000 -expires 500 -callback asyncReqCallback
         wait_for ::inMsg 1000
     } elapsed
     assert {[approx $elapsed 500]}
-    assert {$inMsg eq "timeout"}
-} -output "*got status message 408*" -match glob
+    set inMsg
+} -result timeout {*}[test_stdout "got status message 408"]
 
 test jet_stream-5.2 "Async fetch - no messages - client-side timeout" -body {
     duration {
@@ -241,8 +256,8 @@ test jet_stream-5.2 "Async fetch - no messages - client-side timeout" -body {
         wait_for ::inMsg 1000
     } elapsed
     assert {[approx $elapsed 500]}
-    assert {$inMsg eq "timeout"}
-} -output ""
+    set inMsg
+} -result timeout {*}[test_stdout "Pull request*timed out"]
 
 set autoAckCallback [lambda {js timedOut msg} {
     lappend ::gotMsgs [list $timedOut $msg]
@@ -251,15 +266,14 @@ set autoAckCallback [lambda {js timedOut msg} {
     }
 } $jet_stream]
 
-set gotMsgs [list]
-
-test jet_stream-5.3 "Async fetch - get some messages" -setup {
+test jet_stream-5.3 "Async fetch - get some messages then expire" -setup {
+    set gotMsgs [list]
     foreach msg { 1 2 3 } {
         $jet_stream publish test.5 $msg -stream MY_STREAM
     }
 } -body {
     duration {
-        # the callback will be invoked 3 times with a message and the 4th time with timedOut=1
+        # the callback will be invoked 3 times with a message and the 4th time with timedOut=1 and a status message 408
         $jet_stream consume $stream_name $consumer_name -batch_size 10 -timeout 1000 -expires 500 -callback $autoAckCallback
         # note that while+wait_for each individual message is unreliable,
         # because the callback may be invoked many times before wait_for returns, so we would miss some messages
@@ -276,9 +290,35 @@ test jet_stream-5.3 "Async fetch - get some messages" -setup {
     }
     lassign [lindex $gotMsgs 3] timedOut msg
     assert {$timedOut}
-} -output "*got status message 408*" -match glob
+    nats::header lookup $msg Status ""
+} -result 408 {*}[test_stdout "got status message 408"]
 
-test jet_stream-5.4 "Async fetch - get all messages" -setup {
+test jet_stream-5.4 "Async fetch - get some messages then timeout" -setup {
+    set gotMsgs [list]
+    foreach msg { 1 2 3 } {
+        $jet_stream publish test.5 $msg -stream MY_STREAM
+    }
+} -body {
+    duration {
+        # the callback will be invoked 3 times with a message and the 4th time with timedOut=1
+        $jet_stream consume $stream_name $consumer_name -batch_size 10 -timeout 500 -expires 1000 -callback $autoAckCallback
+        while {[llength $gotMsgs] < 4} {
+            wait_for ::gotMsgs 1000
+        }
+    } elapsed
+    assert {[approx $elapsed 500]}
+    assert {[llength $gotMsgs] == 4} 1
+    for {set i 0} {$i < 3} {incr i} {
+        lassign [lindex $gotMsgs $i] timedOut msg
+        assert {[nats::msg subject $msg] eq "test.5"} 1
+        assert {!$timedOut}
+    }
+    lassign [lindex $gotMsgs 3] timedOut msg
+    assert {$timedOut}
+    set msg
+} -result "" {*}[test_stdout "Pull request*timed out"]
+                
+test jet_stream-5.5 "Async fetch - get all messages" -setup {
     set gotMsgs [list]
     foreach msg { 1 2 3 4 5 6 7 8 9 10 } {
         $jet_stream publish test.5 $msg -stream MY_STREAM
@@ -291,16 +331,45 @@ test jet_stream-5.4 "Async fetch - get all messages" -setup {
         }
     } elapsed
     assert {$elapsed < 500}
-    assert {[llength $gotMsgs] == 10} 1
     foreach elem $gotMsgs {
         lassign $elem timedOut msg
         assert {!$timedOut}
         assert {[nats::msg subject $msg] eq "test.5"}
     }
-    array size ${jet_stream}::pull_reqs
-} -result 0 -output "" -cleanup {
+    llength $gotMsgs
+} -result 10 {*}[test_stdout ""] -cleanup {
     ${natsLogger}::setlevel warn
 }
+
+test jet_stream-6 "Async fetch with no_wait - no messages" -setup {
+    ${natsLogger}::setlevel debug
+    set gotMsgs [list]
+} -body {
+    duration {
+        $jet_stream consume $stream_name $consumer_name -batch_size 10 -callback $autoAckCallback
+        wait_for ::gotMsgs
+    } elapsed
+    assert {$elapsed < 100}
+    lassign [lindex $gotMsgs 0] timedOut msg
+    assert {$timedOut}
+    nats::header lookup $msg Status ""
+} -result 404 {*}[test_stdout "got status message 404"] -cleanup {
+    ${natsLogger}::setlevel warn
+}
+
+test jet_stream-7 "Cancel a pull request" -setup {
+    set gotMsgs [list]
+} -body {
+    set reqID [$jet_stream consume $stream_name $consumer_name -batch_size 10 -callback $autoAckCallback -timeout 1000]
+    sleep 500
+    $jet_stream cancel_pull_request $reqID
+    sleep 1000
+    llength $gotMsgs
+} -result 0
+
+test jet_stream-8 "Check there are no pending pull requests left" -body {
+    array size ${jet_stream}::pull_reqs
+} -result 0
 
 $jet_stream delete_stream $stream_name
 $jet_stream destroy

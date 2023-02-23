@@ -80,6 +80,9 @@ oo::class create ::nats::jet_stream {
                 set expires [expr {$timeout >= 20 ? $timeout - 10 : $timeout}] ;# same as in nats.go
             }
         } else {
+            if {[info exists expires]} {
+                throw {NATS ErrInvalidArg} "-expires requires -timeout"
+            }
             set no_wait true
             set timeout $_timeout
         }
@@ -115,7 +118,6 @@ oo::class create ::nats::jet_stream {
         while {1} {
             nats::_coroVwait [self object]::pull_reqs($reqID)
             set sync_pull $pull_reqs($reqID)
-            #puts "sync_pull: $sync_pull"
             set inMsgs [dict lookup $sync_pull inMsgs]
             set msgCount [llength $inMsgs]
             switch -- [dict lookup $sync_pull timedOut -1] {
@@ -147,7 +149,6 @@ oo::class create ::nats::jet_stream {
     }
     
     method ConsumeCb {reqID timedOut msg} {
-        #puts "ConsumeCb $reqID $timedOut $msg"
         if {![info exists pull_reqs($reqID)]} {
             return ;# pull request was cancelled after the callback has been already scheduled
         }
@@ -158,7 +159,8 @@ oo::class create ::nats::jet_stream {
             set batch [dict get $pull_reqs($reqID) batch]
         }
         if {$timedOut} {
-            # probably wrong stream/consumer - we get here only if no messages have been received at all
+            # client-side timeout or connection lost; we may have received some messages before
+            [info object namespace $conn]::log::debug "Pull request $reqID timed out"
             if {$userCb eq ""} {
                 dict set pull_reqs($reqID) timedOut 1
             } else {
@@ -197,7 +199,7 @@ oo::class create ::nats::jet_stream {
             }
         }
     }
-    #TODO document?
+    
     method cancel_pull_request {reqID} {
         unset pull_reqs($reqID)
         $conn cancel_request $reqID

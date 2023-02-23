@@ -13,6 +13,7 @@ JetStream functionality of NATS can be accessed by creating the `nats::jet_strea
 [*js* in_progress *message*](#js-in_progress-message)<br/>
 [*js* term *message*](#js-term-message)<br/>
 [*js* metadata *message*](#js-metadata-message)<br/>
+[*js* cancel_pull_request *reqID*](#js-cancel_pull_request-reqID)<br/>
 
 [*js* add_stream *stream* ?-option *value*?..](#js-add_stream-stream--option-value)<br/>
 [*js* add_stream_from_json *json_config*](#js-add_stream_from_json-json_config)<br/>
@@ -138,12 +139,12 @@ If `-timeout` is given, it defines both the client-side and server-side timeouts
 
 If a callback is not given, the request is synchronous and blocks in a (coroutine-aware) `vwait` until all expected messages are received or the pull request expires. If the client-side timeout fires before the server-side timeout, and no messages have been received, the method raises `ErrTimeout`. In all other cases the method returns a list with as many messages as currently avaiable, but not more than `batch_size`.
 
-If a callback is given, the call returns immediately. When a message is pulled or a timeout fires, the callback will be invoked from the event loop. It must have the following signature:<br/>
+If a callback is given, the call returns immediately. Return value is a unique ID that can be used to cancel the pull request. When a message is pulled or a timeout fires, the callback will be invoked from the event loop. It must have the following signature:<br/>
 **asyncRequestCallback** *timedOut message*
 
 If less than `batch_size` messages are pulled before the pull request times out, the callback is invoked one last time with `timedOut=1`.
 
-The client handles status messages 404, 408 and 409 transparently. You can see them in the debug log, if needed.
+The client handles status messages 404, 408 and 409 transparently. You can see them in the debug log, if needed. Also, they are passed to `asyncRequestCallback`, in case you need to distinguish between a client-side and server-side timeout.
 
 Depending on the consumer's [AckPolicy](https://docs.nats.io/nats-concepts/jetstream/consumers#ackpolicy), you might need to acknowledge the received messages with one of the methods below. [This](https://docs.nats.io/using-nats/developer/develop_jetstream/consumers#delivery-reliability) official doc explains all different kinds of ACKs.
 
@@ -159,6 +160,8 @@ Sends "work in progress" ACK to NATS and resets the redelivery timer on the serv
 Sends "terminate" ACK to NATS. The message will not be redelivered.
 ### js metadata *message*
 Returns a dict with metadata of the message. It is extracted from the reply-to field.
+### js cancel_pull_request *reqID*
+Cancels the asynchronous pull request with the given `reqID`.
 ### js add_stream *stream* ?-option *value*?..
 Create or update a `stream` with configuration specified as option-value pairs. See the [official docs](https://docs.nats.io/nats-concepts/jetstream/streams#configuration) for explanation of these options.
 | Option        | Type   | Default |

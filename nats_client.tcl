@@ -78,9 +78,9 @@ oo::class create ::nats::connection {
         array set counters {subscription 0 request 0 pendingPings 0}
         array set subscriptions {} ;# subID -> dict (subj, queue, callback, maxMsgs: int, recMsgs: int, isDictMsg: bool, post: bool)
         array set requests {} ;# reqID -> dict; keys in the dict depend:
-        # new-style sync requests: timedOut: bool, response: dictMsg
+        # new-style sync requests: timer, timedOut: bool, response: dictMsg
         # new-style async requests: timer, callback, isDictMsg: bool
-        # old-style sync requests: timedOut: bool, inMsgs: list
+        # old-style sync requests: timer, timedOut: bool, inMsgs: list
         # old-style async requests: timer, callback, subID
         array set serverInfo {} ;# INFO from a current NATS server
         # all outgoing messages are put in this list before being flushed to the socket,
@@ -442,8 +442,12 @@ oo::class create ::nats::connection {
         if {$timeout != 0} {
             set timerID [after $timeout [list dict set [self object]::requests($reqID) timedOut 1]]
         }
-        set requests($reqID) [dict create] ;# NewStyleRequestCb will check if it exists
+        # if connection is lost, we need to cancel this timer, see also CoroMain
+        set requests($reqID) [dict create timer $timerID]
         nats::_coroVwait [self object]::requests($reqID)
+        if {![info exists requests($reqID)]} {
+            throw {NATS ErrTimeout} "Connection lost"
+        }
         set sync_req $requests($reqID)
         unset requests($reqID)
         if {[dict lookup $sync_req timedOut 0]} {
@@ -481,9 +485,12 @@ oo::class create ::nats::connection {
         if {$timeout != 0} {
             set timerID [after $timeout [list dict set [self object]::requests($reqID) timedOut 1]]
         }
-        set requests($reqID) "" ;# OldStyleRequestCb will check if it exists
+        set requests($reqID) [dict create timer $timerID]
         while {1} {
             nats::_coroVwait [self object]::requests($reqID)
+            if {![info exists requests($reqID)]} {
+                throw {NATS ErrTimeout} "Connection lost"
+            }
             set sync_req $requests($reqID)
             if {[dict lookup $sync_req timedOut 0]} {
                 break
@@ -1034,13 +1041,17 @@ oo::class create ::nats::connection {
         } trap {NATS ErrNoServers} {msg opts} {
             # don't overwrite the real last_error; need to log this in case of "connect -async"
             log::error $msg
-            # mark all pending async requests as timed out
+            # mark all pending requests as timed out
             foreach reqID [array names requests] {
+                log::debug "Force timeout of request $reqID"
+                after cancel [dict lookup $requests($reqID) timer]
                 set callback [dict lookup $requests($reqID) callback]
-                if {$callback ne ""} {
-                    log::debug "Force timeout of request $reqID"
+                if {$callback eq ""} {
+                    # leave vwait in all sync requests
+                    set requests($reqID) 1 ;# strangely, without this line vwait's don't return
+                    unset requests($reqID)
+                } else {
                     after 0 [list {*}$callback 1 ""]
-                    after cancel [dict get $requests($reqID) timer]
                 }
             }
         } trap {} {msg opts} {

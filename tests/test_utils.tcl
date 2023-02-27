@@ -187,7 +187,7 @@ namespace eval test_utils {
             exec kill $natsPid($id)
         }
         unset natsPid($id)
-        after 500
+        after 500 ;# deliberately don't process events
         log::info "Stopped $id"
     }
     # suitable only for tests that start only one NATS instance

@@ -73,6 +73,7 @@ $conn subscribe delivery_subj -callback [list pushed_msgs $js] -dictmsg true
 proc pushed_msgs {js subject msg reply} {
     if {[nats::header lookup $msg Status 0] == 100} {
         # idle heartbeats don't need ack
+        # see also https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-9.md
         return
     }
     puts "Got [nats::msg data $msg]" ;# confirmed message 2

@@ -163,7 +163,7 @@ If a callback is given, the call returns immediately. Return value is a unique r
 `timedOut` is `true`, if the request timed out or no responders are available. In the latter case, the no-responders message is passed to the callback in `reply`.<br/>
 `reply` is the received message. If `-max_msgs`>1, the callback is invoked for each message. If the timeout fires before `-max_msgs` are received, the callback is invoked one last time with `timedOut=true`.
 
-If `disconnect` is called, all pending asynchronous requests are cancelled. In contrast, if the connection is lost, and the client transitions to `$nats::status_closed`, all pending asynchronous requests are invoked with `timedOut=true`.
+If `disconnect` is called, all pending requests are cancelled. In contrast, if the connection is lost, and the client transitions to `$nats::status_closed`, all pending requests are marked as timed out without waiting for the actual timer to fire.
 
 ### objectName request_msg *msg* ?-timeout *ms*? ?-callback *cmdPrefix*? ?-dictmsg *dictmsg*?
 Sends a request with a message created using [nats::msg](#natsmsg). The rest of arguments work the same as in `request`.

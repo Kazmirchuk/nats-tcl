@@ -33,8 +33,8 @@ test cluster-1.1 "Dynamic expansion of the server pool with INFO message" -setup
     assert {[llength [$conn all_servers]] == 1}
     # add another server to the cluster
     startClusterNats2
-    # wait for the INFO message with connect_urls
     while {[llength [$conn all_servers]] != 2} {
+        test_utils::log::info "Wait for the INFO message with connect_urls..."
         vwait ${conn}::serverInfo ;# can't use wait_for with arrays
     }
     # make sure that one of connect_urls was filtered out as a duplicate
@@ -115,13 +115,16 @@ test cluster-2 "Outgoing messages are buffered while reconnecting" -body {
     $conn disconnect
 }
 
-test cluster-3 "Requests time out if connection is lost" -setup {
+test cluster-3.1 "Requests time out if connection is lost - async" -setup {
     set resp [responder new]
     $conn configure -max_reconnect_attempts 1 -connect_timeout 500 -reconnect_time_wait 0
     $conn connect
 } -body {
     # note that timeouts do not happen, if the user calls 'disconnect', see test basic-18
-    $conn request service "500 lost message" -callback asyncReqCallback -timeout 2000
+    set now [clock milliseconds]
+    $conn request service "500 lost message" -timeout 2000 -callback [lambda {timedOut msg} {
+        set ::cbResult [list $timedOut $msg [clock milliseconds]]
+    }]
     $conn ping
     stopNats NATS1
     # the client tries to connect to NATS once more and times out after 500ms; after that the server is removed from the pool
@@ -130,10 +133,37 @@ test cluster-3 "Requests time out if connection is lost" -setup {
     } elapsed
     assert {$elapsed < 900}
     assert {[set ${conn}::status] == $nats::status_closed} 1
-    set inMsg
-} -result timeout -cleanup {
+    lassign $cbResult timedOut msg timestamp
+    assert {$timedOut}
+    set timeDiff [expr {$timestamp - $now}]
+    assert {[approx $timeDiff 1000]} 1 ;# stopNats=500ms + connect_timeout=500ms
+    set msg
+} -result "" -cleanup {
     $resp destroy
-    $conn reset -max_reconnect_attempts -connect_timeout -reconnect_time_wait -servers
+    $conn disconnect
+}
+
+test cluster-3.2 "Requests time out if connection is lost - sync" -setup {
+    startNats NATS1
+    set resp [responder new]
+    # the server pool is empty after the prev. test case, so populate it again
+    $conn configure -servers nats://localhost:4222
+    $conn connect
+} -body {
+    coroutine sync_request {*}[lambda {} {
+        catch {[$::conn request service "500 lost message" -timeout 2000]} err errOpts
+        set ::request_done $errOpts
+    }]
+    stopNats NATS1
+    duration {
+        wait_for ::request_done 5000
+    } elapsed
+    assert {[approx $elapsed 500]} ;# connect_timeout=500ms
+    assert {[set ${conn}::status] == $nats::status_closed} 1
+    dict get $request_done -errorcode
+} -result {NATS ErrTimeout} -cleanup {
+    $resp destroy
+    $conn disconnect
 }
 
 test cluster-4 "Requests can transfer from one server to another within a cluster" -setup {
@@ -142,9 +172,19 @@ test cluster-4 "Requests can transfer from one server to another within a cluste
     $conn configure -servers [list nats://localhost:4222 nats://localhost:5222] -randomize false
     $conn connect
     set resp [responder new -subject cluster -servers nats://localhost:5222]
-    sleep 500 ;# give time for both servers to exchange the subscription interest graph, otherwise we may get no-responders to our request
 } -body {
     assert {[$conn current_server] eq {localhost 4222}} 1
+    while {1} {
+        try {
+            # give time for both servers to exchange the subscription interest graph, otherwise we may get no-responders to our request
+            sleep 500
+            set reply [$conn request cluster "0 ready?"]
+            assert {$reply eq "ready?"}
+            break
+        } trap {NATS ErrNoResponders} err {
+            test_utils::log::info "Waiting for the responder..."
+        }
+    }
     $conn request cluster "1500 hello" -timeout 3000 -callback asyncReqCallback
     $conn ping
     stopNats NATS1 ;# takes 500ms

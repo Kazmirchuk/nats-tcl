@@ -6,6 +6,11 @@
 # Test summary:
 # - connect to NATS with TLS
 # - provide a client TLS certificate
+
+# useful links about TclTLS:
+# https://core.tcl-lang.org/tcltls/wiki/Documentation
+# https://www.magicsplat.com/blog/tcltls/
+
 source test_utils.tcl
 
 set tls_failed [catch {package require tls}]

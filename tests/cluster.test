@@ -127,7 +127,10 @@ test cluster-3.1 "Requests time out if connection is lost - async" -setup {
     }]
     $conn ping
     stopNats NATS1
-    # the client tries to connect to NATS once more and times out after 500ms; after that the server is removed from the pool
+    # the client tries to connect to NATS once more and times out:
+    # - on Windows: after connect_timeout=500ms
+    # - on Linux: connection is rejected immediately
+    # after that the server is removed from the pool
     duration {
         catch {$conn ping -timeout 800} err errOpts
     } elapsed
@@ -135,8 +138,7 @@ test cluster-3.1 "Requests time out if connection is lost - async" -setup {
     assert {[set ${conn}::status] == $nats::status_closed} 1
     lassign $cbResult timedOut msg timestamp
     assert {$timedOut}
-    set timeDiff [expr {$timestamp - $now}]
-    assert {[approx $timeDiff 1000]} 1 ;# stopNats=500ms + connect_timeout=500ms
+    assert {$timestamp - $now < 1100} ;# stopNats=500ms + connect_timeout=500ms
     set msg
 } -result "" -cleanup {
     $resp destroy
@@ -158,7 +160,7 @@ test cluster-3.2 "Requests time out if connection is lost - sync" -setup {
     duration {
         wait_for ::request_done 5000
     } elapsed
-    assert {[approx $elapsed 500]} ;# connect_timeout=500ms
+    assert {$elapsed < 600} ;# connect_timeout=500ms
     assert {[set ${conn}::status] == $nats::status_closed} 1
     dict get $request_done -errorcode
 } -result {NATS ErrTimeout} -cleanup {

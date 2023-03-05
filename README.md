@@ -16,7 +16,7 @@ The package is written in pure Tcl, without any C code, and so will work anywher
 
 ## Installing
 The package is available in two forms:
-- as a classic Tcl package using pkgIndex.tcl. Download/clone the repository to one of places listed in your `$auto_path`. Or you can extend `$auto_path` with a new folder, e.g.:
+1. As a classic Tcl package using `pkgIndex.tcl`. Download/clone the repository to one of places listed in your `$auto_path`. Or you can extend `$auto_path` with a new folder, e.g.:
 ```Tcl
 lappend auto_path <path>
 ```
@@ -24,7 +24,7 @@ or using an environment variable:
 ```bash
 export TCLLIBPATH=<path>
 ```
-- as a Tcl module, where all implementation is put into a single *.tm file. This improves package loading time. Note that Tcl modules are loaded from different locations than `$auto_path`. You can check them with the following command:
+2. As a Tcl module, where all implementation is put into a single *.tm file. This improves package loading time. Note that Tcl modules are loaded from different locations than `$auto_path`. You can check them with the following command:
 ```Tcl
 tcl::tm::path list
 ```
@@ -39,12 +39,12 @@ package require nats
 ```
 If you are using a "batteries-included" Tcl distribution, like [Magicsplat](https://www.magicsplat.com/tcl-installer/index.html) or [AndroWish](https://www.androwish.org/home/wiki?name=Batteries+Included), you might already have the package.
 ## Supported features
-- Publish and subscribe to messages, also with headers (NATS version 2.2+)
+- Publish and receive messages, also with headers (NATS version 2.2+)
 - Synchronous and asynchronous requests (optimized: under the hood a single wildcard subscription is used for all requests)
 - Queue groups
 - Gather multiple responses to a request
 - Publishing and consuming messages from JetStream, providing "at least once" or "exactly once" delivery guarantees
-- JetStream management of streams and consumers
+- Management of JetStream streams and consumers
 - Standard `configure` method with many options
 - Protected connections using TLS
 - Automatic reconnection in case of network or server failure
@@ -59,5 +59,5 @@ If you are using a "batteries-included" Tcl distribution, like [Magicsplat](http
 Look into the [examples](examples) folder.
 
 ## Missing features (in comparison to official NATS clients)
-- The new authentication mechanism using NKey & [JWT](https://docs.nats.io/developing-with-nats/security/creds). This one will be difficult to do, because it requires support for _ed25519_ cryptography that is missing in Tcl AFAIK. Please let me know if you need it.
+- The new authentication mechanism using NKey & JWT.
 - WebSocket is not supported. The only available transport is TCP.

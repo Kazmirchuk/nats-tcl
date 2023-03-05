@@ -12,8 +12,10 @@ package require nats
 set conn [nats::connection new "MyNats"]
 
 # as a minimum configuration, you need to specify the URL of your NATS server. Here we assume it runs on the same host and on the default port TCP/4222
-# if NATS is configured with TLS, use tls:// instead of nats://
-# if you need to authenticate with NATS, you can provide a username and password in the URL or using 'configure'
+# if NATS is configured with TLS, you can use either `tls://` or `nats://`.
+# In the former case, the TLS connection is mandatory, i.e. a client will reject a NATS server that doesn't have TLS configured.
+
+# If you need to authenticate with NATS, you can provide a username and password in the URL or using 'configure'
 # in the latter case, the credentials will apply to all servers in the pool that don't have them in URL
 $conn configure -servers nats://localhost:4222
 

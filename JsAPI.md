@@ -1,6 +1,6 @@
 # JetStream API
 
-JetStream functionality of NATS can be accessed by creating the `nats::jet_stream` TclOO object. Do not create it directly - instead, call the [jet_stream](CoreAPI.md#objectname-jet_stream--timeout-ms--domain-domain) method of your `nats::connection`. You can have multiple jet_stream objects created from the same connection, each having its own timeout and domain.
+JetStream functionality of NATS can be accessed by creating the `nats::jet_stream` TclOO object. Do not create it directly - instead, call the [jet_stream](CoreAPI.md#objectname-jet_stream--timeout-ms--domain-domain) method of your `nats::connection`. You can have multiple JS objects created from the same connection, each having its own timeout and domain.
 
 ## Synopsis
 
@@ -64,7 +64,7 @@ Note that API of official NATS clients (`JetStreamContext`) is designed in a way
 
 Also, official NATS clients often provide an auto-acknowledgment option (and sometimes even default to it!) - I find it potentially harmful, so it's missing from this client. Always remember to acknoledge JetStream messages according to your policy.
 
-The Tcl client does not provide a dedicated method to subscribe to push consumers. The core NATS subscription is perfectly adequate for the task. If your push consumer is configured with idle heartbeats, you will need to filter them out based on the status header = 100. You can find an example of such subscription in [js_msg.tcl](examples/js_msg.tcl)
+The Tcl client does not provide a dedicated method to subscribe to push consumers. The core NATS subscription is perfectly adequate for the task. If your push consumer is configured with idle heartbeats, you will need to filter them out based on the status header = 100. You can find an example of such subscription in [js_msg.tcl](examples/js_msg.tcl).
 
 ## JetStream wire format
 The JetStream wire format uses nanoseconds for timestamps and durations in all requests and replies. To be consistent with the rest of the Tcl API, the client converts them to milliseconds before returning to a user. And vice versa: all function arguments are accepted as ms and converted to ns before sending.
@@ -118,7 +118,7 @@ Note that you can publish messages to a stream using [nats::connection publish](
 ### js publish_msg *message ?args?*
 Publishes `message` (created with [nats::msg create](CoreAPI.md#msg-create-subject--data-payload--reply-replysubj)) to a stream. Other options are the same as above. Use this method to publish a message with headers.
 ### js consume *stream consumer ?args?*
-Consumes a number of messages from a [pull consumer](https://docs.nats.io/jetstream/concepts/consumers) defined on a [stream](https://docs.nats.io/jetstream/concepts/streams). This is the analogue of PullSubscribe + [fetch](https://pkg.go.dev/github.com/nats-io/nats.go#Subscription.Fetch) in official NATS clients.
+Consumes a number of messages from a [pull consumer](https://docs.nats.io/jetstream/concepts/consumers) defined on a [stream](https://docs.nats.io/jetstream/concepts/streams). This is the analogue of `PullSubscribe` + `fetch` in official NATS clients.
 
 You can provide the following options:
 - `-batch_size int` - number of messages to consume. Default batch is 1.
@@ -133,18 +133,19 @@ If `-timeout` is omitted, the client sends a `no_wait` request, asking NATS to d
 
 If `-timeout` is given, it defines both the client-side and server-side timeouts for the pull request:
 - the client-side timeout is the timeout for the underlying `request`
-- the server-side timeout is 10ms shorter than `timeout`, and it is sent in the `expires` JSON field. This behaviour is consistent with nats.go
+- the server-side timeout is 10ms shorter than `timeout`, and it is sent in the `expires` JSON field. This behaviour is consistent with `nats.go`.
 
 *Note:* you can specify the `-expires` option explicitly (ms), but this is an advanced use case and normally should not be needed.
 
 If a callback is not given, the request is synchronous and blocks in a (coroutine-aware) `vwait` until all expected messages are received or the pull request expires. If the client-side timeout fires before the server-side timeout, and no messages have been received, the method raises `ErrTimeout`. In all other cases the method returns a list with as many messages as currently avaiable, but not more than `batch_size`.
 
-If a callback is given, the call returns immediately. Return value is a unique ID that can be used to cancel the pull request. When a message is pulled or a timeout fires, the callback will be invoked from the event loop. It must have the following signature:<br/>
-**asyncRequestCallback** *timedOut message*
+If a callback is given, the call returns immediately. Return value is a unique ID that can be used to cancel the pull request. When a message is pulled or a timeout fires, the callback will be invoked from the event loop. It must have the following signature:
+
+**cmdPrefix** *timedOut message*
 
 If less than `batch_size` messages are pulled before the pull request times out, the callback is invoked one last time with `timedOut=1`.
 
-The client handles status messages 404, 408 and 409 transparently. You can see them in the debug log, if needed. Also, they are passed to `asyncRequestCallback`, in case you need to distinguish between a client-side and server-side timeout.
+The client handles status messages 404, 408 and 409 transparently. You can see them in the debug log, if needed. Also, they are passed to the callback, in case you need to distinguish between a client-side and server-side timeout.
 
 Depending on the consumer's [AckPolicy](https://docs.nats.io/nats-concepts/jetstream/consumers#ackpolicy), you might need to acknowledge the received messages with one of the methods below. [This](https://docs.nats.io/using-nats/developer/develop_jetstream/consumers#delivery-reliability) official doc explains all different kinds of ACKs.
 
@@ -167,7 +168,7 @@ Create or update a `stream` with configuration specified as option-value pairs. 
 | Option        | Type   | Default |
 | ------------- |--------|---------|
 | -description  | string |         |
-| -subjects     | list of strings  | required|
+| -subjects     | list of strings  | (required)|
 | -retention    | one of: limits, interest,<br/> workqueue |limits |
 | -max_consumers  | int |         |
 | -max_msgs  | int |         |
@@ -206,14 +207,14 @@ Create or update a pull or push consumer defined on `stream`. See the [official 
 | -name | string | |
 | -durable_name | string | |
 | -description | string | |
-| -deliver_policy | one of: all last new by_start_sequence<br/> by_start_time last_per_subject | all|
+| -deliver_policy | one of: all, last, new, by_start_sequence<br/> by_start_time last_per_subject | all|
 | -opt_start_seq | int | |
 | -opt_start_time | string | |
-| -ack_policy |one of: none all explicit | explicit |
+| -ack_policy |one of: none, all, explicit, | explicit |
 | -ack_wait | ms | |
 | -max_deliver | int | |
 | -filter_subject | string | |
-| -replay_policy | one of: instant original | instant|
+| -replay_policy | one of: instant, original | instant|
 | -rate_limit_bps | int | |
 | -sample_freq | string | |
 | -max_waiting | int | |

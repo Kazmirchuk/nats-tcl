@@ -35,7 +35,7 @@ set ::nats::_option_spec {
     randomize bool true
     connect_timeout timeout 2000
     reconnect_time_wait timeout 2000
-    max_reconnect_attempts pos_int 60
+    max_reconnect_attempts int 60
     ping_interval timeout 120000
     max_outstanding_pings pos_int 2
     echo bool true
@@ -190,6 +190,7 @@ oo::class create ::nats::connection {
     }
     
     method current_server {} {
+        my CheckConnection
         return [lrange [$serverPool current_server] 0 1]  ;# drop the last element - schema (nats/tls)
     }
     
@@ -734,9 +735,9 @@ oo::class create ::nats::connection {
                 }
                 chan event $sock writable [list $coro connected]
                 return
-            } on error {msg opt} {
+            } on error err {
                 $serverPool current_server_connected false
-                my AsyncError ErrConnectionRefused "Failed to connect to $host:$port: $msg"
+                my AsyncError ErrConnectionRefused "Failed to connect to $host:$port: $err"
             }
         }
     }
@@ -750,7 +751,7 @@ oo::class create ::nats::connection {
                                     tls_required $tls_done \
                                     name [json::write::string $config(name)] \
                                     lang [json::write::string Tcl] \
-                                    version [json::write::string 1.0] \
+                                    version [json::write::string 2.0] \
                                     protocol 1 \
                                     echo $config(echo)]
             
@@ -833,11 +834,11 @@ oo::class create ::nats::connection {
             # there's no need to check for tls_verify in INFO
             # a user needs to provide -certfile and -keyfile options to tls::import anyway
             # and if they are not needed, NATS server will ignore them
-            
             # for simplicity, let's switch to the blocking mode just for the handshake
             chan configure $sock -blocking 1
             try {
-                tls::import $sock -require 1 -command ::nats::tls_callback {*}$config(tls_opts)
+                log::debug "Performing TLS handshake..."
+                tls::import $sock {*}[dict merge {-require 1 -command ::nats::tls_callback} $config(tls_opts)]
                 tls::handshake $sock
                 set tls_done true
             } on error err {
@@ -1215,7 +1216,6 @@ oo::class create ::nats::connection {
 
 # by default, when a handshake fails, the TLS library reports it to stderr AND raises an error - see tls.c, function Tls_Error
 # so I end up with the same message logged twice. Let's suppress stderr altogether
-# keep this proc "public" in case a user needs to override it
 proc ::nats::tls_callback {args} { }
 
 namespace eval ::nats::msg {

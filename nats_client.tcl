@@ -754,7 +754,7 @@ oo::class create ::nats::connection {
                                     tls_required $tls_done \
                                     name [json::write::string $config(name)] \
                                     lang [json::write::string Tcl] \
-                                    version [json::write::string 2.0] \
+                                    version [json::write::string 2.0.1] \
                                     protocol 1 \
                                     echo $config(echo)]
             

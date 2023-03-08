@@ -665,8 +665,11 @@ oo::class create ::nats::connection {
             }
             set outBuffer [list]
         }
-        # if the socket gets broken while flushing, "close" might throw
-        catch {close $sock} ;# all buffered input is discarded, all buffered output is flushed
+        try {
+            close $sock ;# all buffered input is discarded, all buffered output is flushed
+        } on error err {
+            log::error "Failed to close the socket: $err"
+        }
         set sock ""
         after cancel $timers(ping)
         after cancel $timers(flush)
@@ -1115,6 +1118,9 @@ oo::class create ::nats::connection {
                     my AsyncError ErrBrokenSocket "Server $host:$port [lindex [dict get $errOpts -errorcode] end]" 1
                     return
                 }
+                # Tcl documentation for non-blocking gets is very misleading
+                # checking for $readCount <= 0 is NOT enough to ensure that I never get an incomplete line
+                # so checking for EOF must PRECEDE checking for $readCount
                 if {[eof $sock]} {
                     #set err [chan configure $sock -error] - no point in this, $err will be blank
                     lassign [my current_server] host port

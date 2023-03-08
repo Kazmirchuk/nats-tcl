@@ -1115,13 +1115,13 @@ oo::class create ::nats::connection {
                     my AsyncError ErrBrokenSocket "Server $host:$port [lindex [dict get $errOpts -errorcode] end]" 1
                     return
                 }
+                if {[eof $sock]} {
+                    #set err [chan configure $sock -error] - no point in this, $err will be blank
+                    lassign [my current_server] host port
+                    my AsyncError ErrBrokenSocket "Server $host:$port closed the connection" 1
+                    return
+                }
                 if {$readCount <= 0} {
-                    if {[eof $sock]} { 
-                        #set err [chan configure $sock -error] - no point in this, $err will be blank
-                        lassign [my current_server] host port
-                        my AsyncError ErrBrokenSocket "Server $host:$port closed the connection" 1
-                        return
-                    }
                     if {[chan pending input $sock] > 1024} {
                         # do not let the buffer grow forever if \r\n never arrives
                         # max length of control line in the NATS protocol is 1024 (see MAX_CONTROL_LINE_SIZE in nats.py)

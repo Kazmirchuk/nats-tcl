@@ -1346,6 +1346,18 @@ proc ::nats::timestamp {} {
                 [expr {$t % 1000}] ]
 }
 
+# 2023-05-30T07:06:22.864305Z to milliseconds
+proc ::nats::time_to_millis {time} {
+  set seconds 0
+  if {[regexp -all {^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2}).(\d+)Z$} $time -> year month day hour minute second micro]} {
+    scan [string range $micro 0 2] %d millis ;# could be "081" that would be treated as octal number
+    set seconds [clock scan "${year}-${month}-${day} ${hour}:${minute}:${second}" -format "%Y-%m-%d %T" -gmt 1]
+    return  [expr {$seconds *  1000 + $millis}]
+  }
+
+  throw {NATS InvalidTime} "Invalid time format ${time}"
+}
+
 # ------------------------ all following procs are private! --------------------------------------
 proc ::nats::_coroVwait {var} {
     if {[info coroutine] eq ""} {

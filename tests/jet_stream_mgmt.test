@@ -231,6 +231,24 @@ test js_mgmt-11.1 "Delete a message directly from a stream" -body {
     $js stream_msg_delete MY_STREAM -seq [nats::msg seq $msg]  ;# if not found, this will throw ErrJSResponse 400
 } -result true
 
+test js_mgmt-12.1 "Create stream that mirrors another one" -body {
+    set response [$js add_stream MY_STREAM_MIRROR -mirror [dict create name MY_STREAM]]
+    assert {[dict get $response did_create]}
+    set actual_config [dict get $response config]
+    assert {[dict get $actual_config mirror] == [dict create name MY_STREAM]}
+} -cleanup {
+    $js delete_stream MY_STREAM_MIRROR
+}
+
+test js_mgmt-12.2 "Create stream that sources another one" -body {
+    set response [$js add_stream MY_STREAM_SOURCES -sources [list [dict create name MY_STREAM]]]
+    assert {[dict get $response did_create]}
+    set actual_config [dict get $response config]
+    assert {[dict get $actual_config sources] == [list [dict create name MY_STREAM]]}
+} -cleanup {
+    $js delete_stream MY_STREAM_SOURCES
+}
+
 $js destroy
 $conn destroy
 stopNats NATS

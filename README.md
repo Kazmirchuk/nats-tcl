@@ -8,7 +8,7 @@ Feature-wise, the package is comparable to other NATS clients and is inspired by
 
 With this package you can bring the power of the publish/subscribe mechanism to your Tcl and significantly simplify development of distributed applications.
 
-The API reference documentation is split into [Core NATS](CoreAPI.md) and [JetStream](JsAPI.md).
+The API reference documentation is split into [Core NATS](CoreAPI.md), [JetStream](JsAPI.md) and [Key-Value Store](KvAPI.md).
 
 ## Supported platforms
 
@@ -43,8 +43,9 @@ If you are using a "batteries-included" Tcl distribution, like [Magicsplat](http
 - Synchronous and asynchronous requests (optimized: under the hood a single wildcard subscription is used for all requests)
 - Queue groups
 - Gather multiple responses to a request
-- Publishing and consuming messages from JetStream, providing "at least once" or "exactly once" delivery guarantees
+- Publishing and consuming messages from JetStream, providing "at least once" or "exactly once" delivery guarantee
 - Management of JetStream streams and consumers
+- Support for JetStream based Key-Value Stores
 - Standard `configure` method with many options
 - Protected connections using TLS
 - Automatic reconnection in case of network or server failure

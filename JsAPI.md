@@ -33,6 +33,8 @@ JetStream functionality of NATS can be accessed by creating the `nats::jet_strea
 [*js* stream_msg_get *stream* ?-last_by_subj *subj*? ?-next_by_subj *subj*? ?-seq *int*?](#js-stream_msg_get-stream--last_by_subj-subj--next_by_subj-subj--seq-int)<br/>
 [*js* stream_msg_delete *stream* -seq *sequence* ?-no_erase *no_erase*?](#js-stream_msg_delete-stream--seq-sequence--no_erase-no_erase)<br/>
 
+[*js* key_value ?-timeout *ms*? ?-check_bucket *enabled*? ?-read_only *enabled*?](#js-key_value--timeout-ms--check_bucket-enabled--read_only-enabled) <br/>
+
 [*js* destroy](#js-destroy)<br/>
 
 ## Description
@@ -57,7 +59,7 @@ Unfortunately, I don't have enough capacity to cover the whole JetStream functio
 
 The implementation can tolerate minor changes in JetStream API. E.g. a publish acknowledgment is returned just as a dict parsed from JSON. So, if in future the JSON schema gets a new field, it will be automatically available in this dict.
 
-If you need other JetStream functions, e.g. the Key/Value Store or Object Store, you can easily implement them yourself using core NATS requests. No need to interact directly with the TCP socket. Of course, PRs are always welcome.
+If you need other JetStream functions, e.g. Object Store, you can easily implement them yourself using core NATS requests. No need to interact directly with the TCP socket. Of course, PRs are always welcome.
 
 ## Notable differences from official NATS clients
 Note that API of official NATS clients (`JetStreamContext`) is designed in a way that allows to create a consumer implicitly with a subscription (e.g. `JetStreamContext.pull_subscribe` in nats.py). I find such design somewhat confusing, so the Tcl API clearly distinguishes between creating a consumer and a subscription.
@@ -165,28 +167,30 @@ Returns a dict with metadata of the message. It is extracted from the reply-to f
 Cancels the asynchronous pull request with the given `reqID`.
 ### js add_stream *stream* ?-option *value*?..
 Create or update a `stream` with configuration specified as option-value pairs. See the [official docs](https://docs.nats.io/nats-concepts/jetstream/streams#configuration) for explanation of these options.
-| Option        | Type   | Default |
-| ------------- |--------|---------|
-| -description  | string |         |
-| -subjects     | list of strings  | (required)|
-| -retention    | one of: limits, interest,<br/> workqueue |limits |
-| -max_consumers  | int |         |
-| -max_msgs  | int |         |
-| -max_bytes  | int |         |
-| -discard  | one of: new, old | old |
-| -max_age  | ms |         |
-| -max_msgs_per_subject  | int |         |
-| -max_msg_size  | int |         |
-| -storage  | one of: memory, file | file |
-| -num_replicas  | int |         |
-| -no_ack  | boolean |         |
-| -duplicate_window  | ms |         |
-| -sealed  | boolean |         |
-| -deny_delete  | boolean |         |
-| -deny_purge  | boolean |         |
-| -allow_rollup_hdrs  | boolean |         |
-| -allow_direct  | boolean |         |
-| -mirror_direct  | boolean |         |
+| Option        | Type   | Default | Info |
+| ------------- |--------|---------|------|
+| -description  | string |         |      |
+| -subjects     | list of strings  | (required)| Is not required if `-mirror` or `-subject` options are present.   |
+| -retention    | one of: limits, interest,<br/> workqueue |limits |    |
+| -max_consumers  | int |         |   |
+| -max_msgs  | int |         |    |
+| -max_bytes  | int |         |   |
+| -discard  | one of: new, old | old |    |
+| -max_age  | ms |         |    |
+| -max_msgs_per_subject  | int |         |    |
+| -max_msg_size  | int |         |    |
+| -storage  | one of: memory, file | file |   |
+| -num_replicas  | int |         |    |
+| -no_ack  | boolean |         |    |
+| -duplicate_window  | ms |         |   |
+| -sealed  | boolean |         |    |
+| -deny_delete  | boolean |         |   |
+| -deny_purge  | boolean |         |    |
+| -allow_rollup_hdrs  | boolean |         |   |
+| -allow_direct  | boolean |         |    |
+| -mirror_direct  | boolean |         |   |
+| -mirror  | dict |         | Should have `name` key (which JetStream to copy from) and can also have `external` key as another dict with `api` key (in order to copy from another domain). For example: `{name js_to_mirror external {api $JS.other_domain.API}}` (`\$JS` is special api prefix).   |
+| -sources  | list of dicts |         | Dicts should be the same as with `-mirror` option.   |
 
 
 Returns a JetStream response as a dict.
@@ -246,6 +250,8 @@ Returns a list of all consumers defined on this stream.
 'Direct Get' a message from stream `stream` by given `subject` or `sequence`. See also [ADR-31](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-31.md).
 ### js stream_msg_delete *stream* -seq *int* ?-no_erase *no_erase*?
 Delete message from `stream` with the given `sequence` number.
+### *js* key_value ?-timeout *ms*? ?-check_bucket *enabled*? ?-read_only *enabled*?
+This 'factory' method creates [keyValueObject](KvAPI.md) to work with Key-Value stores. `-timeout` (default value is get from JS object) is applied to `history` and `keys` requests to Key-Value NATS API. For the rest of requests `timeout` from JS and basic nats connection is used. `-check_bucket` (default true) takes care of checking if bucket exists or is mirror of another bucket, before sending requests to one. If it is disabled and given bucket does not exists than timeout will be fired (or `NoResponders`) instead of throwing a `BucketNotFound` error (check [KvAPI](KvAPI.md#implementation-information) for more information). `-timeout` and `-check_bucket` can be overridden for some functions. `-read_only` (default false) can disable ability to modify buckets and keys.
 ### js destroy
 TclOO destructor. Remember to call it before destroying the parent `nats::connection`.
 

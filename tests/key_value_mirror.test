@@ -1,0 +1,273 @@
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
+source test_utils.tcl
+
+proc sortAndCheckEntries {entries} {
+    lmap entry $entries {
+        # "created" field exists and is almost the same as "now" 
+        assert {abs([clock milliseconds] - [dict get $entry created]) < 10000}
+
+        # omit "created" timestamp
+        set filtered_entry [dict filter $entry key value key bucket operation revision]
+        # sort by key name
+        lsort -stride 2 -index 0 $filtered_entry
+    }
+}
+
+startNats NATS_HUB -c ./conf/hub.conf --store_dir [file join [tcltest::temporaryDirectory] "store-hub"]
+startNats NATS_LEAF -c ./conf/leaf.conf --store_dir [file join [tcltest::temporaryDirectory] "store-leaf"]
+
+set hub_bucket MY_HUB_BUCKET
+set mirror_bucket MY_MIRROR_BUCKET
+set leaf_mirror_bucket MY_LEAF_MIRROR_BUCKET
+
+set hub_auth [list --user acc --password acc --server localhost:4222]
+set leaf_auth [list --user acc --password acc --server localhost:4111]
+
+# connect to hub server
+set conn_hub [nats::connection new "MyNatsToHub"]
+$conn_hub configure -servers nats://localhost:4222 -user acc -password acc
+$conn_hub connect
+set js_hub [$conn_hub jet_stream]
+set kv_hub [$js_hub key_value]
+
+# connect to leaf server
+set conn_leaf [nats::connection new "MyNatsToLeaf"]
+$conn_leaf configure -servers nats://localhost:4111 -user acc -password acc
+$conn_leaf connect
+set js_leaf [$conn_leaf jet_stream]
+set kv_leaf [$js_leaf key_value]
+
+# connect to leaf server but use "hub" domain
+set js_leaf_to_hub [$conn_leaf jet_stream -domain hub]
+set kv_leaf_to_hub [$js_leaf_to_hub key_value]
+
+
+# cleanup if previous test has not cleaned up correctly
+set ls [execNatsCmd kv ls {*}$hub_auth]
+if {$hub_bucket in $ls} {
+    execNatsCmd kv del $hub_bucket -f {*}$hub_auth
+}
+if {$mirror_bucket in $ls} {
+    execNatsCmd kv del $mirror_bucket -f {*}$hub_auth
+}
+
+set ls [execNatsCmd kv ls {*}$leaf_auth]
+if {$leaf_mirror_bucket in $ls} {
+    execNatsCmd kv del $leaf_mirror_bucket -f {*}$leaf_auth
+}
+
+########### DOMAIN ###########
+
+test key_value-domain-1 "Get values from hub bucket using leaf connection (from different domain)" -setup {
+    execNatsCmd kv add $hub_bucket {*}$hub_auth
+    execNatsCmd kv put $hub_bucket key1 value1 {*}$hub_auth
+} -body {
+    set entry [$kv_leaf_to_hub get $hub_bucket key1]
+    sortAndCheckEntries [list $entry]
+} -result [list [dict create \
+    bucket $hub_bucket \
+    key key1 \
+    operation PUT \
+    revision 1 \
+    value value1 \
+]] -cleanup {
+    execNatsCmd kv del $hub_bucket -f {*}$hub_auth
+}
+
+test key_value-domain-2 "Put values to hub bucket using leaf connection (from different domain)" -setup {
+    execNatsCmd kv add $hub_bucket {*}$hub_auth
+} -body {
+    $kv_leaf_to_hub put $hub_bucket key1 value1
+    set entry [$kv_hub get $hub_bucket key1]
+    sortAndCheckEntries [list $entry]
+} -result [list [dict create \
+    bucket $hub_bucket \
+    key key1 \
+    operation PUT \
+    revision 1 \
+    value value1 \
+]] -cleanup {
+    execNatsCmd kv del $hub_bucket -f {*}$hub_auth
+}
+
+test key_value_domain-3 "Get history of hub bucket using leaf connection (from different domain)" -setup {
+    execNatsCmd kv add $hub_bucket {*}$hub_auth
+    execNatsCmd kv put $hub_bucket key1 value1 {*}$hub_auth
+    execNatsCmd kv put $hub_bucket key2 value2 {*}$hub_auth
+} -body {
+    set entries [$kv_leaf_to_hub history $hub_bucket]
+    sortAndCheckEntries $entries
+} -result [list [dict create \
+    bucket $hub_bucket \
+    key key1 \
+    operation PUT \
+    revision 1 \
+    value value1 \
+] [dict create \
+    bucket $hub_bucket \
+    key key2 \
+    operation PUT \
+    revision 2 \
+    value value2 \
+]] -cleanup {
+    execNatsCmd kv del $hub_bucket -f {*}$hub_auth
+}
+
+test key_value_domain-4 "List hub buckets using leaf connection (from different domain)" -setup {
+    execNatsCmd kv add $hub_bucket {*}$hub_auth
+} -body {
+    $kv_leaf_to_hub ls
+} -result [list $hub_bucket] -cleanup {
+    execNatsCmd kv del $hub_bucket -f {*}$hub_auth
+}
+
+########### MIRROR IN THE SAME DOMAIN ###########
+
+test key_value-mirror-same-domain-1 "Create kv mirror in the same domain and check its messages" -setup {
+    execNatsCmd kv add $hub_bucket {*}$hub_auth
+    execNatsCmd kv put $hub_bucket key1 value1 {*}$hub_auth
+} -body {
+    $kv_hub add $mirror_bucket -mirror_name $hub_bucket
+    after 100; # wait in order to leave mirror kn some time to propagate messages from hub kv
+    set entry [$kv_hub get $mirror_bucket key1]
+    sortAndCheckEntries [list $entry]
+} -result [list [dict create \
+    bucket $hub_bucket \
+    key key1 \
+    operation PUT \
+    revision 1 \
+    value value1 \
+]] -cleanup {
+    execNatsCmd kv del $mirror_bucket -f {*}$hub_auth
+    execNatsCmd kv del $hub_bucket -f {*}$hub_auth
+}
+
+test key_value-mirror-same-domain-2 "Put message to mirror bucket and check if it is set in origin kv and mirror" -setup {
+    execNatsCmd kv add $hub_bucket {*}$hub_auth
+    execNatsCmd kv add $mirror_bucket --mirror $hub_bucket {*}$hub_auth
+} -body {
+    $kv_hub put $mirror_bucket key1 value1
+    set entry_hub [$kv_hub get $hub_bucket key1]
+    set entry_mirror [$kv_hub get $mirror_bucket key1]
+    assert {$entry_hub == $entry_mirror}
+    sortAndCheckEntries [list $entry_mirror]
+} -result [list [dict create \
+    bucket $hub_bucket \
+    key key1 \
+    operation PUT \
+    revision 1 \
+    value value1 \
+]] -cleanup {
+    execNatsCmd kv del $mirror_bucket -f {*}$hub_auth
+    execNatsCmd kv del $hub_bucket -f {*}$hub_auth
+}
+
+test key_value-mirror-same-domain-3 "Get history from mirror bucket" -setup {
+    execNatsCmd kv add $hub_bucket {*}$hub_auth
+    execNatsCmd kv put $hub_bucket key1 value1 {*}$hub_auth
+    execNatsCmd kv put $hub_bucket key2 value2 {*}$hub_auth
+    execNatsCmd kv add $mirror_bucket --mirror $hub_bucket {*}$hub_auth
+} -body {
+    set entries [$kv_hub history $mirror_bucket]
+    sortAndCheckEntries $entries
+} -result [list [dict create \
+    bucket $hub_bucket \
+    key key1 \
+    operation PUT \
+    revision 1 \
+    value value1 \
+] [dict create \
+    bucket $hub_bucket \
+    key key2 \
+    operation PUT \
+    revision 2 \
+    value value2 \
+]] -cleanup {
+    execNatsCmd kv del $mirror_bucket -f {*}$hub_auth
+    execNatsCmd kv del $hub_bucket -f {*}$hub_auth
+}
+
+########### MIRROR FROM OTHER DOMAIN ###########
+
+test key_value-mirror-different-domain-1 "Create kv mirror in different domain and check its messages" -setup {
+    execNatsCmd kv add $hub_bucket {*}$hub_auth
+    execNatsCmd kv put $hub_bucket key1 value1 {*}$hub_auth
+} -body {
+    $kv_leaf add $leaf_mirror_bucket -mirror_name $hub_bucket -mirror_domain "hub"
+    after 100; # wait in order to leave mirror kn some time to propagate messages from hub kv
+    set entry [$kv_leaf get $leaf_mirror_bucket key1]
+    sortAndCheckEntries [list $entry]
+} -result [list [dict create \
+    bucket $hub_bucket \
+    key key1 \
+    operation PUT \
+    revision 1 \
+    value value1 \
+]] -cleanup {
+    execNatsCmd kv del $leaf_mirror_bucket -f {*}$leaf_auth
+    execNatsCmd kv del $hub_bucket -f {*}$hub_auth
+}
+
+test key_value-mirror-different-domain-2 "Put message to mirror bucket and check if it is set in origin kv (hub domain) and mirror" -setup {
+    execNatsCmd kv add $hub_bucket {*}$hub_auth
+    execNatsCmd kv add $leaf_mirror_bucket --mirror $hub_bucket --mirror-domain "hub" {*}$leaf_auth
+} -body {
+    $kv_leaf put $leaf_mirror_bucket key1 value1
+    set entry_hub [$kv_hub get $hub_bucket key1]
+    set entry_mirror [$kv_leaf get $leaf_mirror_bucket key1]
+    assert {$entry_hub == $entry_mirror}
+    sortAndCheckEntries [list $entry_mirror]
+} -result [list [dict create \
+    bucket $hub_bucket \
+    key key1 \
+    operation PUT \
+    revision 1 \
+    value value1 \
+]] -cleanup {
+    execNatsCmd kv del $leaf_mirror_bucket -f {*}$leaf_auth
+    execNatsCmd kv del $hub_bucket -f {*}$hub_auth
+}
+
+test key_value-mirror-different-domain-3 "Get history from mirror bucket" -setup {
+    execNatsCmd kv add $hub_bucket {*}$hub_auth
+    execNatsCmd kv put $hub_bucket key1 value1 {*}$hub_auth
+    execNatsCmd kv put $hub_bucket key2 value2 {*}$hub_auth
+    execNatsCmd kv add $leaf_mirror_bucket --mirror $hub_bucket --mirror-domain "hub" {*}$leaf_auth
+} -body {
+    set entries [$kv_leaf history $leaf_mirror_bucket]
+    sortAndCheckEntries $entries
+} -result [list [dict create \
+    bucket $hub_bucket \
+    key key1 \
+    operation PUT \
+    revision 1 \
+    value value1 \
+] [dict create \
+    bucket $hub_bucket \
+    key key2 \
+    operation PUT \
+    revision 2 \
+    value value2 \
+]] -cleanup {
+    execNatsCmd kv del $leaf_mirror_bucket -f {*}$leaf_auth
+    execNatsCmd kv del $hub_bucket -f {*}$hub_auth
+}
+
+########### CLEANUP ###########
+
+$kv_leaf_to_hub destroy
+$js_leaf_to_hub destroy
+
+$kv_leaf destroy
+$js_leaf destroy
+$conn_leaf destroy
+
+$kv_hub destroy
+$js_hub destroy
+$conn_hub destroy
+
+stopNats NATS_LEAF
+stopNats NATS_HUB
+
+tcltest::cleanupTests

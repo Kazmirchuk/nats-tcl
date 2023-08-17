@@ -206,7 +206,8 @@ namespace eval test_utils {
     
     proc execNatsCmd {args} {
         set output [exec -ignorestderr nats {*}$args]
-        log::info "Executed: nats $args"
+        # turn off logging - key-value tests use it heavily
+        # log::info "Executed: nats $args"
         return $output
     }
     

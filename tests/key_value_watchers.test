@@ -1,0 +1,516 @@
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
+source test_utils.tcl
+
+proc sortAndCheckEntries {entries} {
+    lmap entry $entries {
+        # "created" field exists and is almost the same as "now" 
+        assert {abs([clock milliseconds] - [dict get $entry created]) < 10000}
+
+        # omit "created" timestamp
+        set filtered_entry [dict filter $entry key value key bucket operation revision]
+        # sort by key name
+        lsort -stride 2 -index 0 $filtered_entry
+    }
+}
+
+proc sortAndCheckWatchCallbacks {callbacks} {
+    lmap callback_args $callbacks {
+        set status [lindex $callback_args 0]
+        set entry [lindex $callback_args 1]
+        if {$status eq ""} {
+            # it is normal message - "created" field exists and is almost the same as "now"
+            assert {abs([clock milliseconds] - [dict get $entry created]) < 10000}
+
+            # omit "created" timestamp if it exists
+            set entry [dict filter $entry key value key bucket operation revision]
+            set entry [lsort -stride 2 -index 0 $entry]
+        }
+
+        # sort by key name
+        list $status $entry
+    }
+}
+
+proc exampleCallback {status msg} {
+    lappend ::received [list $status $msg]
+    if {[llength $::received] == $::expected_count} {
+        set ::complete true
+    }
+}
+
+set bucket MY_TEST_BUCKET
+startNats NATS_JS -js --store_dir [tcltest::temporaryDirectory];# start nats with Jet Stream
+
+# cleanup if previous test has not cleaned up correctly
+set ls [execNatsCmd kv ls]
+if {$bucket in $ls} {
+    execNatsCmd kv del $bucket -f
+}
+# in order to bind to key_value_store
+execNatsCmd kv add $bucket --history=10
+
+set conn [nats::connection new]
+$conn configure -servers nats://localhost:4222
+$conn connect
+
+set js [$conn jet_stream]
+set kv [$js bind_kv_bucket $bucket]
+
+########## HISTORY ##########
+
+test key_value_watchers-history-1 "Get history for specific key" -setup {
+    execNatsCmd kv put $bucket key1 value1_1
+    execNatsCmd kv put $bucket key1 value1_2
+} -body {
+    set entries [$kv history key1]
+
+    sortAndCheckEntries $entries
+} -result [list \
+    [list bucket $bucket key key1 operation PUT revision 1 value value1_1] \
+    [list bucket $bucket key key1 operation PUT revision 2 value value1_2] \
+] -cleanup {
+    execNatsCmd kv del $bucket -f
+}
+
+test key_value_watchers-history-2 "Get history for all bucket" -setup {
+    execNatsCmd kv add $bucket --history=10
+    execNatsCmd kv put $bucket key1 value1_1
+    execNatsCmd kv put $bucket key1 value1_2
+    execNatsCmd kv put $bucket key2 value2_1
+    execNatsCmd kv put $bucket key2 value2_2
+    execNatsCmd kv put $bucket key1 value1_3
+    execNatsCmd kv put $bucket key3 value3_1
+} -body {
+    set entries [$kv history]
+
+    sortAndCheckEntries $entries
+} -result [list \
+    [list bucket $bucket key key1 operation PUT revision 1 value value1_1] \
+    [list bucket $bucket key key1 operation PUT revision 2 value value1_2] \
+    [list bucket $bucket key key2 operation PUT revision 3 value value2_1] \
+    [list bucket $bucket key key2 operation PUT revision 4 value value2_2] \
+    [list bucket $bucket key key1 operation PUT revision 5 value value1_3] \
+    [list bucket $bucket key key3 operation PUT revision 6 value value3_1] \
+] -cleanup {
+    execNatsCmd kv del $bucket -f
+}
+
+test key_value_watchers-history-3 "Get history for specific key with delete operation" -setup {
+    execNatsCmd kv add $bucket --history=10
+    execNatsCmd kv put $bucket key1 value1_1
+    execNatsCmd kv put $bucket key1 value1_2
+    execNatsCmd kv del $bucket key1 -f
+    execNatsCmd kv put $bucket key1 value1_3
+} -body {
+    set entries [$kv history key1]
+
+    sortAndCheckEntries $entries
+} -result [list \
+    [list bucket $bucket key key1 operation PUT revision 1 value value1_1] \
+    [list bucket $bucket key key1 operation PUT revision 2 value value1_2] \
+    [list bucket $bucket key key1 operation DEL revision 3 value {}] \
+    [list bucket $bucket key key1 operation PUT revision 4 value value1_3] \
+] -cleanup {
+    execNatsCmd kv del $bucket -f
+}
+
+test key_value_watchers-history-4 "Get history for specific key with purge operation" -setup {
+    execNatsCmd kv add $bucket --history=10
+    execNatsCmd kv put $bucket key1 value1_1
+    execNatsCmd kv purge -f $bucket key1
+    execNatsCmd kv put $bucket key1 value1_2
+} -body {
+    set value [$kv history key1]
+
+    lmap entry $value {
+        # omit "created" timestamp
+        set filtered_entry [dict filter $entry key value key bucket operation revision]
+        # sort by key name
+        lsort -stride 2 -index 0 $filtered_entry
+    }
+} -result [list \
+    [list bucket $bucket key key1 operation PURGE revision 2 value {}] \
+    [list bucket $bucket key key1 operation PUT revision 3 value value1_2] \
+] -cleanup {
+    execNatsCmd kv del $bucket -f
+}
+
+test key_value_watchers-history-5 "Returns immediately when there is no values" -setup {
+    execNatsCmd kv add $bucket --history=10
+} -body {
+    $kv history key1
+} -result {} -cleanup {
+    execNatsCmd kv del $bucket -f
+}
+
+test key_value_watchers-history-6 "Throws when there is no bucket" -body {
+    if {![catch {
+        $kv history
+    } err errOpts]} {
+        throw {TEST DidNotThrow} "Did not throw"
+    }
+    assert {[dict get $errOpts -errorcode] eq {NATS BucketNotFound}}
+    set err
+} -result "Bucket $bucket not found"
+
+########### KEYS ###########
+
+test key_value_watchers-keys-1 "List keys" -setup {
+    execNatsCmd kv add $bucket
+    execNatsCmd kv put $bucket k1 val1
+    execNatsCmd kv put $bucket k2 val2
+} -body {
+    $kv keys
+} -result "k1 k2" -cleanup {
+    execNatsCmd kv del $bucket -f
+}
+
+test key_value_watchers-keys-2 "List keys for empty bucket returns empty array" -setup {
+    execNatsCmd kv add $bucket
+} -body {
+    $kv keys
+} -result "" -cleanup {
+    execNatsCmd kv del $bucket -f
+}
+
+test key_value_watchers-keys-3 "List keys for deleted entries should not return them" -setup {
+    execNatsCmd kv add $bucket
+    execNatsCmd kv put $bucket k1 val1
+    execNatsCmd kv del -f $bucket k1
+    execNatsCmd kv put $bucket k2 val2
+    execNatsCmd kv put $bucket k3 val1
+    execNatsCmd kv purge -f $bucket k3
+} -body {
+    $kv keys
+} -result "k2" -cleanup {
+    execNatsCmd kv del -f $bucket
+}
+
+test key_value_watchers-keys-4 "Throws when there is no bucket" -body {
+    if {![catch {
+        $kv keys
+    } err errOpts]} {
+        throw {TEST DidNotThrow} "Did not throw"
+    }
+    assert {[dict get $errOpts -errorcode] eq {NATS BucketNotFound}}
+    set err
+} -result "Bucket $bucket not found"
+
+########## WATCH ##########
+
+test key_value_watchers-watch-1 "Watch simple key" -setup {
+    set ::received [list]
+    unset -nocomplain ::complete
+    execNatsCmd kv add $bucket
+    execNatsCmd kv put $bucket key1 value1_1
+    execNatsCmd kv put $bucket key1 value1_2
+} -body {
+    set ::expected_count 2
+    set watchID [$kv watch key1 -callback exampleCallback]
+    after 5000 [list set ::complete true] ;# timeout
+
+    vwait ::complete
+    after cancel [list set ::complete true]
+    if {[llength $::received] != $::expected_count} {
+        throw {TEST NotEnoughCalls} "Callback was not received expected number of times. Expected: $::expected_count, got: [llength $::received] ($::received)"
+    }
+
+    sortAndCheckWatchCallbacks $::received
+} -result [list \
+    [list {} [list bucket $bucket key key1 operation PUT revision 2 value value1_2]] \
+    [list end_of_initial_data {}] \
+] -cleanup {
+    $kv unwatch $watchID
+    execNatsCmd kv del $bucket -f
+}
+
+test key_value_watchers-watch-2 "Watch multiple keys" -setup {
+    set ::received [list]
+    unset -nocomplain ::complete
+    execNatsCmd kv add $bucket
+    execNatsCmd kv put $bucket key1 value1_1
+    execNatsCmd kv put $bucket key1 value1_2
+    execNatsCmd kv put $bucket key2 value2_1
+    execNatsCmd kv put $bucket key3 value3_1
+} -body {
+    set ::expected_count 4
+    set watchID [$kv watch -callback exampleCallback]
+    after 5000 [list set ::complete true] ;# timeout
+
+    vwait ::complete
+    after cancel [list set ::complete true]
+    if {[llength $::received] != $::expected_count} {
+        throw {TEST NotEnoughCalls} "Callback was not received expected number of times. Expected: $::expected_count, got: [llength $::received] ($::received)"
+    }
+
+    sortAndCheckWatchCallbacks $::received
+} -result [list \
+    [list {} [list bucket $bucket key key1 operation PUT revision 2 value value1_2]] \
+    [list {} [list bucket $bucket key key2 operation PUT revision 3 value value2_1]] \
+    [list {} [list bucket $bucket key key3 operation PUT revision 4 value value3_1]] \
+    [list end_of_initial_data {}] \
+] -cleanup {
+    $kv unwatch $watchID
+    execNatsCmd kv del $bucket -f
+}
+
+test key_value_watchers-watch-3 "Watch key with history" -setup {
+    set ::received [list]
+    unset -nocomplain ::complete
+    execNatsCmd kv add $bucket --history=10
+    execNatsCmd kv put $bucket key1 value1_1
+    execNatsCmd kv put $bucket key1 value1_2
+    execNatsCmd kv put $bucket key1 value1_3
+} -body {
+    set ::expected_count 4
+    set watchID [$kv watch key1 -callback exampleCallback -include_history true]
+    after 5000 [list set ::complete true] ;# timeout
+
+    vwait ::complete
+    after cancel [list set ::complete true]
+    if {[llength $::received] != $::expected_count} {
+        throw {TEST NotEnoughCalls} "Callback was not received expected number of times. Expected: $::expected_count, got: [llength $::received] ($::received)"
+    }
+
+    sortAndCheckWatchCallbacks $::received
+} -result [list \
+    [list {} [list bucket $bucket key key1 operation PUT revision 1 value value1_1]] \
+    [list {} [list bucket $bucket key key1 operation PUT revision 2 value value1_2]] \
+    [list {} [list bucket $bucket key key1 operation PUT revision 3 value value1_3]] \
+    [list end_of_initial_data {}] \
+] -cleanup {
+    $kv unwatch $watchID
+    execNatsCmd kv del $bucket -f
+}
+
+test key_value_watchers-watch-4 "Watch key with history, purge and delete operations" -setup {
+    set ::received [list]
+    unset -nocomplain ::complete
+    execNatsCmd kv add $bucket --history=10
+    execNatsCmd kv put $bucket key1 value1_1
+    execNatsCmd kv purge -f $bucket key1
+    execNatsCmd kv put $bucket key1 value1_2
+    execNatsCmd kv put $bucket key1 value1_3
+    execNatsCmd kv del -f $bucket key1
+    execNatsCmd kv put $bucket key1 value1_4
+} -body {
+    set ::expected_count 6
+    set watchID [$kv watch key1 -callback exampleCallback -include_history true]
+    after 5000 [list set ::complete true] ;# timeout
+
+    vwait ::complete
+    after cancel [list set ::complete true]
+    if {[llength $::received] < $::expected_count} {
+        throw {TEST NotEnoughCalls} "Callback was not received expected number of times. Expected: $::expected_count, got: [llength $::received] ($::received)"
+    }
+
+    sortAndCheckWatchCallbacks $::received
+} -result [list \
+    [list {} [list bucket $bucket key key1 operation PURGE revision 2 value {}]] \
+    [list {} [list bucket $bucket key key1 operation PUT revision 3 value value1_2]] \
+    [list {} [list bucket $bucket key key1 operation PUT revision 4 value value1_3]] \
+    [list {} [list bucket $bucket key key1 operation DEL revision 5 value {}]] \
+    [list {} [list bucket $bucket key key1 operation PUT revision 6 value value1_4]] \
+    [list end_of_initial_data {}] \
+] -cleanup {
+    $kv unwatch $watchID
+    execNatsCmd kv del $bucket -f
+}
+
+test key_value_watchers-watch-5 "Watch key with meta only and history, with purge and delete operations" -setup {
+    set ::received [list]
+    unset -nocomplain ::complete
+    execNatsCmd kv add $bucket --history=10
+    execNatsCmd kv put $bucket key1 value1_1
+    execNatsCmd kv purge -f $bucket key1
+    execNatsCmd kv put $bucket key1 value1_2
+    execNatsCmd kv del -f $bucket key1
+    execNatsCmd kv put $bucket key1 value1_3
+} -body {
+    set ::expected_count 5
+    set watchID [$kv watch key1 -callback exampleCallback -meta_only true -include_history true]
+    after 5000 [list set ::complete true] ;# timeout
+
+    vwait ::complete
+    after cancel [list set ::complete true]
+    if {[llength $::received] < $::expected_count} {
+        throw {TEST NotEnoughCalls} "Callback was not received expected number of times. Expected: $::expected_count, got: [llength $::received] ($::received)"
+    }
+
+    sortAndCheckWatchCallbacks $::received
+} -result [list \
+    [list {} [list bucket $bucket key key1 operation PURGE revision 2 value {}]] \
+    [list {} [list bucket $bucket key key1 operation PUT revision 3 value {}]] \
+    [list {} [list bucket $bucket key key1 operation DEL revision 4 value {}]] \
+    [list {} [list bucket $bucket key key1 operation PUT revision 5 value {}]] \
+    [list end_of_initial_data {}] \
+] -cleanup {
+    $kv unwatch $watchID
+    execNatsCmd kv del $bucket -f
+}
+
+test key_value_watchers-watch-6 "Watch key with history and ignore deletes" -setup {
+    set ::received [list]
+    unset -nocomplain ::complete
+    execNatsCmd kv add $bucket --history=10
+    execNatsCmd kv put $bucket key1 value1_1
+    execNatsCmd kv purge -f $bucket key1
+    execNatsCmd kv put $bucket key1 value1_2
+    execNatsCmd kv del -f $bucket key1
+    execNatsCmd kv put $bucket key1 value1_3
+} -body {
+    set ::expected_count 3
+    set watchID [$kv watch key1 -callback exampleCallback -ignore_deletes true -include_history true]
+    after 5000 [list set ::complete true] ;# timeout
+
+    vwait ::complete
+    after cancel [list set ::complete true]
+    if {[llength $::received] < $::expected_count} {
+        throw {TEST NotEnoughCalls} "Callback was not received expected number of times. Expected: $::expected_count, got: [llength $::received] ($::received)"
+    }
+
+    sortAndCheckWatchCallbacks $::received
+} -result [list \
+    [list {} [list bucket $bucket key key1 operation PUT revision 3 value value1_2]] \
+    [list {} [list bucket $bucket key key1 operation PUT revision 5 value value1_3]] \
+    [list end_of_initial_data {}] \
+] -cleanup {
+    $kv unwatch $watchID
+    execNatsCmd kv del $bucket -f
+}
+
+test key_value_watchers-watch-7 "Watch key with updates only" -setup {
+    set ::received [list]
+    unset -nocomplain ::complete
+    execNatsCmd kv add $bucket --history=10
+    execNatsCmd kv put $bucket key1 value1_1
+} -body {
+    set ::expected_count 2
+    set watchID [$kv watch key1 -callback exampleCallback -updates_only true -idle_heartbeat 1000]
+    after 3000 [list execNatsCmd kv put $bucket key1 value1_2] ;# do it after first heartbeat and end of initial data
+    after 10000 [list set ::complete true] ;# timeout
+
+    vwait ::complete
+    after cancel [list set ::complete true]
+    if {[llength $::received] < $::expected_count} {
+        throw {TEST NotEnoughCalls} "Callback was not received expected number of times. Expected: $::expected_count, got: [llength $::received] ($::received)"
+    }
+
+    sortAndCheckWatchCallbacks $::received
+} -result [list \
+    [list end_of_initial_data {}] \
+    [list {} [list bucket $bucket key key1 operation PUT revision 2 value value1_2]] \
+] -cleanup {
+    $kv unwatch $watchID
+    execNatsCmd kv del $bucket -f
+}
+
+test key_value_watchers-watch-8 "Watching key should continue after server restart" -setup {
+    set ::received [list]
+    unset -nocomplain ::complete
+    execNatsCmd kv add $bucket --history=10
+} -body {
+    set ::expected_count 2
+    set watchID [$kv watch key1 -callback exampleCallback -updates_only true -idle_heartbeat 1000]
+    
+    # restart server - it would re-create consumer automatically
+    after 2000 [list stopNats NATS_JS]
+    after 2500 [list startNats NATS_JS -js --store_dir [tcltest::temporaryDirectory];]
+
+    after 4000 [list execNatsCmd kv put $bucket key1 value1_1]
+    after 10000 [list set ::complete true] ;# timeout
+
+    vwait ::complete
+    after cancel [list set ::complete true]
+    if {[llength $::received] < $::expected_count} {
+        throw {TEST NotEnoughCalls} "Callback was not received expected number of times. Expected: $::expected_count, got: [llength $::received] ($::received)"
+    }
+
+    sortAndCheckWatchCallbacks $::received
+} -result [list \
+    [list end_of_initial_data {}] \
+    [list {} [list bucket $bucket key key1 operation PUT revision 1 value value1_1]] \
+] -cleanup {
+    $kv unwatch $watchID
+    execNatsCmd kv del $bucket -f
+}
+
+test key_value_watchers-watch-9 "Watching key should continue and user should bo notified after server has been down for some time (more than 3 heartbeats)" -setup {
+    set ::received [list]
+    unset -nocomplain ::complete
+    execNatsCmd kv add $bucket --history=10
+} -body {
+    set ::expected_count 4 ;# if server has been down for long time user should be notified
+    set watchID [$kv watch key1 -callback exampleCallback -updates_only true -idle_heartbeat 500]
+    
+    after 2000 [list stopNats NATS_JS]
+    after 5000 [list startNats NATS_JS -js --store_dir [tcltest::temporaryDirectory];]
+
+    after 7000 [list execNatsCmd kv put $bucket key1 value1_1]
+    after 10000 [list set ::complete true] ;# timeout
+
+    vwait ::complete
+    after cancel [list set ::complete true]
+    if {[llength $::received] < $::expected_count} {
+        throw {TEST NotEnoughCalls} "Callback was not received expected number of times. Expected: $::expected_count, got: [llength $::received] ($::received)"
+    }
+
+    sortAndCheckWatchCallbacks $::received
+} -result [list \
+    [list end_of_initial_data {}] \
+    [list error "Server disconnected"] \
+    [list ok {}] \
+    [list {} [list bucket $bucket key key1 operation PUT revision 1 value value1_1]] \
+] -cleanup {
+    $kv unwatch $watchID
+    execNatsCmd kv del $bucket -f
+}
+
+test key_value_watchers-watch-10 "Watching key should continue and consumer should be re-created after it has been somehow removed" -setup {
+    set ::received [list]
+    unset -nocomplain ::complete
+    execNatsCmd kv add $bucket --history=10
+} -body {
+    set ::expected_count 2
+    set watchID [$kv watch key1 -callback exampleCallback -updates_only true -idle_heartbeat 500]
+
+    set consumers [$js consumer_names KV_${bucket}]
+    # there should be only one consumer for this bucket
+    assert {[llength $consumers] == 1}
+    set first_consumer [lindex $consumers 0]
+
+    after 1000 [list $js delete_consumer KV_${bucket} $first_consumer]
+
+    # consumer should be re-created at this point
+    after 5000 [list execNatsCmd kv put $bucket key1 value1_1]
+    after 10000 [list set ::complete true] ;# timeout
+
+    vwait ::complete
+    after cancel [list set ::complete true]
+
+    set consumers [$js consumer_names KV_${bucket}]
+    # there should still be only one consumer that is different than previous
+    assert {[llength $consumers] == 1}
+    set seconds_consumer [lindex $consumers 0]
+    assert {$seconds_consumer != $first_consumer}
+
+    if {[llength $::received] < $::expected_count} {
+        throw {TEST NotEnoughCalls} "Callback was not received expected number of times. Expected: $::expected_count, got: [llength $::received] ($::received)"
+    }
+
+    sortAndCheckWatchCallbacks $::received
+} -result [list \
+    [list end_of_initial_data {}] \
+    [list {} [list bucket $bucket key key1 operation PUT revision 1 value value1_1]] \
+] -cleanup {
+    $kv unwatch $watchID
+    execNatsCmd kv del $bucket -f
+}
+
+$kv destroy
+$js destroy
+$conn destroy
+stopNats NATS_JS
+
+tcltest::cleanupTests

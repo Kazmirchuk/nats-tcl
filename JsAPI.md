@@ -33,6 +33,11 @@ JetStream functionality of NATS can be accessed by creating the `nats::jet_strea
 [*js* stream_msg_get *stream* ?-last_by_subj *subj*? ?-next_by_subj *subj*? ?-seq *int*?](#js-stream_msg_get-stream--last_by_subj-subj--next_by_subj-subj--seq-int)<br/>
 [*js* stream_msg_delete *stream* -seq *sequence* ?-no_erase *no_erase*?](#js-stream_msg_delete-stream--seq-sequence--no_erase-no_erase)<br/>
 
+[*js* bind_kv_bucket *bucket*](#js-bind_kv_bucket-bucket) <br/>
+[*js* create_kv_bucket *bucket* ?-history *history*? ?-storage *storage*? ?-ttl *ttl*? ?-max_value_size *max_value_size*? ?-max_bucket_size *max_bucket_size*? ?-mirror_name *mirror_name*? ?-mirror_domain *mirror_domain*?](#js-create_kv_bucket-bucket--history-history--storage-storage--ttl-ttl--max_value_size-max_value_size--max_bucket_size-max_bucket_size--mirror_name-mirror_name--mirror_domain-mirror_domain) <br/>
+[*js* delete_kv_bucket *bucket*](#js-delete_kv_bucket-bucket) <br/>
+[*js* kv_buckets *bucket*](#js-kv_buckets) <br/>
+
 [*js* destroy](#js-destroy)<br/>
 
 ## Description
@@ -57,7 +62,7 @@ Unfortunately, I don't have enough capacity to cover the whole JetStream functio
 
 The implementation can tolerate minor changes in JetStream API. E.g. a publish acknowledgment is returned just as a dict parsed from JSON. So, if in future the JSON schema gets a new field, it will be automatically available in this dict.
 
-If you need other JetStream functions, e.g. the Key/Value Store or Object Store, you can easily implement them yourself using core NATS requests. No need to interact directly with the TCP socket. Of course, PRs are always welcome.
+If you need other JetStream functions, e.g. Object Store, you can easily implement them yourself using core NATS requests. No need to interact directly with the TCP socket. Of course, PRs are always welcome.
 
 ## Notable differences from official NATS clients
 Note that API of official NATS clients (`JetStreamContext`) is designed in a way that allows to create a consumer implicitly with a subscription (e.g. `JetStreamContext.pull_subscribe` in nats.py). I find such design somewhat confusing, so the Tcl API clearly distinguishes between creating a consumer and a subscription.
@@ -165,28 +170,30 @@ Returns a dict with metadata of the message. It is extracted from the reply-to f
 Cancels the asynchronous pull request with the given `reqID`.
 ### js add_stream *stream* ?-option *value*?..
 Create or update a `stream` with configuration specified as option-value pairs. See the [official docs](https://docs.nats.io/nats-concepts/jetstream/streams#configuration) for explanation of these options.
-| Option        | Type   | Default |
-| ------------- |--------|---------|
-| -description  | string |         |
-| -subjects     | list of strings  | (required)|
-| -retention    | one of: limits, interest,<br/> workqueue |limits |
-| -max_consumers  | int |         |
-| -max_msgs  | int |         |
-| -max_bytes  | int |         |
-| -discard  | one of: new, old | old |
-| -max_age  | ms |         |
-| -max_msgs_per_subject  | int |         |
-| -max_msg_size  | int |         |
-| -storage  | one of: memory, file | file |
-| -num_replicas  | int |         |
-| -no_ack  | boolean |         |
-| -duplicate_window  | ms |         |
-| -sealed  | boolean |         |
-| -deny_delete  | boolean |         |
-| -deny_purge  | boolean |         |
-| -allow_rollup_hdrs  | boolean |         |
-| -allow_direct  | boolean |         |
-| -mirror_direct  | boolean |         |
+| Option        | Type   | Default | Info |
+| ------------- |--------|---------|------|
+| -description  | string |         |      |
+| -subjects     | list of strings  | (required)| Is not required if `-mirror` or `-subject` options are present.   |
+| -retention    | one of: limits, interest,<br/> workqueue |limits |    |
+| -max_consumers  | int |         |   |
+| -max_msgs  | int |         |    |
+| -max_bytes  | int |         |   |
+| -discard  | one of: new, old | old |    |
+| -max_age  | ms |         |    |
+| -max_msgs_per_subject  | int |         |    |
+| -max_msg_size  | int |         |    |
+| -storage  | one of: memory, file | file |   |
+| -num_replicas  | int |         |    |
+| -no_ack  | boolean |         |    |
+| -duplicate_window  | ms |         |   |
+| -sealed  | boolean |         |    |
+| -deny_delete  | boolean |         |   |
+| -deny_purge  | boolean |         |    |
+| -allow_rollup_hdrs  | boolean |         |   |
+| -allow_direct  | boolean |         |    |
+| -mirror_direct  | boolean |         |   |
+| -mirror  | dict |         | Should have `name` key (which JetStream to copy from) and can also have `external` key as another dict with `api` key (in order to copy from another domain). For example: `{name js_to_mirror external {api $JS.other_domain.API}}` (`\$JS` is special api prefix).   |
+| -sources  | list of dicts |         | Dicts should be the same as with `-mirror` option.   |
 
 
 Returns a JetStream response as a dict.
@@ -246,6 +253,21 @@ Returns a list of all consumers defined on this stream.
 'Direct Get' a message from stream `stream` by given `subject` or `sequence`. See also [ADR-31](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-31.md).
 ### js stream_msg_delete *stream* -seq *int* ?-no_erase *no_erase*?
 Delete message from `stream` with the given `sequence` number.
+### *js* bind_kv_bucket *bucket*
+This 'factory' method creates [KeyValueObject](KvAPI.md) to work with given bucket. If bucket does not exists than `BucketNotFound` error is raised.
+### *js* create_kv_bucket *bucket* ?-history *history*? ?-storage *storage*? ?-ttl *ttl*? ?-max_value_size *max_value_size*? ?-max_bucket_size *max_bucket_size*? ?-mirror_name *mirror_name*? ?-mirror_domain *mirror_domain*?
+Creates new KV Bucket `bucket` and binds to it returning [KeyValueObject](KvAPI.md). If bucket already exists with the same parameters `create_kv_bucket` only binds to it. It can be configured using following parameters:
+- `history` - default `1`, how many messages per key should be kept. By default only last one is preserved,
+- `storage` - default `file`,
+- `ttl` - default `-1`, how long the bucket keeps values for,
+- `max_value_size` - default `-1`, what is max size of message (bytes),
+- `max_bucket_size` - default `-1`, max `bucket` size can be configured.
+- `mirror_name` - creates a mirror of a different bucket,
+- `mirror_domain` - when mirroring find the bucket in a different domain.
+### *js* delete_kv_bucket *bucket*
+Deletes entire bucket.
+### *js* kv_buckets
+List available buckets.
 ### js destroy
 TclOO destructor. Remember to call it before destroying the parent `nats::connection`.
 

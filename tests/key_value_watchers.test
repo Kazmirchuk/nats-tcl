@@ -42,26 +42,28 @@ proc exampleCallback {status msg} {
 set bucket MY_TEST_BUCKET
 startNats NATS_JS -js --store_dir [tcltest::temporaryDirectory];# start nats with Jet Stream
 
-set conn [nats::connection new]
-$conn configure -servers nats://localhost:4222
-$conn connect
-set js [$conn jet_stream]
-set kv [$js key_value]
-
 # cleanup if previous test has not cleaned up correctly
 set ls [execNatsCmd kv ls]
 if {$bucket in $ls} {
     execNatsCmd kv del $bucket -f
 }
+# in order to bind to key_value_store
+execNatsCmd kv add $bucket --history=10
+
+set conn [nats::connection new]
+$conn configure -servers nats://localhost:4222
+$conn connect
+
+set js [$conn jet_stream]
+set kv [$js bind_kv_bucket $bucket]
 
 ########## HISTORY ##########
 
 test key_value_watchers-history-1 "Get history for specific key" -setup {
-    execNatsCmd kv add $bucket --history=10
     execNatsCmd kv put $bucket key1 value1_1
     execNatsCmd kv put $bucket key1 value1_2
 } -body {
-    set entries [$kv history $bucket key1]
+    set entries [$kv history key1]
 
     sortAndCheckEntries $entries
 } -result [list \
@@ -80,7 +82,7 @@ test key_value_watchers-history-2 "Get history for all bucket" -setup {
     execNatsCmd kv put $bucket key1 value1_3
     execNatsCmd kv put $bucket key3 value3_1
 } -body {
-    set entries [$kv history $bucket]
+    set entries [$kv history]
 
     sortAndCheckEntries $entries
 } -result [list \
@@ -101,7 +103,7 @@ test key_value_watchers-history-3 "Get history for specific key with delete oper
     execNatsCmd kv del $bucket key1 -f
     execNatsCmd kv put $bucket key1 value1_3
 } -body {
-    set entries [$kv history $bucket key1]
+    set entries [$kv history key1]
 
     sortAndCheckEntries $entries
 } -result [list \
@@ -119,7 +121,7 @@ test key_value_watchers-history-4 "Get history for specific key with purge opera
     execNatsCmd kv purge -f $bucket key1
     execNatsCmd kv put $bucket key1 value1_2
 } -body {
-    set value [$kv history $bucket key1]
+    set value [$kv history key1]
 
     lmap entry $value {
         # omit "created" timestamp
@@ -137,20 +139,63 @@ test key_value_watchers-history-4 "Get history for specific key with purge opera
 test key_value_watchers-history-5 "Returns immediately when there is no values" -setup {
     execNatsCmd kv add $bucket --history=10
 } -body {
-    $kv history $bucket key1
+    $kv history key1
 } -result {} -cleanup {
     execNatsCmd kv del $bucket -f
 }
 
 test key_value_watchers-history-6 "Throws when there is no bucket" -body {
     if {![catch {
-        $kv history non-existing-bucket
+        $kv history
     } err errOpts]} {
         throw {TEST DidNotThrow} "Did not throw"
     }
     assert {[dict get $errOpts -errorcode] eq {NATS BucketNotFound}}
     set err
-} -result {Bucket non-existing-bucket not found}
+} -result "Bucket $bucket not found"
+
+########### KEYS ###########
+
+test key_value_watchers-keys-1 "List keys" -setup {
+    execNatsCmd kv add $bucket
+    execNatsCmd kv put $bucket k1 val1
+    execNatsCmd kv put $bucket k2 val2
+} -body {
+    $kv keys
+} -result "k1 k2" -cleanup {
+    execNatsCmd kv del $bucket -f
+}
+
+test key_value_watchers-keys-2 "List keys for empty bucket returns empty array" -setup {
+    execNatsCmd kv add $bucket
+} -body {
+    $kv keys
+} -result "" -cleanup {
+    execNatsCmd kv del $bucket -f
+}
+
+test key_value_watchers-keys-3 "List keys for deleted entries should not return them" -setup {
+    execNatsCmd kv add $bucket
+    execNatsCmd kv put $bucket k1 val1
+    execNatsCmd kv del -f $bucket k1
+    execNatsCmd kv put $bucket k2 val2
+    execNatsCmd kv put $bucket k3 val1
+    execNatsCmd kv purge -f $bucket k3
+} -body {
+    $kv keys
+} -result "k2" -cleanup {
+    execNatsCmd kv del -f $bucket
+}
+
+test key_value_watchers-keys-4 "Throws when there is no bucket" -body {
+    if {![catch {
+        $kv keys
+    } err errOpts]} {
+        throw {TEST DidNotThrow} "Did not throw"
+    }
+    assert {[dict get $errOpts -errorcode] eq {NATS BucketNotFound}}
+    set err
+} -result "Bucket $bucket not found"
 
 ########## WATCH ##########
 
@@ -162,7 +207,7 @@ test key_value_watchers-watch-1 "Watch simple key" -setup {
     execNatsCmd kv put $bucket key1 value1_2
 } -body {
     set ::expected_count 2
-    set watchID [$kv watch $bucket key1 -callback exampleCallback]
+    set watchID [$kv watch key1 -callback exampleCallback]
     after 5000 [list set ::complete true] ;# timeout
 
     vwait ::complete
@@ -190,7 +235,7 @@ test key_value_watchers-watch-2 "Watch multiple keys" -setup {
     execNatsCmd kv put $bucket key3 value3_1
 } -body {
     set ::expected_count 4
-    set watchID [$kv watch $bucket -callback exampleCallback]
+    set watchID [$kv watch -callback exampleCallback]
     after 5000 [list set ::complete true] ;# timeout
 
     vwait ::complete
@@ -219,7 +264,7 @@ test key_value_watchers-watch-3 "Watch key with history" -setup {
     execNatsCmd kv put $bucket key1 value1_3
 } -body {
     set ::expected_count 4
-    set watchID [$kv watch $bucket key1 -callback exampleCallback -include_history true]
+    set watchID [$kv watch key1 -callback exampleCallback -include_history true]
     after 5000 [list set ::complete true] ;# timeout
 
     vwait ::complete
@@ -251,7 +296,7 @@ test key_value_watchers-watch-4 "Watch key with history, purge and delete operat
     execNatsCmd kv put $bucket key1 value1_4
 } -body {
     set ::expected_count 6
-    set watchID [$kv watch $bucket key1 -callback exampleCallback -include_history true]
+    set watchID [$kv watch key1 -callback exampleCallback -include_history true]
     after 5000 [list set ::complete true] ;# timeout
 
     vwait ::complete
@@ -273,7 +318,7 @@ test key_value_watchers-watch-4 "Watch key with history, purge and delete operat
     execNatsCmd kv del $bucket -f
 }
 
-test key_value_watchers-watch-5 "Watch key with headers only and history, with purge and delete operations" -setup {
+test key_value_watchers-watch-5 "Watch key with meta only and history, with purge and delete operations" -setup {
     set ::received [list]
     unset -nocomplain ::complete
     execNatsCmd kv add $bucket --history=10
@@ -284,7 +329,7 @@ test key_value_watchers-watch-5 "Watch key with headers only and history, with p
     execNatsCmd kv put $bucket key1 value1_3
 } -body {
     set ::expected_count 5
-    set watchID [$kv watch $bucket key1 -callback exampleCallback -headers_only true -include_history true]
+    set watchID [$kv watch key1 -callback exampleCallback -meta_only true -include_history true]
     after 5000 [list set ::complete true] ;# timeout
 
     vwait ::complete
@@ -316,7 +361,7 @@ test key_value_watchers-watch-6 "Watch key with history and ignore deletes" -set
     execNatsCmd kv put $bucket key1 value1_3
 } -body {
     set ::expected_count 3
-    set watchID [$kv watch $bucket key1 -callback exampleCallback -ignore_deletes true -include_history true]
+    set watchID [$kv watch key1 -callback exampleCallback -ignore_deletes true -include_history true]
     after 5000 [list set ::complete true] ;# timeout
 
     vwait ::complete
@@ -342,7 +387,7 @@ test key_value_watchers-watch-7 "Watch key with updates only" -setup {
     execNatsCmd kv put $bucket key1 value1_1
 } -body {
     set ::expected_count 2
-    set watchID [$kv watch $bucket key1 -callback exampleCallback -updates_only true -idle_heartbeat 1000]
+    set watchID [$kv watch key1 -callback exampleCallback -updates_only true -idle_heartbeat 1000]
     after 3000 [list execNatsCmd kv put $bucket key1 value1_2] ;# do it after first heartbeat and end of initial data
     after 10000 [list set ::complete true] ;# timeout
 
@@ -367,7 +412,7 @@ test key_value_watchers-watch-8 "Watching key should continue after server resta
     execNatsCmd kv add $bucket --history=10
 } -body {
     set ::expected_count 2
-    set watchID [$kv watch $bucket key1 -callback exampleCallback -updates_only true -idle_heartbeat 1000]
+    set watchID [$kv watch key1 -callback exampleCallback -updates_only true -idle_heartbeat 1000]
     
     # restart server - it would re-create consumer automatically
     after 2000 [list stopNats NATS_JS]
@@ -397,7 +442,7 @@ test key_value_watchers-watch-9 "Watching key should continue and user should bo
     execNatsCmd kv add $bucket --history=10
 } -body {
     set ::expected_count 4 ;# if server has been down for long time user should be notified
-    set watchID [$kv watch $bucket key1 -callback exampleCallback -updates_only true -idle_heartbeat 500]
+    set watchID [$kv watch key1 -callback exampleCallback -updates_only true -idle_heartbeat 500]
     
     after 2000 [list stopNats NATS_JS]
     after 5000 [list startNats NATS_JS -js --store_dir [tcltest::temporaryDirectory];]
@@ -428,7 +473,7 @@ test key_value_watchers-watch-10 "Watching key should continue and consumer shou
     execNatsCmd kv add $bucket --history=10
 } -body {
     set ::expected_count 2
-    set watchID [$kv watch $bucket key1 -callback exampleCallback -updates_only true -idle_heartbeat 500]
+    set watchID [$kv watch key1 -callback exampleCallback -updates_only true -idle_heartbeat 500]
 
     set consumers [$js consumer_names KV_${bucket}]
     # there should be only one consumer for this bucket

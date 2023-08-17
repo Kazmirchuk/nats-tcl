@@ -6,7 +6,6 @@ set conn [nats::connection new "MyNats"]
 $conn configure -servers nats://localhost:4222
 $conn connect
 set js [$conn jet_stream -timeout 2000]
-set kv [$js key_value]
 
 set bucket MY_KEY_VALUE
 
@@ -19,13 +18,13 @@ There are two more updates made after \"watch\" has started - both will be deliv
 
 # create a new key-value store named "MY_KEY_VALUE" with history of 10 messages per key
 puts "\nCreating new bucket named \"$bucket\"..."
-$kv add $bucket -history 10
+set kv [$js create_kv_bucket $bucket -history 10]
 
 # put (and delete) some values to "key1" key
 puts "Setting some history of updates on \"key1\" key..."
-$kv put $bucket key1 "hi, it's my FIRST message"
-$kv del $bucket key1 ;# delete last value (only to see it in history) - operation of this entry would be "DEL"
-$kv put $bucket key1 "hi, it's my SECOND message"
+$kv put key1 "hi, it's my FIRST message"
+$kv delete key1 ;# delete last value (only to see it in history) - operation of this entry would be "DEL"
+$kv put key1 "hi, it's my SECOND message"
 
 proc callback {status msg} {
     switch -- $status {
@@ -55,10 +54,10 @@ proc callback {status msg} {
     }
 }
 
-set watch_id [$kv watch $bucket key1 -callback callback -include_history true]
+set watch_id [$kv watch key1 -callback callback -include_history true]
 
-after 2000 [list $kv put $bucket key1 "Some update for \"key1\""]
-after 5000 [list $kv put $bucket key1 "End program"]
+after 2000 [list $kv put key1 "Some update for \"key1\""]
+after 5000 [list $kv put key1 "End program"]
 
 vwait ::end_program
 
@@ -66,8 +65,8 @@ vwait ::end_program
 
 puts "\nRemoving \"$bucket\" bucket and ending program..."
 $kv unwatch $watch_id
-$kv del $bucket
-
 $kv destroy
+$js delete_kv_bucket $bucket
+
 $js destroy
 $conn destroy

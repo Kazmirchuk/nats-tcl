@@ -501,18 +501,114 @@ oo::class create ::nats::jet_stream {
         return [dict get $response streams]
     }
 
-    ### KV STORE ###
+    ### Key-Value Store ###
 
-    method key_value {args} {
+    method bind_kv_bucket {bucket} {
+        my CheckBucketName $bucket
+        set stream "KV_${bucket}"
+
+        try {
+            set stream_info [my stream_info $stream]
+        } trap {NATS ErrJSResponse 404 10059} {} {
+            throw {NATS BucketNotFound} "Bucket ${bucket} not found"
+        }
+
+        return [::nats::key_value new $conn [self] $domain $bucket $stream_info $_timeout]
+    }
+
+    method create_kv_bucket {bucket args} {
+        my CheckBucketName $bucket
+        set stream "KV_${bucket}"
+
         nats::_parse_args $args {
-            check_bucket bool true
-            timeout pos_int 0
-            read_only bool false
+            history pos_int 1
+            storage valid_str file 
+            ttl pos_int 0
+            max_value_size int -1
+            max_bucket_size int -1
+            mirror_name valid_str null
+            mirror_domain valid_str null
         }
-        if {$timeout == 0} {
-            set timeout $_timeout
+
+        set options {
+            -storage file
+            -retention limits
+            -discard new
+            -max_msgs_per_subject 1
+            -num_replicas 1
+            -max_msgs -1
+            -max_msg_size -1
+            -max_bytes -1
+            -max_age 0
+            -duplicate_window 120000000000
+            -deny_delete 1
+            -deny_purge 0
+            -allow_rollup_hdrs 1
         }
-        return [::nats::key_value new $conn [self] $domain $timeout $check_bucket $read_only]
+
+        if {$history < 1} {
+            throw {NATS ErrInvalidArg} "history must be greater than 0"
+        }
+        if {$history > 64} {
+            throw {NATS ErrInvalidArg} "history must be less than 64"
+        }
+
+        dict set options -max_msgs_per_subject $history
+        dict set options -storage $storage
+        dict set options -max_age $ttl
+        dict set options -max_msg_size $max_value_size
+        dict set options -max_bytes $max_bucket_size
+
+        if {[info exists mirror_name]} {
+            set mirror_info [dict create name "KV_${mirror_name}"]
+            if {[info exists mirror_domain]} {
+                dict set mirror_info external api "\$JS.${mirror_domain}.API"
+            }
+            dict set options -mirror $mirror_info
+        }
+
+        if {![info exists mirror_name]} {
+            # when kv is mirroring it does not listen on normal subjects
+            set subject "\$KV.${bucket}.>"
+            lappend options -subjects $subject
+        }
+
+        set stream_info [my add_stream $stream {*}$options]
+
+        return [::nats::key_value new $conn [self] $domain $bucket $stream_info $_timeout]
+    }
+
+    method delete_kv_bucket {bucket} {
+        my CheckBucketName $bucket
+        set stream "KV_${bucket}"
+
+        try {
+            my delete_stream $stream
+        } trap {NATS ErrJSResponse 404 10059} {} {
+            throw {NATS BucketNotFound} "Bucket ${bucket} not found"
+        }
+
+        return
+    }
+
+    method kv_buckets {} {
+        set streams [my stream_names]
+        set kv_list [list]
+        foreach stream $streams {
+            if {[string range $stream 0 2] eq "KV_"} {
+                lappend kv_list [string range $stream 3 end]
+            }
+        }
+
+        return $kv_list
+    }
+
+    ### HELPERS ###
+
+    method CheckBucketName {bucket} {
+        if {![regexp {^[a-zA-Z0-9_-]+$} $bucket]} {
+            throw {NATS ErrInvalidArg} "Bucket \"$bucket\" is not valid bucket name"
+        }
     }
     
     # userCallback args: timedOut pubAck error

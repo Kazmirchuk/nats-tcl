@@ -9,7 +9,6 @@ set conn [nats::connection new]
 $conn configure -servers nats://localhost:4222
 $conn connect
 set js [$conn jet_stream]
-set kv [$js key_value]
 
 # cleanup if previous test has not cleaned up correctly
 set ls [execNatsCmd kv ls]
@@ -17,103 +16,43 @@ if {$bucket in $ls} {
     execNatsCmd kv del $bucket -f
 }
 
-########### DELETE ###########
+########### BIND ###########
 
-test key_value_mgmt-delete-1 "Delete bucket" -setup {
+test key_value_mgmt-bind-1 "Bind to bucket" -setup {
     execNatsCmd kv add $bucket
 } -body {
-    $kv del $bucket 
-
-    catch { exec nats kv info $bucket } err errOpts
-    set err
-} -result {nats: error: nats: bucket not found} -cleanup {
-    # make sure it is removed
-    execNatsCmd kv add $bucket
+    set kv [$js bind_kv_bucket $bucket]
+    return
+} -result "" -cleanup {
     execNatsCmd kv del $bucket -f
 }
 
-########### ADD ###########
-
-test key_value_mgmt-add-1 "Add bucket" -body {
-    set result [$kv add $bucket]
-
-    assert {[dict get $result did_create] eq "true"}
-    assert {[dict get $result config name] eq "KV_${bucket}"}
-    assert {[dict get $result config subjects] == {{$KV.MY_TEST_BUCKET.>}}}
-    assert {[dict get $result config storage] == "file"}
-    assert {[dict get $result config retention] == "limits"}
-    assert {[dict get $result config discard] == "new"}
-    assert {[dict get $result config max_msgs_per_subject] == 1}
-    assert {[dict get $result config num_replicas] == 1}
-    assert {[dict get $result config max_msgs] == -1}
-    assert {[dict get $result config max_msg_size] == -1}
-    assert {[dict get $result config max_bytes] == -1}
-    assert {[dict get $result config max_age] == 0}
-    assert {[dict get $result config duplicate_window] == 120000000000}
-    assert {[dict get $result config deny_delete] == "true"}
-    assert {[dict get $result config deny_purge] == "false"}
-    assert {[dict get $result config allow_rollup_hdrs] == "true"}
-
-    execNatsCmd kv info $bucket
-} -result "*Information for Key-Value Store Bucket $bucket*" -match glob -cleanup {
-    execNatsCmd kv del $bucket -f
-}
-
-test key_value_mgmt-add-2 "Add bucket with specified arguments" -body {
-    set result [$kv add $bucket -history 5 -storage memory -ttl 200000000000 -max_value_size 1000 -max_bucket_size 2000]
-
-    assert {[dict get $result did_create] eq "true"}
-    assert {[dict get $result config max_msgs_per_subject] == 5}
-    assert {[dict get $result config storage] == "memory"}
-    assert {[dict get $result config max_age] == 200000000000}
-    assert {[dict get $result config num_replicas] == 1}
-    assert {[dict get $result config max_msg_size] == 1000}
-    assert {[dict get $result config max_bytes] == 2000}
-
-    execNatsCmd kv info $bucket
-} -result "*Information for Key-Value Store Bucket $bucket*" -match glob -cleanup {
-    execNatsCmd kv del $bucket -f
-}
-
-test key_value_mgmt-add-3 "Throw when adding bucket with unknown arguments" -body {
+test key_value_mgmt-bind-2 "Throw when binding to non existing bucket" -body {
     if {![catch {
-        $kv add $bucket -unknown something
+        $js bind_kv_bucket "non-existing-bucket"
     } err errOpts]} {
         throw {TEST DidNotThrow} "Did not throw"
     }
-    assert {[dict get $errOpts -errorcode] eq {NATS ErrInvalidArg}}
+    assert {[dict get $errOpts -errorcode] eq {NATS BucketNotFound}}
     set err
-} -result {*Unknown option*} -match glob
+} -result "Bucket non-existing-bucket not found"
 
-test key_value_mgmt-add-4 "Throw when adding bucket with wrong -history argument" -body {
-    if {![catch {
-        $kv add $bucket -history 0
-    } err errOpts]} {
-        throw {TEST DidNotThrow} "Did not throw"
-    }
-    assert {[dict get $errOpts -errorcode] eq {NATS ErrInvalidArg}}
-    set err
-} -result {history must be greater than 0}
+########### CREATE ###########
 
-########### INFO ###########
+test key_value_mgmt-create-1 "Create bucket and check its info" -body {
+    set kv [$js create_kv_bucket $bucket]
+    set status [$kv status]
 
-test key_value_mgmt-info-1 "Get bucket information" -setup {
-    execNatsCmd kv add $bucket
-    execNatsCmd kv put $bucket key1 value11
-    execNatsCmd kv put $bucket key1 value12
-    execNatsCmd kv put $bucket key2 value2
-} -body {
-    set response [$kv info $bucket]
-    set store_config [dict get $response store_config]
-    set store_state [dict get $response store_state]
-    set created [dict get $response created]
+    set store_config [dict get $status store_config]
+    set store_state [dict get $status store_state]
+    set created [dict get $status created]
 
     # "created" date is almost "now"
     assert {abs([clock milliseconds] - $created) < 5000}
 
-    dict unset response store_config
-    dict unset response store_state
-    dict unset response created
+    dict unset status store_config
+    dict unset status store_state
+    dict unset status created
 
     # get the same info from NATS CLI and check that they are in line
     set cli_info [json::json2dict [execNatsCmd stream info -j KV_${bucket}]]
@@ -126,12 +65,11 @@ test key_value_mgmt-info-1 "Get bucket information" -setup {
 
     nats::_ns2ms cli_config duplicate_window max_age
     set cli_state [dict get $cli_info state]
-    assert {[dict get $store_state messages] == 2}
-    assert {[dict get $store_state num_subjects] == 2}
+    assert {[dict get $store_state messages] == 0}
 
     assert {[dict_in $store_config $cli_config]}
     assert {[dict_in $store_state $cli_state]}
-    assert {[dict_in $response [dict create \
+    assert {[dict_in $status [dict create \
         bucket $bucket \
         stream KV_${bucket} \
         storage file \
@@ -139,75 +77,83 @@ test key_value_mgmt-info-1 "Get bucket information" -setup {
         ttl 0 \
         max_value_size -1 \
         max_bucket_size -1 \
-        values_stored 2 \
-        bytes_stored 119 \
+        values_stored 0 \
+        bytes_stored 0 \
         backing_store JetStream]]}
-} -cleanup {
+
+    execNatsCmd kv info $bucket
+} -result "*Information for Key-Value Store Bucket $bucket*" -match glob -cleanup {
+    execNatsCmd kv del $bucket -f
+}
+
+test key_value_mgmt-create-2 "Create bucket with specified arguments" -body {
+    set kv [$js create_kv_bucket $bucket -history 5 -storage memory -ttl 200000000000 -max_value_size 1000 -max_bucket_size 2000]
+    set status [$kv status]
+
+    assert {[dict get $status history] == 5}
+    assert {[dict get $status storage] == "memory"}
+    assert {[dict get $status ttl] == 200000000000}
+    assert {[dict get $status max_value_size] == 1000}
+    assert {[dict get $status max_bucket_size] == 2000}
+
+    execNatsCmd kv info $bucket
+} -result "*Information for Key-Value Store Bucket $bucket*" -match glob -cleanup {
+    execNatsCmd kv del $bucket -f
+}
+
+test key_value_mgmt-create-3 "Throw when creating bucket with unknown arguments" -body {
+    if {![catch {
+        $js create_kv_bucket $bucket -unknown something
+    } err errOpts]} {
+        throw {TEST DidNotThrow} "Did not throw"
+    }
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrInvalidArg}}
+    set err
+} -result {*Unknown option*} -match glob
+
+test key_value_mgmt-create-4 "Throw when creating bucket with wrong -history argument" -body {
+    if {![catch {
+        $js create_kv_bucket $bucket -history 0
+    } err errOpts]} {
+        throw {TEST DidNotThrow} "Did not throw"
+    }
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrInvalidArg}}
+    set err
+} -result "history must be greater than 0"
+
+########### DELETE ###########
+
+test key_value_mgmt-delete-1 "Delete bucket" -setup {
+    execNatsCmd kv add $bucket
+} -body {
+    $js delete_kv_bucket $bucket 
+
+    catch { exec nats kv info $bucket } err errOpts
+    set err
+} -result {nats: error: nats: bucket not found} -cleanup {
+    # make sure it is removed
+    execNatsCmd kv add $bucket
     execNatsCmd kv del $bucket -f
 }
 
 ########### LIST ###########
 
 test key_value_mgmt-list-1 "List buckets with no actual buckets" -body {
-    $kv ls
+    $js kv_buckets
 } -result ""
 
 test key_value_mgmt-list-2 "List buckets" -setup {
     execNatsCmd kv add test1
     execNatsCmd kv add test2
 } -body {
-    $kv ls 
+    $js kv_buckets 
 } -result "test1 test2" -cleanup {
     execNatsCmd kv del test1 -f
     execNatsCmd kv del test2 -f
 }
 
-########### KEYS ###########
-
-test key_value_mgmt-keys-1 "List keys" -setup {
-    execNatsCmd kv add $bucket
-    execNatsCmd kv put $bucket k1 val1
-    execNatsCmd kv put $bucket k2 val2
-} -body {
-    $kv keys $bucket 
-} -result "k1 k2" -cleanup {
-    execNatsCmd kv del $bucket -f
-}
-
-test key_value_mgmt-keys-2 "List keys for empty bucket returns empty array" -setup {
-    execNatsCmd kv add $bucket
-} -body {
-    $kv keys $bucket 
-} -result "" -cleanup {
-    execNatsCmd kv del $bucket -f
-}
-
-test key_value_mgmt-keys-3 "List keys for deleted entries should not return them" -setup {
-    execNatsCmd kv add $bucket
-    execNatsCmd kv put $bucket k1 val1
-    execNatsCmd kv del -f $bucket k1
-    execNatsCmd kv put $bucket k2 val2
-    execNatsCmd kv put $bucket k3 val1
-    execNatsCmd kv purge -f $bucket k3
-} -body {
-    $kv keys $bucket 
-} -result "k2" -cleanup {
-    execNatsCmd kv del -f $bucket
-}
-
-test key_value_mgmt-keys-4 "Throws when there is no bucket" -body {
-    if {![catch {
-        $kv keys non-existing-bucket
-    } err errOpts]} {
-        throw {TEST DidNotThrow} "Did not throw"
-    }
-    assert {[dict get $errOpts -errorcode] eq {NATS BucketNotFound}}
-    set err
-} -result {Bucket non-existing-bucket not found}
-
 # CLEANUP
 
-$kv destroy
 $js destroy
 $conn destroy
 stopNats NATS_JS

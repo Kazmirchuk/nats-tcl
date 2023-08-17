@@ -33,7 +33,10 @@ JetStream functionality of NATS can be accessed by creating the `nats::jet_strea
 [*js* stream_msg_get *stream* ?-last_by_subj *subj*? ?-next_by_subj *subj*? ?-seq *int*?](#js-stream_msg_get-stream--last_by_subj-subj--next_by_subj-subj--seq-int)<br/>
 [*js* stream_msg_delete *stream* -seq *sequence* ?-no_erase *no_erase*?](#js-stream_msg_delete-stream--seq-sequence--no_erase-no_erase)<br/>
 
-[*js* key_value ?-timeout *ms*? ?-check_bucket *enabled*? ?-read_only *enabled*?](#js-key_value--timeout-ms--check_bucket-enabled--read_only-enabled) <br/>
+[*js* bind_kv_bucket *bucket*](#js-bind_kv_bucket-bucket) <br/>
+[*js* create_kv_bucket *bucket* ?-history *history*? ?-storage *storage*? ?-ttl *ttl*? ?-max_value_size *max_value_size*? ?-max_bucket_size *max_bucket_size*? ?-mirror_name *mirror_name*? ?-mirror_domain *mirror_domain*?](#js-create_kv_bucket-bucket--history-history--storage-storage--ttl-ttl--max_value_size-max_value_size--max_bucket_size-max_bucket_size--mirror_name-mirror_name--mirror_domain-mirror_domain) <br/>
+[*js* delete_kv_bucket *bucket*](#js-delete_kv_bucket-bucket) <br/>
+[*js* kv_buckets *bucket*](#js-kv_buckets) <br/>
 
 [*js* destroy](#js-destroy)<br/>
 
@@ -250,8 +253,21 @@ Returns a list of all consumers defined on this stream.
 'Direct Get' a message from stream `stream` by given `subject` or `sequence`. See also [ADR-31](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-31.md).
 ### js stream_msg_delete *stream* -seq *int* ?-no_erase *no_erase*?
 Delete message from `stream` with the given `sequence` number.
-### *js* key_value ?-timeout *ms*? ?-check_bucket *enabled*? ?-read_only *enabled*?
-This 'factory' method creates [keyValueObject](KvAPI.md) to work with Key-Value stores. `-timeout` (default value is get from JS object) is applied to `history` and `keys` requests to Key-Value NATS API. For the rest of requests `timeout` from JS and basic nats connection is used. `-check_bucket` (default true) takes care of checking if bucket exists or is mirror of another bucket, before sending requests to one. If it is disabled and given bucket does not exists than timeout will be fired (or `NoResponders`) instead of throwing a `BucketNotFound` error (check [KvAPI](KvAPI.md#implementation-information) for more information). `-timeout` and `-check_bucket` can be overridden for some functions. `-read_only` (default false) can disable ability to modify buckets and keys.
+### *js* bind_kv_bucket *bucket*
+This 'factory' method creates [KeyValueObject](KvAPI.md) to work with given bucket. If bucket does not exists than `BucketNotFound` error is raised.
+### *js* create_kv_bucket *bucket* ?-history *history*? ?-storage *storage*? ?-ttl *ttl*? ?-max_value_size *max_value_size*? ?-max_bucket_size *max_bucket_size*? ?-mirror_name *mirror_name*? ?-mirror_domain *mirror_domain*?
+Creates new KV Bucket `bucket` and binds to it returning [KeyValueObject](KvAPI.md). If bucket already exists with the same parameters `create_kv_bucket` only binds to it. It can be configured using following parameters:
+- `history` - default `1`, how many messages per key should be kept. By default only last one is preserved,
+- `storage` - default `file`,
+- `ttl` - default `-1`, how long the bucket keeps values for,
+- `max_value_size` - default `-1`, what is max size of message (bytes),
+- `max_bucket_size` - default `-1`, max `bucket` size can be configured.
+- `mirror_name` - creates a mirror of a different bucket,
+- `mirror_domain` - when mirroring find the bucket in a different domain.
+### *js* delete_kv_bucket *bucket*
+Deletes entire bucket.
+### *js* kv_buckets
+List available buckets.
 ### js destroy
 TclOO destructor. Remember to call it before destroying the parent `nats::connection`.
 

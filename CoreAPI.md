@@ -12,10 +12,10 @@ All commands are defined in and exported from the `::nats` namespace.
 [*objectName* disconnect](#objectName-disconnect) <br/>
 [*objectName* publish *subject message* ?-reply *replyTo*?](#objectname-publish-subject-message--reply-replyto) <br/>
 [*objectName* publish_msg *msg*](#objectname-publish_msg-msg) <br/>
-[*objectName* subscribe *subject ?-queue queueGroup? ?-callback cmdPrefix? ?-max_msgs maxMsgs? ?-dictmsg dictmsg?*](#objectName-subscribe-subject--queue-queueGroup--callback-cmdPrefix--max_msgs-maxMsgs--dictmsg-dictmsg) <br/>
-[*objectName* unsubscribe *subID ?-max_msgs maxMsgs?*](#objectName-unsubscribe-subID--max_msgs-maxMsgs) <br/>
+[*objectName* subscribe *subject* ?-queue *queueGroup*? ?-callback *cmdPrefix*? ?-max_msgs *maxMsgs*? ?-dictmsg *dictmsg?*](#objectName-subscribe-subject--queue-queueGroup--callback-cmdPrefix--max_msgs-maxMsgs--dictmsg-dictmsg) <br/>
+[*objectName* unsubscribe *subID* ?-max_msgs *maxMsgs*?](#objectName-unsubscribe-subID--max_msgs-maxMsgs) <br/>
 [*objectName* request *subject message ?args?*](#objectName-request-subject-message-args) <br/>
-[*objectName* request_msg msg ?-timeout *ms* ?-callback *cmdPrefix*? ?-dictmsg *dictmsg*?](#objectname-request_msg-msg--timeout-ms--callback-cmdprefix--dictmsg-dictmsg)<br/>
+[*objectName* request_msg *msg* ?-timeout *ms* ?-callback *cmdPrefix*? ?-dictmsg *dictmsg*?](#objectname-request_msg-msg--timeout-ms--callback-cmdprefix--dictmsg-dictmsg)<br/>
 [*objectName* ping ?-timeout *ms*?](#objectName-ping--timeout-ms) <br/>
 [*objectName* inbox](#objectName-inbox) <br/>
 [*objectName* current_server](#objectName-current_server) <br/>
@@ -140,7 +140,7 @@ Subscribes to a subject (possibly with wildcards) and returns a subscription ID.
 **subscriptionCallback** *subject message replyTo*<br/>
 
 If you use the [-queue option](https://docs.nats.io/developing-with-nats/receiving/queues), only one subscriber in a given queueGroup will receive each message (useful for load balancing). When given `-max_msgs`, the client will automatically unsubscribe after `maxMsgs` messages have been received.<br />
-By default, only a payload is delivered in `message`. Use `-dictmsg true` to receive `message` as a dict, e.g. to access headers. You can also `configure` the connection to have `-dictmsg` as true by default.
+By default, only a payload is delivered in `message`. Use `-dictmsg true` to receive `message` as a dict, e.g. to access headers using the `nats::msg` ensemble. You can also `configure` the connection to have `-dictmsg` as true by default.
 
 ### objectName unsubscribe *subID* ?-max_msgs *maxMsgs*? 
 Unsubscribes from a subscription with a given `subID` immediately. If `-max_msgs` is given, unsubscribes after this number of messages has been received **on this `subID`**. In other words, if you have already received 10 messages, and then you call `unsubscribe $subID -max_msgs 10`, you will be unsubscribed immediately.
@@ -150,7 +150,7 @@ Sends `message` (payload) to the specified `subject` with an automatically gener
 
 You can provide the following options:
 - `-timeout ms` - expire the request after X ms (recommended!). Default timeout is infinite.
-- `-callback cmdPrefix` - do not block and deliver the reply to this callback
+- `-callback cmdPrefix` - do not block and deliver the reply to this callback.
 - `-dictmsg dictmsg` - return the reply as a dict accessible to the [nats::msg](#natsmsg) ensemble.
 - `-max_msgs maxMsgs` - gather multiple replies. If this option is not used, the 'new-style' request is triggered under the hood (uses a shared subscription for all requests), and only the first reply is returned. If this option is used (even with `maxMsgs`=1), it triggers the 'old-style' request that creates its own subscription. `-dictmsg` is always true in this case.
 

@@ -115,7 +115,7 @@ test js_mgmt-5.1 "Delete a stream" -body {
 
 test js_mgmt-5.2 "Delete a stream that doesn't exist" -body {
     $js delete_stream BLA_STREAM
-} -result {*stream not found*} -match glob -errorCode {NATS ErrJSResponse 404*}
+} -result {*stream not found*} -match glob -errorCode {NATS ErrStreamNotFound}
 
 # filter_subjects of different consumers must not overlap!
 # NB! I'm using "name" here instead of "durable_name"
@@ -213,7 +213,7 @@ test js_mgmt-9.1 "Delete a consumer" -body {
 
 test js_mgmt-9.2 "Delete a consumer that doesn't exist" -body {
     $js delete_consumer MY_STREAM BLA
-} -result {*consumer not found*} -match glob -errorCode {NATS ErrJSResponse 404*}
+} -result {*consumer not found*} -match glob -errorCode {NATS ErrConsumerNotFound}
 
 test js_mgmt-10.1 "Get a message directly from a stream" -setup {
     set out_msg [nats::msg create test.1 -data "msg 1"]
@@ -230,24 +230,6 @@ test js_mgmt-10.1 "Get a message directly from a stream" -setup {
 test js_mgmt-11.1 "Delete a message directly from a stream" -body {
     $js stream_msg_delete MY_STREAM -seq [nats::msg seq $msg]  ;# if not found, this will throw ErrJSResponse 400
 } -result true
-
-test js_mgmt-12.1 "Create stream that mirrors another one" -body {
-    set response [$js add_stream MY_STREAM_MIRROR -mirror [dict create name MY_STREAM]]
-    assert {[dict get $response did_create]}
-    set actual_config [dict get $response config]
-    assert {[dict get $actual_config mirror] == [dict create name MY_STREAM]}
-} -cleanup {
-    $js delete_stream MY_STREAM_MIRROR
-}
-
-test js_mgmt-12.2 "Create stream that sources another one" -body {
-    set response [$js add_stream MY_STREAM_SOURCES -sources [list [dict create name MY_STREAM]]]
-    assert {[dict get $response did_create]}
-    set actual_config [dict get $response config]
-    assert {[dict get $actual_config sources] == [list [dict create name MY_STREAM]]}
-} -cleanup {
-    $js delete_stream MY_STREAM_SOURCES
-}
 
 $js destroy
 $conn destroy

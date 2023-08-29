@@ -1,7 +1,8 @@
+# Copyright (c) 2023 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2023 ANT Solutions https://antsolutions.eu/
+
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
-
-namespace eval ::nats {}
 
 # based on https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-8.md
 oo::class create ::nats::key_value {
@@ -807,4 +808,15 @@ oo::class create ::nats::key_value {
             throw {NATS ErrInvalidArg} "Key \"$key\" is not valid key name"
         }
     }
+}
+# 2023-05-30T07:06:22.864305Z to milliseconds
+proc ::nats::time_to_millis {time} {
+  set seconds 0
+  if {[regexp -all {^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2}).(\d+)Z$} $time -> year month day hour minute second micro]} {
+    scan [string range $micro 0 2] %d millis ;# could be "081" that would be treated as octal number
+    set seconds [clock scan "${year}-${month}-${day} ${hour}:${minute}:${second}" -format "%Y-%m-%d %T" -gmt 1]
+    return  [expr {$seconds *  1000 + $millis}]
+  }
+
+  throw {NATS InvalidTime} "Invalid time format ${time}"
 }

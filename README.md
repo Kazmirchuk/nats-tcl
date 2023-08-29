@@ -44,8 +44,8 @@ If you are using a "batteries-included" Tcl distribution, like [Magicsplat](http
 - Queue groups
 - Gather multiple responses to a request
 - Publishing and consuming messages from JetStream, providing "at least once" or "exactly once" delivery guarantee
-- Management of JetStream streams and consumers
-- Support for JetStream based Key-Value Stores
+- Management of JetStream streams, consumers and Key-Value buckets
+- Key-Value store, including watchers
 - Standard `configure` method with many options
 - Protected connections using TLS
 - Automatic reconnection in case of network or server failure

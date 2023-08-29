@@ -34,7 +34,7 @@ JetStream functionality of NATS can be accessed by creating the `nats::jet_strea
 [*js* stream_msg_delete *stream* -seq *sequence* ?-no_erase *no_erase*?](#js-stream_msg_delete-stream--seq-sequence--no_erase-no_erase)<br/>
 
 [*js* bind_kv_bucket *bucket*](#js-bind_kv_bucket-bucket) <br/>
-[*js* create_kv_bucket *bucket* ?-history *history*? ?-storage *storage*? ?-ttl *ttl*? ?-max_value_size *max_value_size*? ?-max_bucket_size *max_bucket_size*? ?-mirror_name *mirror_name*? ?-mirror_domain *mirror_domain*?](#js-create_kv_bucket-bucket--history-history--storage-storage--ttl-ttl--max_value_size-max_value_size--max_bucket_size-max_bucket_size--mirror_name-mirror_name--mirror_domain-mirror_domain) <br/>
+[*js* create_kv_bucket *bucket* ?-option *value*?..](#js-create_kv_bucket-bucket--option-value) <br/>
 [*js* delete_kv_bucket *bucket*](#js-delete_kv_bucket-bucket) <br/>
 [*js* kv_buckets *bucket*](#js-kv_buckets) <br/>
 
@@ -169,36 +169,33 @@ Returns a dict with metadata of the message. It is extracted from the reply-to f
 ### js cancel_pull_request *reqID*
 Cancels the asynchronous pull request with the given `reqID`.
 ### js add_stream *stream* ?-option *value*?..
-Create or update a `stream` with configuration specified as option-value pairs. See the [official docs](https://docs.nats.io/nats-concepts/jetstream/streams#configuration) for explanation of these options.
-| Option        | Type   | Default | Info |
-| ------------- |--------|---------|------|
-| -description  | string |         |      |
-| -subjects     | list of strings  | (required)| Is not required if `-mirror` or `-subject` options are present.   |
-| -retention    | one of: limits, interest,<br/> workqueue |limits |    |
-| -max_consumers  | int |         |   |
-| -max_msgs  | int |         |    |
-| -max_bytes  | int |         |   |
-| -discard  | one of: new, old | old |    |
-| -max_age  | ms |         |    |
-| -max_msgs_per_subject  | int |         |    |
-| -max_msg_size  | int |         |    |
-| -storage  | one of: memory, file | file |   |
-| -num_replicas  | int |         |    |
-| -no_ack  | boolean |         |    |
-| -duplicate_window  | ms |         |   |
-| -sealed  | boolean |         |    |
-| -deny_delete  | boolean |         |   |
-| -deny_purge  | boolean |         |    |
-| -allow_rollup_hdrs  | boolean |         |   |
-| -allow_direct  | boolean |         |    |
-| -mirror_direct  | boolean |         |   |
-| -mirror  | dict |         | Should have `name` key (which JetStream to copy from) and can also have `external` key as another dict with `api` key (in order to copy from another domain). For example: `{name js_to_mirror external {api $JS.other_domain.API}}` (`\$JS` is special api prefix).   |
-| -sources  | list of dicts |         | Dicts should be the same as with `-mirror` option.   |
-
+Creates or updates a `stream` with configuration specified as option-value pairs. See the [official docs](https://docs.nats.io/nats-concepts/jetstream/streams#configuration) for explanation of these options.
+| Option        | Type   | Default |
+| ------------- |--------|---------|
+| -description  | string |         |
+| -subjects     | list of strings  | (required)|
+| -retention    | one of: limits, interest,<br/> workqueue |limits |
+| -max_consumers  | int |         |
+| -max_msgs  | int |         |
+| -max_bytes  | int |         |
+| -discard  | one of: new, old | old |
+| -max_age  | ms |         |
+| -max_msgs_per_subject  | int |         |
+| -max_msg_size  | int |         |
+| -storage  | one of: memory, file | file |
+| -num_replicas  | int |         |
+| -no_ack  | boolean |         |
+| -duplicate_window  | ms |         |
+| -sealed  | boolean |         |
+| -deny_delete  | boolean |         |
+| -deny_purge  | boolean |         |
+| -allow_rollup_hdrs  | boolean |         |
+| -allow_direct  | boolean |         |
+| -mirror_direct  | boolean |         |
 
 Returns a JetStream response as a dict.
 ### js add_stream_from_json *json_config*
-Create or update a stream with configuration specified as JSON. The stream name is taken from the JSON.
+Creates or updates a stream with configuration specified as JSON. The stream name is taken from the JSON.
 ### js delete_stream *stream*
 Deletes the stream.
 ### js purge_stream *stream* ?-filter *subject*? ?-keep *int*? ?-seq *int*?
@@ -208,7 +205,7 @@ Returns stream information as a dict.
 ### js stream_names ?-subject *subject*?
 Returns a list of all streams or the streams matching the filter.
 ### js add_consumer *stream* ?-option *value*?..
-Create or update a pull or push consumer defined on `stream`. See the [official docs](https://docs.nats.io/nats-concepts/jetstream/consumers#configuration) for explanation of these options.
+Creates or updates a pull or push consumer defined on `stream`. See the [official docs](https://docs.nats.io/nats-concepts/jetstream/consumers#configuration) for explanation of these options.
 | Option        | Type   | Default |
 | ------------- |--------|---------|
 | -name | string | |
@@ -242,7 +239,7 @@ A shortcut for `add_consumer` to create a durable pull consumer. Rest of `args` 
 ### js add_push_consumer *stream consumer deliver_subject ?args?*
 A shortcut for `add_consumer` to create a durable push consumer. Rest of `args` are the same as above.
 ### js add_consumer_from_json *stream consumer json_config*
-Create or update a `consumer` defined on a `stream` with configuration specified as JSON.
+Creates or updates a `consumer` defined on a `stream` with configuration specified as JSON.
 ### js delete_consumer *stream consumer*
 Deletes the consumer.
 ### js consumer_info *stream consumer*
@@ -252,26 +249,43 @@ Returns a list of all consumers defined on this stream.
 ### js stream_msg_get *stream* ?-last_by_subj *subj*? ?-next_by_subj *subj*? ?-seq *int*?
 'Direct Get' a message from stream `stream` by given `subject` or `sequence`. See also [ADR-31](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-31.md).
 ### js stream_msg_delete *stream* -seq *int* ?-no_erase *no_erase*?
-Delete message from `stream` with the given `sequence` number.
-### *js* bind_kv_bucket *bucket*
-This 'factory' method creates [KeyValueObject](KvAPI.md) to work with given bucket. If bucket does not exists than `BucketNotFound` error is raised.
-### *js* create_kv_bucket *bucket* ?-history *history*? ?-storage *storage*? ?-ttl *ttl*? ?-max_value_size *max_value_size*? ?-max_bucket_size *max_bucket_size*? ?-mirror_name *mirror_name*? ?-mirror_domain *mirror_domain*?
-Creates new KV Bucket `bucket` and binds to it returning [KeyValueObject](KvAPI.md). If bucket already exists with the same parameters `create_kv_bucket` only binds to it. It can be configured using following parameters:
-- `history` - default `1`, how many messages per key should be kept. By default only last one is preserved,
-- `storage` - default `file`,
-- `ttl` - default `-1`, how long the bucket keeps values for,
-- `max_value_size` - default `-1`, what is max size of message (bytes),
-- `max_bucket_size` - default `-1`, max `bucket` size can be configured.
-- `mirror_name` - creates a mirror of a different bucket,
-- `mirror_domain` - when mirroring find the bucket in a different domain.
-### *js* delete_kv_bucket *bucket*
-Deletes entire bucket.
-### *js* kv_buckets
-List available buckets.
+Deletes a message from `stream` with the given `sequence` number.
+### js bind_kv_bucket *bucket*
+This 'factory' method creates [KeyValueObject](KvAPI.md) to access the `bucket`.
+### js create_kv_bucket *bucket* ?-option *value*?..
+Creates or updates a Key-Value `bucket` with configuration specified as option-value pairs. See the [official docs](https://docs.nats.io/nats-concepts/jetstream/key-value-store) and [ADR-8](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-8.md) for explanation of these options.
+| Option        | Type   | Default |
+| ------------- |--------|---------|
+| -description | string | |
+| -max_value_size | int | |
+| -history | int | 1 |
+| -ttl | ms | |
+| -max_bucket_size | int | |
+| -storage | one of: memory, file | file |
+| -num_replicas | int | 1 |
+| -mirror_name | string | |
+| -mirror_domain | string| |
+
+To create a mirror of a different bucket, use `-mirror_name`. If this bucket is in another domain, use `-mirror_domain` as well.
+
+Returns [KeyValueObject](KvAPI.md).
+### js delete_kv_bucket *bucket*
+Deletes the bucket.
+### js kv_buckets
+Returns a list of all Key-Value buckets.
 ### js destroy
 TclOO destructor. Remember to call it before destroying the parent `nats::connection`.
 
 ## Error handling
-In addition to all core NATS errors, the `jet_stream` methods may throw `ErrJSResponse` if JetStream API has returned an error. The Tcl error code will contain also JetStream `code` and `err_code`. JetStream `description` will be used for the error message. See also [ADR-1](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-1.md#error-response).
+In addition to all core NATS errors, the `jet_stream` methods may throw additional errors:
 
-Note that if JetStream is not enabled in the NATS server, all requests to JetStream API will throw `ErrNoResponders`. This is different from official NATS clients that replace it with `ErrJetStreamNotEnabled`. I don't see much value in doing this in the Tcl client.
+| Error     | Reason   | 
+| ------------- |--------|
+| ErrJetStreamNotEnabled | JetStream is not enabled in the NATS server |
+| ErrStreamNotFound | Stream does not exist |
+| ErrConsumerNotFound | Consumer does not exist |
+| ErrBucketNotFound | Bucket does not exist |
+| ErrJSResponse | Other JetStream error. `code` and `err_code` is passed in the Tcl error code and `description` is used for the error message. |
+ 
+ See also [ADR-1](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-1.md#error-response).
+

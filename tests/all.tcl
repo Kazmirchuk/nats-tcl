@@ -5,10 +5,17 @@
 
 package require tcltest 2.5  ;# -errorCode option is relatively recent - make sure it's available
 
+# called automatically by tcltest::cleanupTests
+proc tcltest::cleanupTestsHook {} {
+    # ensure each test starts with an empty JetStream
+    file delete -force [file join [tcltest::temporaryDirectory] jetstream]
+}
+
 set thisDir [file dirname [file normalize [info script]]]
-cd $thisDir
-# by default, -tmpdir is the same as -testdir
-tcltest::configure -testdir $thisDir -verbose pe {*}$argv
+# doing a simple [cd] and -testdir is enough for the tests to work
+# but [workingDirectory] and -tmpdir are needed for an accurate output header
+tcltest::workingDirectory $thisDir
+tcltest::configure -testdir $thisDir -tmpdir $thisDir -verbose pe {*}$argv
 # Default is -singleproc 0, so every .test file is run in a subprocess
 # PROs:
 # - isolation of global variables etc

@@ -13,19 +13,20 @@ package require json::write
 package require oo::util
 package require coroutine
 
+# optional packages
+catch {package require tls}
+if {$::tcl_platform(platform) eq "windows"} {
+    catch {package require iocp_inet}
+}
+
 namespace eval ::nats {
     # improvised enum
     variable status_closed "closed"
     variable status_connecting "connecting"
     variable status_connected "connected"
     variable status_reconnecting "reconnecting"
-    
-    # optional packages
-    catch {package require tls}
-    if {$::tcl_platform(platform) eq "windows"} {
-        catch {package require iocp_inet}
-    }
 }
+
 # all options for "configure"
 set ::nats::_option_spec {
     servers valid_str ""
@@ -1346,18 +1347,6 @@ proc ::nats::timestamp {} {
                 [expr {$t % 1000}] ]
 }
 
-# 2023-05-30T07:06:22.864305Z to milliseconds
-proc ::nats::time_to_millis {time} {
-  set seconds 0
-  if {[regexp -all {^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2}).(\d+)Z$} $time -> year month day hour minute second micro]} {
-    scan [string range $micro 0 2] %d millis ;# could be "081" that would be treated as octal number
-    set seconds [clock scan "${year}-${month}-${day} ${hour}:${minute}:${second}" -format "%Y-%m-%d %T" -gmt 1]
-    return  [expr {$seconds *  1000 + $millis}]
-  }
-
-  throw {NATS InvalidTime} "Invalid time format ${time}"
-}
-
 # ------------------------ all following procs are private! --------------------------------------
 proc ::nats::_coroVwait {var} {
     if {[info coroutine] eq ""} {
@@ -1537,5 +1526,5 @@ namespace eval ::nats {
 
 # Let me respectfully remind you:
 # Birth and death are of supreme importance.
-# Time swiftly passes and opportunity is lost.
+# Time swiftly passes by and opportunity is lost.
 # Do not squander your life!

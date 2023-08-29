@@ -5,10 +5,8 @@
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
 oo::class create ::nats::jet_stream {
-    variable conn _timeout api_prefix pull_reqs
+    variable conn _timeout api_prefix pull_reqs domain
 
-    variable domain
-    
     # do NOT call directly! instead use [$connection jet_stream]
     constructor {c t d} {
         set conn $c
@@ -31,19 +29,18 @@ oo::class create ::nats::jet_stream {
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_msg_get_request
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_msg_get_response
     method stream_msg_get {stream args} {
-        set spec {
-            last_by_subj      {type valid_str default null}
-            next_by_subj      {type valid_str default null}
-            seq               {type int default null}
-        }
+        set spec {last_by_subj valid_str null
+                  next_by_subj valid_str null
+                  seq          int null}
 
         set response [my ApiRequest "STREAM.MSG.GET.$stream" [nats::_dict2json $spec $args]]
         set encoded_msg [dict get $response message] ;# it is encoded in base64
         set data [binary decode base64 [dict lookup $encoded_msg data]]
-        set msg [nats::msg create [dict get $encoded_msg subject] -data $data]
         if {[$conn cget -utf8_convert]} {
-            set msg [encoding convertfrom utf-8 $msg]
+            set data [encoding convertfrom utf-8 $data]
         }
+        set msg [nats::msg create [dict get $encoded_msg subject] -data $data]
+        
         dict set msg seq [dict get $encoded_msg seq]
         dict set msg time [dict get $encoded_msg time]
         set header [binary decode base64 [dict lookup $encoded_msg hdrs]]
@@ -55,10 +52,8 @@ oo::class create ::nats::jet_stream {
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_msg_delete_request
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_msg_delete_response
     method stream_msg_delete {stream args} {
-        set spec {
-            no_erase      {type bool default null}
-            seq           {type int default NATS_TCL_REQUIRED}
-        }
+        set spec {no_erase bool null
+                  seq      int  NATS_TCL_REQUIRED}
         set response [my ApiRequest "STREAM.MSG.DELETE.$stream" [nats::_dict2json $spec $args]]
         return [dict get $response success]
     }
@@ -394,51 +389,35 @@ oo::class create ::nats::jet_stream {
     method add_stream {stream args} {
         # follow the same order of fields as in https://github.com/nats-io/nats.py/blob/main/nats/js/api.py
         set spec {
-            name                    {type valid_str default NATS_TCL_REQUIRED}
-            description             {type valid_str default null}
-            subjects                {type list default null}
-            retention               {type {enum limits interest workqueue} default limits}
-            max_consumers           {type int default null}
-            max_msgs                {type int default null}
-            max_bytes               {type int default null}
-            discard                 {type {enum new old} default old}
-            max_age                 {type ns default null}
-            max_msgs_per_subject    {type int default null}
-            max_msg_size            {type int default null}
-            storage                 {type {enum memory file} default file}
-            num_replicas            {type int default null}
-            no_ack                  {type bool default null}
-            duplicate_window        {type ns default null}
-            sealed                  {type bool default null}
-            deny_delete             {type bool default null}
-            deny_purge              {type bool default null}
-            allow_rollup_hdrs       {type bool default null}
-            allow_direct            {type bool default null}
-            mirror                  {type object default null spec {
-                name {type valid_str default null}
-                external {type object default null spec {
-                    api {type valid_str default null}
-                }}
-            }}
-            sources                 {type object_list default null spec {
-                name {type valid_str default null}
-                external {type object default null spec {
-                    api {type valid_str default null}
-                }}
-            }}
+            name                    valid_str NATS_TCL_REQUIRED
+            description             valid_str null
+            subjects                list null
+            retention               {enum limits interest workqueue} limits
+            max_consumers           int null
+            max_msgs                int null
+            max_bytes               int null
+            discard                 {enum new old} old
+            max_age                 ns null
+            max_msgs_per_subject    int null
+            max_msg_size            int null
+            storage                 {enum memory file} file
+            num_replicas            int null
+            no_ack                  bool null
+            duplicate_window        ns null
+            sealed                  bool null
+            deny_delete             bool null
+            deny_purge              bool null
+            allow_rollup_hdrs       bool null
+            allow_direct            bool null
+            _mirror                 json null
         }
 
         if {![my CheckFilenameSafe $stream]} {
             throw {NATS ErrInvalidArg} "Invalid stream name $stream"
         }
         dict set args name $stream
-
-        set flags [lmap flag [dict keys $args] {string trimleft $flag "-"}]
-        if {"subjects" ni $flags && "mirror" ni $flags && "sources" ni $flags} {
-            # for mirroring or sourcing subjects are not required
-            throw {NATS ErrInvalidArg} "Stream should have subjects defined"
-        }
-
+        # -subjects is normally also required unless we have -mirror or -sources
+        # rely on NATS server to check it
         set response [my ApiRequest "STREAM.CREATE.$stream" [nats::_dict2json $spec $args]]
         # response fields: config, created (timestamp), state, did_create
         set result_config [dict get $response config]
@@ -501,113 +480,99 @@ oo::class create ::nats::jet_stream {
         return [dict get $response streams]
     }
 
-    ### Key-Value Store ###
-
     method bind_kv_bucket {bucket} {
         my CheckBucketName $bucket
         set stream "KV_${bucket}"
-
         try {
             set stream_info [my stream_info $stream]
-        } trap {NATS ErrJSResponse 404 10059} {} {
-            throw {NATS BucketNotFound} "Bucket ${bucket} not found"
+        } trap {NATS ErrStreamNotFound} err {
+            throw {NATS ErrBucketNotFound} "Bucket ${bucket} not found"
         }
-
         return [::nats::key_value new $conn [self] $domain $bucket $stream_info $_timeout]
     }
 
     method create_kv_bucket {bucket args} {
         my CheckBucketName $bucket
-        set stream "KV_${bucket}"
 
         nats::_parse_args $args {
+            description valid_str null
+            max_value_size int null
             history pos_int 1
-            storage valid_str file 
-            ttl pos_int 0
-            max_value_size int -1
-            max_bucket_size int -1
+            ttl pos_int null
+            max_bucket_size pos_int null
+            storage {enum memory file} file
+            num_replicas int 1
             mirror_name valid_str null
             mirror_domain valid_str null
         }
-
-        set options {
-            -storage file
-            -retention limits
-            -discard new
-            -max_msgs_per_subject 1
-            -num_replicas 1
-            -max_msgs -1
-            -max_msg_size -1
-            -max_bytes -1
-            -max_age 0
-            -duplicate_window 120000000000
-            -deny_delete 1
-            -deny_purge 0
-            -allow_rollup_hdrs 1
+        set duplicate_window 120000 ;# 2 min
+        if {[info exists ttl] && $ttl < $duplicate_window} {
+            set duplicate_window $ttl
         }
-
-        if {$history < 1} {
-            throw {NATS ErrInvalidArg} "history must be greater than 0"
+        if {$history < 1 || $history > 64} {
+            throw {NATS ErrInvalidArg} "History must be between 1 and 64"
         }
-        if {$history > 64} {
-            throw {NATS ErrInvalidArg} "history must be less than 64"
+        set stream_config [dict create \
+            allow_rollup_hdrs true \
+            deny_delete true \
+            discard new \
+            duplicate_window $duplicate_window \
+            deny_purge false \
+            max_msgs_per_subject $history \
+            num_replicas $num_replicas \
+            storage $storage]
+        
+        if {[info exists description]} {
+            dict set stream_config description $description
         }
-
-        dict set options -max_msgs_per_subject $history
-        dict set options -storage $storage
-        dict set options -max_age $ttl
-        dict set options -max_msg_size $max_value_size
-        dict set options -max_bytes $max_bucket_size
+        if {[info exists ttl]} {
+            dict set stream_config max_age $ttl
+        }
+        if {[info exists max_value_size]} {
+            dict set stream_config max_msg_size $max_value_size
+        }
+        if {[info exists max_bucket_size]} {
+            dict set stream_config max_bytes $max_bucket_size
+        }
 
         if {[info exists mirror_name]} {
+            # TODO format JSON
             set mirror_info [dict create name "KV_${mirror_name}"]
             if {[info exists mirror_domain]} {
                 dict set mirror_info external api "\$JS.${mirror_domain}.API"
             }
             dict set options -mirror $mirror_info
+        } else {
+            dict set stream_config subjects "\$KV.${bucket}.>"
         }
 
-        if {![info exists mirror_name]} {
-            # when kv is mirroring it does not listen on normal subjects
-            set subject "\$KV.${bucket}.>"
-            lappend options -subjects $subject
-        }
-
-        set stream_info [my add_stream $stream {*}$options]
-
+        set stream_info [my add_stream "KV_${bucket}" {*}$stream_config]
         return [::nats::key_value new $conn [self] $domain $bucket $stream_info $_timeout]
     }
 
     method delete_kv_bucket {bucket} {
         my CheckBucketName $bucket
         set stream "KV_${bucket}"
-
         try {
-            my delete_stream $stream
-        } trap {NATS ErrJSResponse 404 10059} {} {
-            throw {NATS BucketNotFound} "Bucket ${bucket} not found"
+            return [my delete_stream $stream]
+        } trap {NATS ErrStreamNotFound} err {
+            throw {NATS ErrBucketNotFound} "Bucket ${bucket} not found"
         }
-
-        return
     }
 
     method kv_buckets {} {
-        set streams [my stream_names]
         set kv_list [list]
-        foreach stream $streams {
+        foreach stream [my stream_names] {
             if {[string range $stream 0 2] eq "KV_"} {
                 lappend kv_list [string range $stream 3 end]
             }
         }
-
         return $kv_list
     }
 
-    ### HELPERS ###
-
     method CheckBucketName {bucket} {
         if {![regexp {^[a-zA-Z0-9_-]+$} $bucket]} {
-            throw {NATS ErrInvalidArg} "Bucket \"$bucket\" is not valid bucket name"
+            throw {NATS ErrInvalidArg} "Invalid bucket name $bucket"
         }
     }
     
@@ -635,7 +600,11 @@ oo::class create ::nats::jet_stream {
         return [regexp -- {^[-[:alnum:]!#$%&()+,:;<=?@^_`|~]+$} $str]
     }
     method ApiRequest {subj msg {checkSubj true}} {
-        set response [json::json2dict [$conn request "$api_prefix.$subj" $msg -timeout $_timeout -dictmsg false -check_subj $checkSubj]]
+        try {
+            set response [json::json2dict [$conn request "$api_prefix.$subj" $msg -timeout $_timeout -dictmsg false -check_subj $checkSubj]]
+        } trap {NATS ErrNoResponders} err {
+            throw {NATS ErrJetStreamNotEnabled} "JetStream is not enabled in the server"
+        }
         nats::_checkJsError $response
         dict unset response type ;# no-op if the key doesn't exist
         return $response
@@ -645,15 +614,25 @@ oo::class create ::nats::jet_stream {
 # these clients have more specific JS errors
 # https://github.com/nats-io/nats.go/blob/main/jserrors.go
 # https://github.com/nats-io/nats.py/blob/main/nats/js/errors.py
-# for the Tcl client it's enough to throw ErrJSResponse for all errors from the JS server-side API
 proc ::nats::_checkJsError {msg} {
     if {[dict exists $msg error]} {
         set errDict [dict get $msg error]
+        if {[dict get $errDict code] == 404} {
+            set errDescr [dict get $errDict description]
+            switch -- [dict get $errDict err_code] {
+                10059 {
+                    throw {NATS ErrStreamNotFound} $errDescr
+                }
+                10014 {
+                    throw {NATS ErrConsumerNotFound} $errDescr
+                }
+            }
+        }
         throw [list NATS ErrJSResponse [dict get $errDict code] [dict get $errDict err_code]] [dict get $errDict description]
     }
 }
 
-proc ::nats::_format_json {name val type spec} {
+proc ::nats::_format_json {name val type} {
     set errMsg "Invalid value for the $type option $name : $val"
     switch -- $type {
         valid_str {
@@ -683,20 +662,12 @@ proc ::nats::_format_json {name val type spec} {
                         json::write string $element
                     }]]
         }
-        object {
-            if {[llength $val] == 0} {
-                throw {NATS ErrInvalidArg} $errMsg
-            }
-            return [::nats::_dict2json $spec $val]
-        }
-        object_list {
-            return [json::write array {*}[lmap element $val {
-                        ::nats::_dict2json $spec $element
-                    }]]
-        }
         ns {
             # val must be in milliseconds
             return [expr {entier($val*1000*1000)}]
+        }
+        json {
+            return $val
         }
         default {
             throw {NATS ErrInvalidArg} "Wrong type $type"  ;# should not happen
@@ -712,11 +683,11 @@ proc ::nats::_format_enum {name val type} {
     return [json::write string $val]
 }
 
-proc ::nats::_choose_format {name val type {spec ""}} {
+proc ::nats::_choose_format {name val type} {
     if {[lindex $type 0] eq "enum"} {
         return [_format_enum $name $val $type]
     } else {
-        return [_format_json $name $val $type $spec]
+        return [_format_json $name $val $type]
     }
 }
 
@@ -760,16 +731,13 @@ proc ::nats::_dict2json {spec src} {
     foreach {k v} $src {
         dict set src_dict [string trimleft $k -] $v
     }
-    dict for {name definition} $spec {
-        set default [dict get $definition default]
-        set type [dict get $definition type]
-        set val [dict lookup $src_dict $name $default]
-
+    foreach {name type def} $spec {
+        set val [dict lookup $src_dict $name $def]
         if {$val eq "NATS_TCL_REQUIRED"} {
             throw {NATS ErrInvalidArg} "Option $name is required"
         }
         if {$val ne "null"} {
-            dict set json_dict $name [_choose_format $name $val $type [dict lookup $definition spec ""]]
+            dict set json_dict $name [_choose_format $name $val $type]
         }
     }
     if {[dict size $json_dict]} {

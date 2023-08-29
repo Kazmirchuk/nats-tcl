@@ -24,7 +24,7 @@ namespace eval test_utils {
     variable sleepVar 0
     variable natsPid
     
-    logger::initNamespace [namespace current] info
+    logger::initNamespace [namespace current] info  ;# the logging level can be changed to debug, warn etc
     set appenderArgs [list -outputChannel [tcltest::outputChannel]]
     # format the messages in the same manner as nats::connection
     lappend appenderArgs -conversionPattern {\[[nats::timestamp] %c %p\] %m}
@@ -206,8 +206,7 @@ namespace eval test_utils {
     
     proc execNatsCmd {args} {
         set output [exec -ignorestderr nats {*}$args]
-        # turn off logging - key-value tests use it heavily
-        # log::info "Executed: nats $args"
+        log::info "Executed: nats $args"
         return $output
     }
     

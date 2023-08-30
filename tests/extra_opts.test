@@ -120,7 +120,7 @@ test extra_opts-4.1 "PING/PONG protocol initiated by server" -body {
     set conf [tcltest::makeFile {
         ping_interval: 2
         ping_max: 1
-    } quick_ping.conf ]
+    } quick_ping.conf ] ;# will be deleted by tcltest::cleanupTests
     startNats quick_ping -c $conf
     $conn connect
     sniffer $conn {
@@ -165,23 +165,37 @@ test extra_opts-4.3 "PING/PONG - no response from the server" -body {
     $conn disconnect
     $conn reset -ping_interval
     stopNats quick_ping
-    tcltest::removeFile quick_ping.conf
 }
 
 startNats NATS
+
+# Recall that Tcl's internal representation of strings is not UTF-8, but some custom encoding
+# You won't notice this as long as you have Tcl talking to other Tcl via NATS
+# You WILL see corrupted strings as soon as Tcl receives UTF-8 from an external system
 # this is "Eivør Pálsdóttir" encoded in UTF-8
 set utf8_msg [encoding convertfrom utf-8 "\x45\x69\x76\xC3\xB8\x72\x20\x50\xC3\xA1\x6C\x73\x64\xC3\xB3\x74\x74\x69\x72"]
-test extra_opts-6 "Check the utf8_convert option" -body {
-    $conn configure -utf8_convert true
+test extra_opts-6 "Check the utf8_convert option" -setup {
+    set default_encoding [encoding system]
+    encoding system utf-8
+    set ::tempFilePath [tcltest::makeFile $utf8_msg extra_opts-6.txt]
+} -body {
     $conn connect
-    set resp [responder new]
-    set response [$conn request service "0 $utf8_msg"]  ;# check that the message comes back uncorrupted
-    [logger::servicecmd test_utils]::info "Got UTF-8 response: $response"  ;# this should be readable in the terminal
-    set response
-} -result $utf8_msg -cleanup {
-    $resp destroy
+    $conn subscribe UTF8_TEST -callback subCallback
+    wait_flush $conn
+    execNatsCmd pub --force-stdin UTF8_TEST <$::tempFilePath 2>@1  ;# trying to pass UTF-8 just via CLI doesn't work
+    wait_for ::inMsg
+    [logger::servicecmd test_utils]::info "Got a corrupted UTF-8 message: $::inMsg"
+    
+    $conn configure -utf8_convert true
+    execNatsCmd pub --force-stdin UTF8_TEST <$::tempFilePath 2>@1
+    wait_for ::inMsg
+    [logger::servicecmd test_utils]::info "Got a correct UTF-8 message: $::inMsg"  ;# this should be readable in the terminal
+    
+    set ::inMsg  ;# account for \n added by makeFile
+} -result "$utf8_msg\n" -cleanup {
     $conn disconnect
     $conn reset -utf8_convert
+    encoding system $default_encoding
 }
 
 test extra_opts-7.1 "Error handling when connection is closed" -body {

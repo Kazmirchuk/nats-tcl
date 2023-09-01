@@ -23,7 +23,7 @@ ${natsLogger}::setlevel warn
 set conn [nats::connection new "JS" -logger $natsLogger] ;# -log_chan [tcltest::outputChannel] -log_level debug]
 
 # a test case with -output does not produce this output on the console, but sometimes it is useful for troubleshooting
-set do_test_stdout 1
+set do_test_stdout 1  ;# set to 0 to see debug messages in the console
 proc test_stdout {str} {
     if {!$::do_test_stdout} {
         return ""

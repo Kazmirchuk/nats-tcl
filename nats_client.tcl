@@ -1337,14 +1337,27 @@ namespace eval ::nats::header {
     namespace ensemble create
 }
 
+proc ::nats::isotime_to_msec {isotime} {
+    # parse into date-time, fractional seconds and timezone (optional)
+    if {[scan $isotime {%[^.].%d%s} datetime fs tz] < 2} {
+        throw {NATS ErrInvalidArg} "Invalid time $isotime"
+    }
+    if {![info exists tz]} {
+        set tz Z ;# assume UTC
+    }
+    set secs [clock scan "$datetime$tz" -format {%Y-%m-%dT%T%z}]
+    return [expr {round(($secs + "0.$fs")*1000)}]
+}
+# does *not* format TZ into the result
+proc ::nats::msec_to_isotime {msec {tz :UTC}} {
+    return [format "%s.%03d" \
+                [clock format [expr {$msec / 1000}] -format "%Y-%m-%dT%T" -timezone $tz] \
+                [expr {$msec % 1000}] ]
+}
+
 # returns ISO 8601 date-time with milliseconds in a local timezone
 proc ::nats::timestamp {} {
-    # workaround for not being able to format current time with millisecond precision
-    # should not be needed in Tcl 8.7, see https://core.tcl-lang.org/tips/doc/trunk/tip/423.md
-    set t [clock milliseconds]
-    return [format "%s.%03d" \
-                [clock format [expr {$t / 1000}] -format "%Y-%m-%dT%H:%M:%S"] \
-                [expr {$t % 1000}] ]
+    return [msec_to_isotime [clock milliseconds] :localtime]
 }
 
 # ------------------------ all following procs are private! --------------------------------------

@@ -273,19 +273,24 @@ Returns [KeyValueObject](KvAPI.md).
 Deletes the bucket.
 ### js kv_buckets
 Returns a list of all Key-Value buckets.
+### js empty_kv_bucket *bucket*
+Deletes all entries and history from the bucket without destroying the bucket itself.
 ### js destroy
 TclOO destructor. Remember to call it before destroying the parent `nats::connection`.
 
 ## Error handling
-In addition to all core NATS errors, the `jet_stream` methods may throw additional errors:
+In addition to all [core NATS errors](CoreAPI.md#error-handling), the `jet_stream` and `key_value` classes may throw these errors:
 
-| Error     | Reason   | 
-| ------------- |--------|
-| ErrJetStreamNotEnabled | JetStream is not enabled in the NATS server |
-| ErrStreamNotFound | Stream does not exist |
-| ErrConsumerNotFound | Consumer does not exist |
-| ErrBucketNotFound | Bucket does not exist |
-| ErrJSResponse | Other JetStream error. `code` and `err_code` is passed in the Tcl error code and `description` is used for the error message. |
+| Error     | JS Error Code | Reason   | 
+| ------------- |--------|--------|
+| ErrJetStreamNotEnabled | | JetStream is not enabled in the NATS server |
+| ErrWrongLastSequence | 400/10071 | <ul><li>JS publish with the header Nats-Expected-Last-Subject-Sequence failed</li><li>KV `update` failed due to revision mismatch</li></ul> |
+| ErrStreamNotFound | 404/10059 | Stream does not exist |
+| ErrConsumerNotFound | 404/10014| Consumer does not exist |
+| ErrBucketNotFound | from ErrStreamNotFound | Bucket does not exist |
+| ErrMsgNotFound | 404/10037 | Message not found in a stream |
+| ErrKeyNotFound | from ErrMsgNotFound | Key not found in a bucket |
+| ErrJSResponse | | Other JetStream error. `code` and `err_code` is passed in the Tcl error code and `description` is used for the error message. |
  
- See also [ADR-1](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-1.md#error-response).
+ See also "Error Response" in [ADR-1](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-1.md#error-response).
 

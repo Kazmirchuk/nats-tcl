@@ -1,6 +1,6 @@
 # Key-Value API
 
-Key-Value functionality of NATS can be accessed by creating the `nats::key_value` TclOO object (using jet_stream object). Do not create it directly - instead, call the [bind_kv_bucket](JsAPI.md#js-bind_kv_bucket-bucket) or [create_kv_bucket](JsAPI.md#js-create_kv_bucket-bucket--history-history--storage-storage--ttl-ttl--max_value_size-max_value_size--max_bucket_size-max_bucket_size--mirror_name-mirror_name--mirror_domain-mirror_domain) method of your `nats::jet_stream`. You can have multiple KV objects created from the same JetStream, each having its own settings.
+Key-Value functionality of NATS can be accessed by creating the `nats::key_value` TclOO object. Do not create it directly - instead, call the [bind_kv_bucket](JsAPI.md#js-bind_kv_bucket-bucket) or [create_kv_bucket](JsAPI.md#js-create_kv_bucket-bucket--history-history--storage-storage--ttl-ttl--max_value_size-max_value_size--max_bucket_size-max_bucket_size--mirror_name-mirror_name--mirror_domain-mirror_domain) method of your `nats::jet_stream`. You can have multiple KV objects created from the same JetStream, each having its own settings.
 
 ## Synopsis
 
@@ -53,12 +53,25 @@ Implementation is based mainly on official [guidelines](https://github.com/nats-
 ## Entry
 
 Methods returning messages kept under the `key` are returning `entry`, which is a dict consisting of:
-- `value` - value of key,
-- `bucket` - bucket on which this `entry` exists,
-- `key` - key on which this `entry` exists,
-- `operation` - `PUT`, `DEL` or `PURGE`,
-- `revision` - unique number in given `bucket` (`seq` of message in stream),
-- `created` - time when this `entry` has been uploaded (milliseconds).
+- `bucket` - bucket on which this `entry` exists
+- `key` - key on which this `entry` exists
+- `value` - value of key
+- `revision` - unique number in given `bucket` (`seq` of message in stream)
+- `created` - time when this `entry` has been uploaded (milliseconds)
+- `delta`
+- `operation` - `PUT`, `DEL` or `PURGE`
+
+## Bucket status
+- `bucket`
+- `bytes`
+- `history`
+- `ttl`
+- `values`
+- `mirror_name` optional
+- `mirror_domain` optional
+- `stream_config`
+- `stream_state`
+
 
 ## Commands
 
@@ -97,7 +110,6 @@ Reverts a value to a previous `revision` using put. It simply gets `revision` of
 ### kv status
 
 View the status and information of a KV store.
-Returns dict containing `bucket`, `stream`, `storage`, `history`, `ttl`, `max_value_size`, `max_bucket_size` (and optionally `mirror_name` and `mirror_domain`) as well as other information: `created` (in milliseconds), `values_stored`, `bytes_stored`, `backing_store` and `store_config`, `store_state` - last two of them contains full configuration of underlying JetStream.
 
 ### kv history ?*key*? ?-timeout *timeout*?
 
@@ -135,3 +147,6 @@ Stop watching previously started `watch`.
 
 ### kv destroy
 TclOO destructor. Remember to call it before destroying the parent `nats::jet_stream`.
+
+## Error handling
+KV-specific errors are listed in JsAPI.md

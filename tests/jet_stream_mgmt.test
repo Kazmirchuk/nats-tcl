@@ -227,8 +227,12 @@ test js_mgmt-10.1 "Get a message directly from a stream" -setup {
     nats::msg data $msg
 } -result "msg 1"
 
+test js_mgmt-10.2 "Get a message directly from a stream - not found" -body {
+    set msg [$js stream_msg_get MY_STREAM -last_by_subj test.1]
+} -result {no message found} -errorCode {NATS ErrMsgNotFound}
+
 test js_mgmt-11.1 "Delete a message directly from a stream" -body {
-    $js stream_msg_delete MY_STREAM -seq [nats::msg seq $msg]  ;# if not found, this will throw ErrJSResponse 400
+    $js stream_msg_delete MY_STREAM -seq [nats::msg seq $msg]
 } -result true
 
 $js destroy

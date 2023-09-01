@@ -1,39 +1,50 @@
+# Copyright (c) 2023 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2023 ANT Solutions https://antsolutions.eu/
+
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
+
+# Test summary:
+# - put
+# - get/get_value
+# - create/update
+# - delete/purge
+# - UTF8 conversion
+
 source test_utils.tcl
 
-tcltest::customMatch dict {apply {{expected actual} {
-  if {[dict size $expected] != [dict size $actual]} { return 0 }
-  dict for {key value} $actual {
-    if {![dict exists $expected $key]} {
-      return 0
-    }
-    if {$value ne [dict get $expected $key]} {
-      return 0
-    }
-  }
-
-  return 1
-}}}
-
 set bucket MY_TEST_BUCKET
-startNats NATS_JS -js --store_dir [tcltest::temporaryDirectory] ;# start nats with Jet Stream
+startNats NATS_JS --jetstream --store_dir [tcltest::temporaryDirectory]
+execNatsCmd kv add $bucket --history=5
 
-# cleanup if previous test has not cleaned up correctly
-set ls [execNatsCmd kv ls]
-if {$bucket in $ls} {
+set conn [nats::connection new "KV" -log_chan [tcltest::outputChannel]]
+$conn configure -servers nats://localhost:4222 -utf8_convert true
+$conn connect
+set js [$conn jet_stream]
+set kv [$js bind_kv_bucket $bucket]
+
+test key_value-put-1 "Put key" -setup {
+    execNatsCmd kv add $bucket
+} -body {
+    set revision [$kv put key1 value1]
+
+    set new_val [exec nats kv get $bucket key1 --raw]
+    assert {$new_val eq "value1"}
+
+    set revision
+} -result {1} -cleanup {
     execNatsCmd kv del $bucket -f
 }
 
-# in order to bind to key_value_store
-execNatsCmd kv add $bucket
-
-set conn [nats::connection new]
-$conn configure -servers nats://localhost:4222 -utf8_convert true
-$conn connect
-
-set js [$conn jet_stream]
-set kv [$js bind_kv_bucket $bucket]
+test key_value-put-2 "Throw NoResponders/Timeout when calling put on non-existing bucket" -body {
+    if {![catch {
+        $kv put key1 value1
+    } err errOpts]} {
+        throw {TEST DidNotThrow} "Did not throw"
+    }
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrNoResponders}}
+    set err
+} -result "No responders available for request"
 
 ########## GET ##########
 
@@ -77,7 +88,7 @@ test key_value-get-4 "Throw KeyNotFound for non-existing key" -setup {
     } err errOpts]} {
         throw {TEST DidNotThrow} "Did not throw"
     }
-    assert {[dict get $errOpts -errorcode] eq {NATS KeyNotFound}}
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrKeyNotFound}}
     set err
 } -result {Key key1 not found} -cleanup {
     execNatsCmd kv del $bucket -f
@@ -92,7 +103,7 @@ test key_value-get-5 "Throw KeyNotFound for non-existing revision" -setup {
     } err errOpts]} {
         throw {TEST DidNotThrow} "Did not throw"
     }
-    assert {[dict get $errOpts -errorcode] eq {NATS KeyNotFound}}
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrKeyNotFound}}
     set err
 } -result {Key key1 not found} -cleanup {
     execNatsCmd kv del $bucket -f
@@ -108,7 +119,7 @@ test key_value-get-6 "Throw KeyNotFound for specified revision, that belongs to 
     } err errOpts]} {
         throw {TEST DidNotThrow} "Did not throw"
     }
-    assert {[dict get $errOpts -errorcode] eq {NATS KeyNotFound}}
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrKeyNotFound}}
     set err
 } -result {Key key1 not found} -cleanup {
     execNatsCmd kv del $bucket -f
@@ -155,7 +166,7 @@ test key_value-get_value-2 "Throw KeyNotFound while getting value for deleted ke
     } err errOpts]} {
         throw {TEST DidNotThrow} "Did not throw"
     }
-    assert {[dict get $errOpts -errorcode] eq {NATS KeyNotFound}}
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrKeyNotFound}}
     set err
 } -result "Key key1 was deleted" -cleanup {
     execNatsCmd kv del $bucket -f
@@ -163,28 +174,7 @@ test key_value-get_value-2 "Throw KeyNotFound while getting value for deleted ke
 
 # ########## PUT ##########
 
-test key_value-put-1 "Put key" -setup {
-    execNatsCmd kv add $bucket
-} -body {
-    set revision [$kv put key1 value1]
 
-    set new_val [exec nats kv get $bucket key1 --raw]
-    assert {$new_val eq "value1"}
-
-    set revision
-} -result {1} -cleanup {
-    execNatsCmd kv del $bucket -f
-}
-
-test key_value-put-2 "Throw NoResponders/Timeout when calling put on non-existing bucket" -body {
-    if {![catch {
-        $kv put key1 value1
-    } err errOpts]} {
-        throw {TEST DidNotThrow} "Did not throw"
-    }
-    assert {[dict get $errOpts -errorcode] eq {NATS ErrNoResponders}}
-    set err
-} -result "No responders available for request"
 
 ########## CREATE ##########
 
@@ -205,7 +195,7 @@ test key_value-create-2 "Throw WrongLastSequence if key already exists" -setup {
     } err errOpts]} {
         throw {TEST DidNotThrow} "Did not throw"
     }
-    assert {[dict get $errOpts -errorcode] eq {NATS WrongLastSequence}}
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrWrongLastSequence}}
     set err
 } -result "wrong last sequence: 1" -cleanup {
     execNatsCmd kv del $bucket -f
@@ -241,7 +231,7 @@ test key_value-update-2 "Throw WrongLastSequence if revision does not match with
     } err errOpts]} {
         throw {TEST DidNotThrow} "Did not throw"
     }
-    assert {[dict get $errOpts -errorcode] eq {NATS WrongLastSequence}}
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrWrongLastSequence}}
     set err
 } -result "wrong last sequence: 1" -cleanup {
     execNatsCmd kv del $bucket -f
@@ -282,7 +272,7 @@ test key_value-delete-3 "Throw WrongLastSequence while deleting key with wrong l
     } err errOpts]} {
         throw {TEST DidNotThrow} "Did not throw"
     }
-    assert {[dict get $errOpts -errorcode] eq {NATS WrongLastSequence}}
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrWrongLastSequence}}
     set err
 } -result "wrong last sequence: 1" -cleanup {
     execNatsCmd kv del $bucket -f
@@ -330,7 +320,7 @@ test key_value-revert-2 "Throw KeyNotFound when calling revert on non-existing k
     } err errOpts]} {
         throw {TEST DidNotThrow} "Did not throw"
     }
-    assert {[dict get $errOpts -errorcode] eq {NATS KeyNotFound}}
+    assert {[dict get $errOpts -errorcode] eq {NATS ErrKeyNotFound}}
     set err
 } -result "Key non-existing-key not found" -cleanup {
     execNatsCmd kv del $bucket -f

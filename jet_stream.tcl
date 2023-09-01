@@ -37,6 +37,7 @@ oo::class create ::nats::jet_stream {
         set encoded_msg [dict get $response message] ;# it is encoded in base64
         set data [binary decode base64 [dict lookup $encoded_msg data]]
         if {[$conn cget -utf8_convert]} {
+            # ofc method MSG has "convertfrom" as well, but it has no effect on base64 data, so we need to call "convertfrom" again
             set data [encoding convertfrom utf-8 $data]
         }
         set msg [nats::msg create [dict get $encoded_msg subject] -data $data]
@@ -569,6 +570,10 @@ oo::class create ::nats::jet_stream {
         }
         return $kv_list
     }
+    
+    method empty_kv_bucket {bucket} {
+        return [my purge_stream "KV_$bucket"]
+    }
 
     method CheckBucketName {bucket} {
         if {![regexp {^[a-zA-Z0-9_-]+$} $bucket]} {
@@ -615,21 +620,34 @@ oo::class create ::nats::jet_stream {
 # https://github.com/nats-io/nats.go/blob/main/jserrors.go
 # https://github.com/nats-io/nats.py/blob/main/nats/js/errors.py
 proc ::nats::_checkJsError {msg} {
-    if {[dict exists $msg error]} {
-        set errDict [dict get $msg error]
-        if {[dict get $errDict code] == 404} {
-            set errDescr [dict get $errDict description]
-            switch -- [dict get $errDict err_code] {
-                10059 {
-                    throw {NATS ErrStreamNotFound} $errDescr
-                }
-                10014 {
-                    throw {NATS ErrConsumerNotFound} $errDescr
-                }
+    if {![dict exists $msg error]} {
+        return
+    }
+    set errDict [dict get $msg error]
+    set errDescr [dict get $errDict description]
+    
+    if {[dict get $errDict code] == 400} {
+        switch -- [dict get $errDict err_code] {
+            10071 {
+                throw {NATS ErrWrongLastSequence} $errDescr
             }
         }
-        throw [list NATS ErrJSResponse [dict get $errDict code] [dict get $errDict err_code]] [dict get $errDict description]
     }
+    if {[dict get $errDict code] == 404} {
+        switch -- [dict get $errDict err_code] {
+            10014 {
+                throw {NATS ErrConsumerNotFound} $errDescr
+            }
+            10037 {
+                throw {NATS ErrMsgNotFound} $errDescr
+            }
+            10059 {
+                throw {NATS ErrStreamNotFound} $errDescr
+            }
+            
+        }
+    }
+    throw [list NATS ErrJSResponse [dict get $errDict code] [dict get $errDict err_code]] $errDescr
 }
 
 proc ::nats::_format_json {name val type} {

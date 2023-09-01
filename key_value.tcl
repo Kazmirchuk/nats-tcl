@@ -6,13 +6,11 @@
 
 # based on https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-8.md
 oo::class create ::nats::key_value {
-    variable conn
+    variable conn js bucket stream kv_read_prefix kv_write_prefix
+    
     variable status_var
-    variable js
-    variable bucket
-    variable stream
-    variable kv_read_prefix
-    variable kv_write_prefix
+
+
     variable mirrored_bucket_name
 
     variable _timeout
@@ -51,148 +49,127 @@ oo::class create ::nats::key_value {
             }
         }
     }
-
+    
     method get {key args} {
         my CheckKeyName $key
-
         nats::_parse_args $args {
-            revision pos_int null
+            revision pos_int ""
         }
-
-        set subject "\$KV.*.${key}"
-
         try {
-            if {[info exists revision]} {
-                set resp [$js stream_msg_get $stream -seq $revision]
-
-                if {[dict exists $resp subject] && [lindex [my SubjectToBucketKey [dict get $resp subject]] 1] ne $key} {
-                    throw {NATS KeyNotFound} "Key ${key} not found"
+            return [my Get $key $revision]
+        } trap {NATS ErrKeyDeleted} err {
+            # ErrKeyDeleted is an internal error, see also 'method create'
+            throw {NATS ErrKeyNotFound} $err
+        }
+    }
+    
+    method get_value {key args} {
+        return [dict get [my get $key {*}$args] value]
+    }
+    
+    method Get {key {revision ""}} {
+        set subject "$kv_read_prefix.$key"
+        try {
+            if {$revision ne ""} {
+                set msg [$js stream_msg_get $stream -seq $revision]
+                # not sure under what conditions this may happen, but nats.go does this check
+                if {$subject ne [nats::msg subject $msg]} {
+                    throw {NATS ErrKeyNotFound} "Expected $subject, got [nats::msg subject $msg]"
                 }
             } else {
-                set resp [$js stream_msg_get $stream -last_by_subj $subject]
+                set msg [$js stream_msg_get $stream -last_by_subj $subject]
+                puts "MSG: $msg"
             }
-        } trap {NATS ErrJSResponse 404 10037} {} {
-            throw {NATS KeyNotFound} "Key ${key} not found"
-        } trap {NATS ErrJSResponse 404 10059} {} {
-            throw {NATS BucketNotFound} "Bucket ${bucket} not found"
+        } trap {NATS ErrMsgNotFound} err {
+            throw {NATS ErrKeyNotFound} "Key $key not found in bucket $bucket"
+        } trap {NATS ErrStreamNotFound} err {
+            throw {NATS ErrBucketNotFound} "Bucket ${bucket} not found"
         }
-
-        return [my MessageToEntry $resp]
-    }
-
-    method get_value {key args} {
-        set entry [my get $key {*}$args]
-
-        # handle case when key value has been deleted or purged
-        if {[dict get $entry operation] eq "DEL"} {
-            throw {NATS KeyNotFound} "Key ${key} was deleted"
+        
+        set entry [dict create \
+            bucket $bucket \
+            key $key \
+            value [nats::msg data $msg] \
+            revision [nats::msg seq $msg] \
+            created [nats::isotime_to_msec [nats::msg timestamp $msg]] \
+            delta "" \
+            operation [nats::header lookup $msg KV-Operation PUT]]
+        
+        if {[dict get $entry operation] in {DEL PURGE}} {
+            throw {NATS ErrKeyDeleted} "Key $key was deleted or purged"
         }
-        if {[dict get $entry operation] eq "PURGE"} {
-            throw {NATS KeyNotFound} "Key ${key} was purged"
-        }
-
-        return [dict get $entry value]
+        return $entry
     }
 
     method put {key value} {
         my CheckKeyName $key
-        set subject "${kv_write_prefix}.${key}"
-
-        set resp [$js publish $subject $value]
-        return [dict get $resp seq]
+        try {
+            set resp [$js publish "$kv_write_prefix.$key" $value]
+            return [dict get $resp seq]
+        } trap {NATS ErrNoResponders} err {
+            throw {NATS ErrBucketNotFound} "Bucket $bucket not found"
+        }
     }
 
     method create {key value} {
-        my CheckKeyName $key
-
-        set subject "${kv_write_prefix}.${key}"
-
-        set msg [nats::msg create $subject -data $value]
-        nats::header set msg Nats-Expected-Last-Subject-Sequence 0
-        
         try {
-            set resp [$js publish_msg $msg]
-        } trap {NATS ErrJSResponse 400 10071} {msg} {
-            throw {NATS WrongLastSequence} $msg
+            return [my update $key $value 0]
+        } trap {NATS ErrWrongLastSequence} err {
+            # was the key deleted?
+            try {
+                my Get $key
+                # not deleted - rethrow the first error
+                throw {NATS ErrWrongLastSequence} $err
+            } trap {NATS ErrKeyDeleted} {err errOpts} {
+                set revision [lindex [dict get $errOpts -errorcode] end]
+                # retry with a proper revision
+                return [my update $key $value $revision]
+            }
         }
+    }
 
+    method update {key value last} {
+        my CheckKeyName $key
+        set msg [nats::msg create "$kv_write_prefix.$key" -data $value]
+        nats::header set msg Nats-Expected-Last-Subject-Sequence $last
+        set resp [$js publish_msg $msg]  ;# throws ErrWrongLastSequence in case of mismatch
         return [dict get $resp seq]
     }
 
-    method update {key value revision} {
+    method delete {key {last ""}} {
         my CheckKeyName $key
-
-        set subject "${kv_write_prefix}.${key}"
-
-        set msg [nats::msg create $subject -data $value]
-        nats::header set msg Nats-Expected-Last-Subject-Sequence $revision
-
-        try {
-            set resp [$js publish_msg $msg]
-        } trap {NATS ErrJSResponse 400 10071} {msg} {
-            throw {NATS WrongLastSequence} $msg
-        }
-
-        return [dict get $resp seq]
-    }
-
-    method delete {key args} {
-        my CheckKeyName $key
-
-        nats::_parse_args $args {
-            revision pos_int null
-        }
-
-        set subject "${kv_write_prefix}.${key}"
-        set msg [nats::msg create $subject]
+        set msg [nats::msg create "$kv_write_prefix.$key"]
         nats::header set msg KV-Operation DEL
-        if {[info exists revision]} {
-            nats::header set msg Nats-Expected-Last-Subject-Sequence $revision
+        if {$last ne "" && $last > 0} {
+            nats::header set msg Nats-Expected-Last-Subject-Sequence $last
         }
-
-        try {
-            set resp [$js publish_msg $msg]
-        } trap {NATS ErrJSResponse 400 10071} {msg} {
-            throw {NATS WrongLastSequence} $msg
-        }
-
-        return
+        set resp [$js publish_msg $msg]
+        return [dict get $resp seq]
     }
 
     method purge {key} {
         my CheckKeyName $key
-
-        set subject "${kv_write_prefix}.${key}"
-
-        set msg [nats::msg create $subject]
+        set msg [nats::msg create "$kv_write_prefix.$key"]
         nats::header set msg KV-Operation PURGE Nats-Rollup sub
         set resp [$js publish_msg $msg]
-
-        return
+        return [dict get $resp seq]
     }
 
-    method revert {key revision args} {
-        my CheckKeyName $key
-
-        set subject "${kv_write_prefix}.${key}"
-
+    method revert {key revision} {
         set entry [my get $key -revision $revision]
-
-        set resp [$js publish $subject [dict get $entry value]]
+        set resp [$js publish "$kv_write_prefix.$key" [dict get $entry value]]
         return [dict get $resp seq]
     }
 
     method status {} {
         try {
             set stream_info [$js stream_info $stream]
-        } trap {NATS ErrJSResponse 404 10059} {} {
+        } trap {NATS ErrStreamNotFound} err {
             throw {NATS BucketNotFound} "Bucket ${bucket} not found"
         }
 
         return [my StreamInfoToKvInfo $stream_info]
     }
-
-    ########## ADVANCED ##########
 
     method history {args} {
         set key ""
@@ -706,34 +683,27 @@ oo::class create ::nats::key_value {
     }
 
     method StreamInfoToKvInfo {stream_info} {
+        set config [dict get $stream_info config]
+        
         set kv_info [dict create \
-            bucket [string range [dict get $stream_info config name] 3 end] \
-            stream [dict get $stream_info config name] \
-            storage [dict get $stream_info config storage] \
-            history [dict get $stream_info config max_msgs_per_subject] \
-            ttl [dict get $stream_info config max_age] \
-            max_value_size [dict get $stream_info config max_msg_size] \
-            max_bucket_size [dict get $stream_info config max_bytes] \
-            created [nats::time_to_millis [dict get $stream_info created]] \
-            values_stored [dict get $stream_info state messages] \
-            bytes_stored [dict get $stream_info state bytes] \
-            backing_store JetStream \
-        ]
+            bucket $bucket \
+            bytes [dict get $stream_info state bytes] \
+            history [dict get $config max_msgs_per_subject] \
+            ttl [dict get $config max_age] \
+            values [dict get $stream_info state messages]]
 
-        if {[dict exists $stream_info config mirror name]} {
+        if {[dict exists $config mirror name]} {
             # in format "KV_some-name"
-            dict set kv_info mirror_name [string range [dict get $stream_info config mirror name] 3 end]
+            dict set kv_info mirror_name [string range [dict get $config mirror name] 3 end]
+            if {[dict exists $config mirror external api]} {
+                # in format "$JS.some-domain.API"
+                set external_api [dict get $config mirror external api]
+                dict set kv_info mirror_domain [lindex [split $external_api "."] 1]
+            }
         }
-        if {[dict exists $stream_info config mirror external api]} {
-            # in format "$JS.some-domain.API"
-            set external_api [dict get $stream_info config mirror external api]
-            dict set kv_info mirror_domain [lindex [split $external_api "."] 1]
-        }
-
         # do it here so that underlying stream config will be at the end
-        dict set kv_info store_config [dict get $stream_info config]
-        dict set kv_info store_state [dict get $stream_info state]
-
+        dict set kv_info stream_config [dict get $stream_info config]
+        dict set kv_info stream_state [dict get $stream_info state]
         return $kv_info
     }
 
@@ -786,26 +756,13 @@ oo::class create ::nats::key_value {
         return [list $bucket $key]
     }
 
-    method HeadersToOperation {headers} {
-        # return operation from headers
-        if {[dict exists $headers KV-Operation]} {
-            return [dict get $headers KV-Operation]
-        }
-        return "PUT"
-    }
 
     method CheckKeyName {key} {
-        if {[string index $key 0] eq "."} {
-            throw {NATS ErrInvalidArg} "Keys cannot start with \".\""
-        }
-        if {[string index $key end] eq "."} {
-            throw {NATS ErrInvalidArg} "Keys cannot end with \".\""
-        }
-        if {[string range $key 0 2] eq "_kv"} {
-            throw {NATS ErrInvalidArg} "Keys cannot start with \"_kv\", which is reserved for internal use"
-        }
-        if {![regexp {^[-/_=\.a-zA-Z0-9]+$} $key]} {
-            throw {NATS ErrInvalidArg} "Key \"$key\" is not valid key name"
+        if {[string index $key 0] eq "." || \
+            [string index $key end] eq "." || \
+            [string range $key 0 2] eq "_kv" || \
+           ![regexp {^[-/_=\.a-zA-Z0-9]+$} $key]} {
+                throw {NATS ErrInvalidArg} "Invalid key name $key"
         }
     }
 }
@@ -819,4 +776,8 @@ proc ::nats::time_to_millis {time} {
   }
 
   throw {NATS InvalidTime} "Invalid time format ${time}"
+}
+
+proc ::nats::_isotime_to_millis {isotime} {
+    
 }

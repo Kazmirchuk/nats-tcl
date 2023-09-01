@@ -176,7 +176,7 @@ startNats NATS
 set utf8_msg [encoding convertfrom utf-8 "\x45\x69\x76\xC3\xB8\x72\x20\x50\xC3\xA1\x6C\x73\x64\xC3\xB3\x74\x74\x69\x72"]
 test extra_opts-6 "Check the utf8_convert option" -setup {
     set default_encoding [encoding system]
-    encoding system utf-8
+    encoding system utf-8  ;# needed for makeFile
     set ::tempFilePath [tcltest::makeFile $utf8_msg extra_opts-6.txt]
 } -body {
     $conn connect

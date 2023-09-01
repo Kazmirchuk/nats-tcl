@@ -29,9 +29,9 @@ oo::class create ::nats::key_value {
         set mirrored_bucket_name ""
 
         if {$domain_name eq ""} {
-            set kv_read_prefix "\$KV.${bucket}"
+            set kv_read_prefix "\$KV.$bucket"
         } else {
-            set kv_read_prefix "\$JS.${domain_name}.API.\$KV.${bucket}"
+            set kv_read_prefix "\$JS.$domain_name.API.\$KV.$bucket"
         }
 
         set kv_write_prefix $kv_read_prefix
@@ -47,6 +47,14 @@ oo::class create ::nats::key_value {
                 set external_api [dict get $stream_info config mirror external api]
                 set kv_write_prefix "${external_api}.\$KV.${mirrored_bucket_name}"
             }
+        }
+    }
+    
+    method PublishStream {msg} {
+        try {
+            return [$js publish_msg $msg]
+        } trap {NATS ErrNoResponders} err {
+            throw {NATS ErrBucketNotFound} "Bucket $bucket not found"
         }
     }
     
@@ -78,7 +86,6 @@ oo::class create ::nats::key_value {
                 }
             } else {
                 set msg [$js stream_msg_get $stream -last_by_subj $subject]
-                puts "MSG: $msg"
             }
         } trap {NATS ErrMsgNotFound} err {
             throw {NATS ErrKeyNotFound} "Key $key not found in bucket $bucket"
@@ -96,7 +103,7 @@ oo::class create ::nats::key_value {
             operation [nats::header lookup $msg KV-Operation PUT]]
         
         if {[dict get $entry operation] in {DEL PURGE}} {
-            throw {NATS ErrKeyDeleted} "Key $key was deleted or purged"
+            throw [list NATS ErrKeyDeleted [dict get $entry revision]] "Key $key was deleted or purged"
         }
         return $entry
     }
@@ -104,7 +111,7 @@ oo::class create ::nats::key_value {
     method put {key value} {
         my CheckKeyName $key
         try {
-            set resp [$js publish "$kv_write_prefix.$key" $value]
+            set resp [my PublishStream [nats::msg create "$kv_write_prefix.$key" -data $value]]
             return [dict get $resp seq]
         } trap {NATS ErrNoResponders} err {
             throw {NATS ErrBucketNotFound} "Bucket $bucket not found"
@@ -121,6 +128,8 @@ oo::class create ::nats::key_value {
                 # not deleted - rethrow the first error
                 throw {NATS ErrWrongLastSequence} $err
             } trap {NATS ErrKeyDeleted} {err errOpts} {
+                # unlike Python, Tcl doesn't allow to pass my own data with an error
+                # luckily ErrKeyDeleted is internal, and all I need is a revision number
                 set revision [lindex [dict get $errOpts -errorcode] end]
                 # retry with a proper revision
                 return [my update $key $value $revision]
@@ -128,37 +137,36 @@ oo::class create ::nats::key_value {
         }
     }
 
-    method update {key value last} {
+    method update {key value revision} {
         my CheckKeyName $key
         set msg [nats::msg create "$kv_write_prefix.$key" -data $value]
-        nats::header set msg Nats-Expected-Last-Subject-Sequence $last
-        set resp [$js publish_msg $msg]  ;# throws ErrWrongLastSequence in case of mismatch
+        nats::header set msg Nats-Expected-Last-Subject-Sequence $revision
+        set resp [my PublishStream $msg]  ;# throws ErrWrongLastSequence in case of mismatch
         return [dict get $resp seq]
     }
 
-    method delete {key {last ""}} {
+    method delete {key {revision ""}} {
         my CheckKeyName $key
         set msg [nats::msg create "$kv_write_prefix.$key"]
         nats::header set msg KV-Operation DEL
-        if {$last ne "" && $last > 0} {
-            nats::header set msg Nats-Expected-Last-Subject-Sequence $last
+        if {$revision ne "" && $revision > 0} {
+            nats::header set msg Nats-Expected-Last-Subject-Sequence $revision
         }
-        set resp [$js publish_msg $msg]
-        return [dict get $resp seq]
+        my PublishStream $msg
+        return
     }
 
     method purge {key} {
         my CheckKeyName $key
         set msg [nats::msg create "$kv_write_prefix.$key"]
         nats::header set msg KV-Operation PURGE Nats-Rollup sub
-        set resp [$js publish_msg $msg]
-        return [dict get $resp seq]
+        my PublishStream $msg
+        return
     }
 
     method revert {key revision} {
         set entry [my get $key -revision $revision]
-        set resp [$js publish "$kv_write_prefix.$key" [dict get $entry value]]
-        return [dict get $resp seq]
+        return [my put $key [dict get $entry value]]
     }
 
     method status {} {
@@ -167,7 +175,6 @@ oo::class create ::nats::key_value {
         } trap {NATS ErrStreamNotFound} err {
             throw {NATS BucketNotFound} "Bucket ${bucket} not found"
         }
-
         return [my StreamInfoToKvInfo $stream_info]
     }
 

@@ -274,7 +274,7 @@ Deletes the bucket.
 ### js kv_buckets
 Returns a list of all Key-Value buckets.
 ### js empty_kv_bucket *bucket*
-Deletes all entries and history from the bucket without destroying the bucket itself.
+Deletes all entries and history from the bucket without destroying the bucket itself. Note that it does **not** reset the bucket's revision counter.
 ### js destroy
 TclOO destructor. Remember to call it before destroying the parent `nats::connection`.
 

@@ -15,17 +15,15 @@ source test_utils.tcl
 
 set bucket MY_TEST_BUCKET
 startNats NATS_JS --jetstream --store_dir [tcltest::temporaryDirectory]
-execNatsCmd kv add $bucket --history=5
 
 set conn [nats::connection new "KV" -log_chan [tcltest::outputChannel]]
 $conn configure -servers nats://localhost:4222
 $conn connect
 set js [$conn jet_stream]
-set kv [$js bind_kv_bucket $bucket]
 
-test key_value-put-1 "Put a key" -body {
-    $kv put key1 value1
-} -result 1
+test key_value-bind-no-bucket-1 "Try to bind to a bucket that doesn't exist" -body {
+    $js bind_kv_bucket "non-existing-bucket"
+} -result * -match glob -errorCode {NATS ErrBucketNotFound}
 
 # If a bucket is deleted after binding, all KV methods throw ErrBucketNotFound
 test key_value-deleted-bucket-1 "'put' throws ErrBucketNotFound" -setup {
@@ -58,7 +56,16 @@ test key_value-deleted-bucket-6 "'purge' throws ErrBucketNotFound" -body {
     $dummy_kv destroy
 }
 
-test key_value-get-1 "Get an entry for the key" -body {
+test key_value-put-1 "Put a key" -setup {
+    set kv [$js create_kv_bucket $bucket -history 5]
+} -body {
+    $kv put key1 value1
+} -result 1 -cleanup {
+    $kv destroy
+}
+
+test key_value-get-1 "Bind again and get an entry for the key" -body {
+    set kv [$js bind_kv_bucket $bucket]
     $kv get key1
 } -match glob -result [dict create bucket $bucket key key1 value value1 revision 1 created * delta {} operation PUT]
 
@@ -154,13 +161,55 @@ test key_value-utf8 "Get a UTF-8 encoded value from a bucket" -setup {
     [logger::servicecmd test_utils]::info "Got a correct UTF-8 message: $value"  ;# this should be readable in the terminal
     set value  ;# account for \n added by makeFile
 } -result "$utf8_value\n" -cleanup {
-    $conn disconnect
     $conn reset -utf8_convert
     encoding system $def_system
     chan configure [tcltest::outputChannel] -encoding $def_chan
+    $kv destroy
 }
 
-$kv destroy
+test key_value-create-status-1 "Create a bucket and check the status" -body {
+    # set TTL to 1h and bucket size to 100 MB
+    set large_kv [$js create_kv_bucket "large_bucket" -history 64 -storage memory -ttl [expr {60*60*1000}] -max_value_size 1024 -max_bucket_size [expr {100*1024*1024}]]
+    set status [$large_kv status]
+
+    dict_in [dict create \
+             bucket large_bucket \
+             bytes 0 \
+             history 64 \
+             ttl 3600000 \
+             values 0] $status
+} -result true
+
+test key_value-empty-bucket-1 "Put some values in the bucket and empty it" -setup {
+    $large_kv put key1 value1
+    $large_kv put key2 value2
+    $large_kv put key3 value3
+} -body {
+    assert {[dict get [$large_kv status] values] == 3} 1
+    $js empty_kv_bucket large_bucket
+    dict get [$large_kv status] values
+} -result 0
+
+test key_value-list-buckets-1 "Get a list of buckets" -body {
+    lsort [$js kv_buckets]
+} -result {MY_TEST_BUCKET large_bucket}
+
+test key_value-delete-bucket-1 "Delete a bucket" -body {
+    $js delete_kv_bucket large_bucket
+    $js kv_buckets
+} -result MY_TEST_BUCKET
+
+test key_value-delete-bucket-2 "Delete the second bucket" -body {
+    $js delete_kv_bucket $bucket
+    $js kv_buckets
+} -result "" -cleanup {
+    $large_kv destroy
+}
+
+test key_value-bind-no-bucket-2 "Try to bind to a bucket that was deleted" -body {
+    $js bind_kv_bucket $bucket
+} -result * -match glob -errorCode {NATS ErrBucketNotFound}
+
 $js destroy
 $conn destroy
 stopNats NATS_JS

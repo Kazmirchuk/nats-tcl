@@ -755,7 +755,7 @@ oo::class create ::nats::connection {
                                     tls_required $tls_done \
                                     name [json::write::string $config(name)] \
                                     lang [json::write::string Tcl] \
-                                    version [json::write::string 2.0.1] \
+                                    version [json::write::string 2.0.2] \
                                     protocol 1 \
                                     echo $config(echo)]
             
@@ -1257,6 +1257,9 @@ namespace eval ::nats::msg {
     }
     proc no_responders {msg} {
         return [expr {[dict lookup [dict get $msg header] Status 0] == 503}]
+    }
+    proc idle_heartbeat {msg} {
+        return [expr {[dict lookup [dict get $msg header] Status 0] == 100}]
     }
     # only messages fetched using STREAM.MSG.GET will have it
     proc seq {msg} {

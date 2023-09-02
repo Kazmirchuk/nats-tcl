@@ -492,7 +492,7 @@ oo::class create ::nats::jet_stream {
         if {[dict get $stream_info config max_msgs_per_subject] < 1} {
             throw {NATS ErrBucketNotFound} "Bucket ${bucket} not found"
         }
-        return [::nats::key_value new $conn [self] $domain $bucket $stream_info $_timeout]
+        return [nats::key_value new $conn [self] $domain $bucket $stream_info $_timeout]
     }
 
     method create_kv_bucket {bucket args} {

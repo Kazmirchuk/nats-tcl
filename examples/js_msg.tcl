@@ -71,7 +71,7 @@ $js add_push_consumer MY_STREAM PUSH_CONSUMER delivery_subj -filter_subject bar.
 $conn subscribe delivery_subj -callback [list pushed_msgs $js] -dictmsg true
 
 proc pushed_msgs {js subject msg reply} {
-    if {[nats::header lookup $msg Status 0] == 100} {
+    if {[nats::msg idle_heartbeat $msg]} {
         # idle heartbeats don't need ack
         # see also https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-9.md
         return

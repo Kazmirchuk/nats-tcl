@@ -165,7 +165,16 @@ Sends "work in progress" ACK to NATS and resets the redelivery timer on the serv
 ### js term *message*
 Sends "terminate" ACK to NATS. The message will not be redelivered.
 ### js metadata *message*
-Returns a dict with metadata of the message. It is extracted from the reply-to field.
+Returns a dict with metadata of the message that is extracted from the reply-to field. The dict has these fields:
+- stream
+- consumer
+- num_delivered
+- stream_seq
+- consumer_seq
+- timestamp (ms)
+- num_pending
+
+Note that when a message is received using `stream_msg_get`, this metadata is not available. Instead, you can get the stream sequence number and the timestamp using `nats::msg`.
 ### js cancel_pull_request *reqID*
 Cancels the asynchronous pull request with the given `reqID`.
 ### js add_stream *stream* ?-option *value*?..

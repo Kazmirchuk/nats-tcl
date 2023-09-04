@@ -12,7 +12,7 @@ package require tcl::transform::observe
 package require tcl::chan::variable
 package require Thread
 package require lambda
-package require logger::utils
+#package require logger::utils
 
 if {$tcl_platform(platform) eq "windows"} {
     package require twapi_process
@@ -24,12 +24,18 @@ namespace eval test_utils {
     variable sleepVar 0
     variable natsPid
     
-    logger::initNamespace [namespace current] info  ;# the logging level can be changed to debug, warn etc
-    set appenderArgs [list -outputChannel [tcltest::outputChannel]]
-    # format the messages in the same manner as nats::connection
-    lappend appenderArgs -conversionPattern {\[[nats::timestamp] %c %p\] %m}
-    logger::utils::applyAppender -appender fileAppend -service test_utils -appenderArgs $appenderArgs
-    unset appenderArgs
+    # Tcllib's logger breaks the Komodo's debugger
+    namespace eval log {
+        proc info {msg} {
+            puts [tcltest::outputChannel] "\[[nats::timestamp] test_utils info\] $msg"
+        }
+    }
+    
+    #logger::initNamespace [namespace current] info  ;# the logging level can be changed to debug, warn etc
+    #set appenderArgs [list -outputChannel [tcltest::outputChannel]]
+    #lappend appenderArgs -conversionPattern {\[[nats::timestamp] %c %p\] %m}
+    #logger::utils::applyAppender -appender fileAppend -service test_utils -appenderArgs $appenderArgs
+    #unset appenderArgs
     
     # sleep $delay ms in the event loop
     proc sleep {delay} {

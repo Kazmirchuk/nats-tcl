@@ -1,79 +1,105 @@
+# Copyright (c) 2023 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2023 ANT Solutions https://antsolutions.eu/
+
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 source test_utils.tcl
 
-proc sortAndCheckEntries {entries} {
-    lmap entry $entries {
-        # "created" field exists and is almost the same as "now" 
-        assert {abs([clock milliseconds] - [dict get $entry created]) < 10000}
-
-        # omit "created" timestamp
-        set filtered_entry [dict filter $entry key value key bucket operation revision]
-        # sort by key name
-        lsort -stride 2 -index 0 $filtered_entry
-    }
-}
-
-proc sortAndCheckWatchCallbacks {callbacks} {
-    lmap callback_args $callbacks {
-        set status [lindex $callback_args 0]
-        set entry [lindex $callback_args 1]
-        if {$status eq ""} {
-            # it is normal message - "created" field exists and is almost the same as "now"
-            assert {abs([clock milliseconds] - [dict get $entry created]) < 10000}
-
-            # omit "created" timestamp if it exists
-            set entry [dict filter $entry key value key bucket operation revision]
-            set entry [lsort -stride 2 -index 0 $entry]
-        }
-
-        # sort by key name
-        list $status $entry
-    }
-}
-
-proc exampleCallback {status msg} {
-    lappend ::received [list $status $msg]
-    if {[llength $::received] == $::expected_count} {
-        set ::complete true
-    }
-}
-
 set bucket MY_TEST_BUCKET
-startNats NATS_JS -js --store_dir [tcltest::temporaryDirectory];# start nats with Jet Stream
+startNats NATS_JS --jetstream --store_dir [tcltest::temporaryDirectory]
 
-# cleanup if previous test has not cleaned up correctly
-set ls [execNatsCmd kv ls]
-if {$bucket in $ls} {
-    execNatsCmd kv del $bucket -f
-}
-# in order to bind to key_value_store
-execNatsCmd kv add $bucket --history=10
-
-set conn [nats::connection new]
+set conn [nats::connection new "KV" -log_chan [tcltest::outputChannel]]
 $conn configure -servers nats://localhost:4222
 $conn connect
-
 set js [$conn jet_stream]
-set kv [$js bind_kv_bucket $bucket]
 
-########## HISTORY ##########
+test key_value_watchers-history-1 "Get history for an empty bucket" -setup {
+    set kv [$js create_kv_bucket $bucket -history 64]
+} -body {
+    $kv history >
+} -result * -match glob -errorCode {NATS ErrKeyNotFound}
 
-test key_value_watchers-history-1 "Get history for specific key" -setup {
-    execNatsCmd kv put $bucket key1 value1_1
-    execNatsCmd kv put $bucket key1 value1_2
+test key_value_watchers-keys-1 "Get keys for an empty bucket" -body {
+    $kv keys
+} -result * -match glob -errorCode {NATS ErrKeyNotFound}
+
+test key_value_watchers-history-2 "Get history for a key" -setup {
+    $kv put key1 value1_1
+    $kv put key1 value1_2
+    $kv delete key1
+    $kv put key1 value1_3
 } -body {
     set entries [$kv history key1]
+    assert {[llength $entries] == 4} 1
+    assert {[dict_in [dict create \
+                      bucket $bucket \
+                      key key1 \
+                      value value1_1 \
+                      revision 1 \
+                      operation PUT] [lindex $entries 0]]}
+    assert {[dict_in [dict create \
+                      bucket $bucket \
+                      key key1 \
+                      value value1_2 \
+                      revision 2 \
+                      operation PUT] [lindex $entries 1]]}
+    assert {[dict_in [dict create \
+                      bucket $bucket \
+                      key key1 \
+                      value {} \
+                      revision 3 \
+                      operation DEL] [lindex $entries 2]]}
+    assert {[dict_in [dict create \
+                      bucket $bucket \
+                      key key1 \
+                      value value1_3 \
+                      revision 4 \
+                      operation PUT] [lindex $entries 3]]}
+} -result ""
 
-    sortAndCheckEntries $entries
-} -result [list \
-    [list bucket $bucket key key1 operation PUT revision 1 value value1_1] \
-    [list bucket $bucket key key1 operation PUT revision 2 value value1_2] \
-] -cleanup {
-    execNatsCmd kv del $bucket -f
+test key_value_watchers-history-3 "Get history for a key that doesn't exist" -body {
+    $kv history key2
+} -result * -match glob -errorCode {NATS ErrKeyNotFound}
+
+test key_value_watchers-history-4 "Get history for a purged key" -setup {
+    $kv purge key1
+    $kv put key1 value1_4
+} -body {
+    set entries [$kv history key1]
+    assert {[llength $entries] == 2} 1
+    assert {[dict_in [dict create \
+                      bucket $bucket \
+                      key key1 \
+                      value {} \
+                      revision 5 \
+                      operation PURGE] [lindex $entries 0]]}
+    assert {[dict_in [dict create \
+                      bucket $bucket \
+                      key key1 \
+                      value value1_4 \
+                      revision 6 \
+                      operation PUT] [lindex $entries 1]]}
+} -result ""
+
+test key_value_watchers-keys-2 "Get all keys" -setup {
+    $kv delete key1
+    $kv put key2 value2
+    $kv put key3 value3
+} -body {
+    lsort [$kv keys]
+} -result {key2 key3} -cleanup {
+    $kv destroy
+    $js delete_kv_bucket $bucket
 }
 
-test key_value_watchers-history-2 "Get history for all bucket" -setup {
+$js destroy
+$conn destroy
+stopNats NATS_JS
+
+tcltest::cleanupTests
+return
+
+test key_value_watchers-history-2 "Get history for a bucket" -setup {
     execNatsCmd kv add $bucket --history=10
     execNatsCmd kv put $bucket key1 value1_1
     execNatsCmd kv put $bucket key1 value1_2

@@ -183,16 +183,17 @@ oo::class create ::nats::key_value {
         set spec {callback        str  ""
                   include_history bool false
                   meta_only       bool false
-                  ignore_deletes  bool false}
+                  ignore_deletes  bool false
+                  updates_only    bool false}
         
-        #updates_only    bool false ??
+        
         nats::_parse_args $args $spec
         set deliver_policy [expr {$include_history ? "all" : "last_per_subject"}]
         # TODO use mirrored_bucket_name ?
-        return [nats::kv_watcher new [self] "$kv_read_prefix.$key_pattern" $stream $deliver_policy $meta_only $callback $ignore_deletes]
+        return [nats::kv_watcher new [self] "$kv_read_prefix.$key_pattern" $stream $deliver_policy $meta_only $callback $ignore_deletes $updates_only]
     }
     
-    method history {args} {
+    method _history {args} {
         set key ""
 
         # first argument is not a flag - it is key name
@@ -274,10 +275,24 @@ oo::class create ::nats::key_value {
 
     method keys {} {
         set w [my watch > -ignore_deletes 1 -meta_only 1]
-        set result [${w}::my Keys]
+        set result [${w}::my Gather keys]
         $w destroy
+        if {[llength $result] == 0} {
+            throw {NATS ErrKeyNotFound} "No keys found in bucket $bucket"  ;# nats.go raises ErrNoKeysFound instead
+        }
         return $result
     }
+    
+    method history {key} {
+        set w [my watch $key -include_history 1]
+        set result [${w}::my Gather history]
+        $w destroy
+        if {[llength $result] == 0} {
+            throw {NATS ErrKeyNotFound} "Key $key not found in bucket $bucket"
+        }
+        return $result
+    }
+    
     method _keys {args} {
         set spec [list \
             timeout pos_int $_timeout \
@@ -806,15 +821,20 @@ proc ::nats::time_to_millis {time} {
 }
 
 oo::class create ::nats::kv_watcher {
-    variable subID kv userCb initDone ignore_deletes gathering resultList
+    # watcher options/vars
+    variable subID userCb initDone ignore_deletes updates_only gathering resultList
+    # copied from the parent KV bucket, so that the user can destroy it while the watcher is living
+    variable conn kv_read_prefix bucket
     
-    constructor {kv_bucket filter_subject stream deliver_policy meta_only cb ignore_del} {
+    constructor {kv filter_subject stream deliver_policy meta_only cb ignore_del upd_only} {
         set initDone false  ;# becomes true after the current/historical data has been received
         set gathering ""
-        set kv $kv_bucket
         set conn [set ${kv}::conn]
+        set kv_read_prefix [set ${kv}::kv_read_prefix]
+        set bucket [set ${kv}::bucket]
         set userCb $cb
         set ignore_deletes $ignore_del
+        set updates_only $upd_only
         set inbox [$conn inbox]
         # ordered_consumer is a shorthand for several options - taken from nats.py
         # ack_wait is 22h
@@ -831,36 +851,39 @@ oo::class create ::nats::kv_watcher {
                            -filter_subject $filter_subject \
                            -headers_only $meta_only]
         # create an ephemeral push consumer
-        [set ${kv}::js] add_consumer $stream {*}$consumer_opts
+        set consumer_info [[set ${kv}::js] add_consumer $stream {*}$consumer_opts]
+        if {[dict get $consumer_info num_pending] == 0} {
+            after 0 [mymethod InitDone] ;# NB do not call it directly, because the user should be able to call e.g. "history" right after "watch"
+        }
         set subID [$conn subscribe $inbox -callback [mymethod SubscriberCb] -dictmsg true -post false]
     }
     destructor {
-        [set ${kv}::conn] unsubscribe $subID
+        $conn unsubscribe $subID
+    }
+    method InitDone {} {
+        set initDone true
+        if {$userCb ne ""} {
+            after 0 [list {*}$userCb ""]
+        }
     }
     method SubscriberCb {subj msg reply} {
         if {[nats::msg idle_heartbeat $msg]} {
             return  ;# not sure yet what to do with idle HBs
         }
-        set prefix_len [string length [set ${kv}::kv_read_prefix]]
-        set js [set ${kv}::js]
-        set meta [$js metadata $msg]
+        set meta [::nats::_metadata $msg]
         set delta [dict get $meta num_pending]
         set op [nats::header lookup $msg KV-Operation PUT] ;# note that normal PUT entries are delivered using MSG, so they can't have headers
-        
         if {$ignore_deletes} {
             if {$op in {PURGE DEL}} {
                 if {$delta == 0 && !$initDone} {
-                    set initDone true
-                    if {$userCb ne ""} {
-                        after 0 [list {*}$userCb ""]
-                    }
+                    
                 }
                 return
             }
         }
-        set key [string range $subj $prefix_len+1 end]
+        set key [string range $subj [string length $kv_read_prefix]+1 end]
         set entry [dict create \
-            bucket [set ${kv}::bucket] \
+            bucket $bucket \
             key $key \
             value [nats::msg data $msg] \
             revision [dict get $meta stream_seq] \
@@ -873,7 +896,7 @@ oo::class create ::nats::kv_watcher {
                 lappend resultList $key
             }
             history {
-                
+                lappend resultList $entry
             }
             default {
                 after 0 [list {*}$userCb $entry]
@@ -887,8 +910,8 @@ oo::class create ::nats::kv_watcher {
             }
         }
     }
-    method Keys {} {
-        set gathering keys
+    method Gather {what} {
+        set gathering $what ;# keys or history
         set resultList [list]
         nats::_coroVwait [self object]::initDone
         return $resultList

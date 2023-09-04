@@ -8,11 +8,11 @@ Key-Value functionality of NATS can be accessed by creating the `nats::key_value
 [*kv* put *key value*](#kv-put-key-value)<br/>
 [*kv* create *key value*](#kv-create-key-value)<br/>
 [*kv* update *key value revision*](#kv-update-key-value-revision)<br/>
-[*kv* delete *key* ?-revision *revision*?](#kv-delete-key--revision-revision)<br/>
+[*kv* delete *key* ?*revision*?](#kv-delete-key--revision-revision)<br/>
 [*kv* purge *key*](#kv-purge-key)<br/>
 [*kv* revert *key revision*](#kv-revert-key-revision)<br/>
 [*kv* status](#kv-status)<br/>
-[*kv* history ?*key*? ?-timeout *timeout*?](#kv-history-key--timeout-timeout)<br/>
+[*kv* history ?*key*?](#kv-history-key)<br/>
 [*kv* keys ?-timeout *timeout*?](#kv-keys-bucket--timeout-timeout)<br/>
 [*kv* watch ?*key*? ?-callback *callback*? ?-include_history *include_history*? ?-updates_only *updates_only*? ?-meta_only *meta_only*? ?-ignore_deletes *ignore_deletes*? ?-idle_heartbeat *idle_heartbeat*?](#kv-watch-key--callback-callback--include_history-include_history--updates_only-updates_only--meta_only-meta_only--ignore_deletes-ignore_deletes--idle_heartbeat-idle_heartbeat)<br/>
 [*kv* unwatch *watchId*](#kv-unwatch-watchid)<br/>
@@ -62,15 +62,15 @@ Methods returning messages kept under the `key` are returning `entry`, which is 
 - `operation` - `PUT`, `DEL` or `PURGE`
 
 ## Bucket status
-- `bucket`
-- `bytes`
-- `history`
-- `ttl`
-- `values`
+- `bucket` - name
+- `bytes` - size of the bucket
+- `history` - number of history entries per key
+- `ttl` - for how long (ms) the bucket keeps values or 0 for unlimited time
+- `values` - total number of entries in the bucket including historical ones
 - `mirror_name` optional
 - `mirror_domain` optional
-- `stream_config`
-- `stream_state`
+- `stream_config` - configuration of the backing stream
+- `stream_state` - state of the backing stream
 
 
 ## Commands
@@ -95,7 +95,7 @@ Puts a `value` into a `key` only if the `key` does not exists or it's last opera
 
 Updates a `key` with a new `value` only if the previous `entry` matches the given `revision`. If `revision` does not match than `WrongLastSequence` will be thrown. Useful when updates on key are based on previous values - using `update` (instead of `put`) will make sure no other values were set to key between read and write. Returns newly created `revision`.
 
-### kv delete *key* ?-revision *revision*?
+### kv delete *key* ?*revision*?
 
 Deletes a `key` from bucket (preserves history). Optionally `revision` can be given that should match last `key` value in bucket - otherwise delete won't happen (to make sure no values has been set meantime).
 
@@ -111,14 +111,14 @@ Reverts a value to a previous `revision` using put. It simply gets `revision` of
 
 View the status and information of a KV store.
 
-### kv history ?*key*? ?-timeout *timeout*?
+### kv history ?*key*?
 
 Gets the full history for a `key` or entire bucket. In order to do that, under the hood ephemeral consumer is created that gets necessary messages and returns when all required entries has been gathered. 
 `-timeout` can override default configuration.
 
-### kv keys ?-timeout *timeout*?
+### kv keys
 
-List available keys in a bucket. Similarly to [history](#kv-history-bucket-key--timeout-timeout) it creates ephemeral consumer to achieve that.
+List available keys in a bucket. Similarly to [history](#kv-history-bucket-key--timeout-timeout) it creates ephemeral consumer to achieve that. Throws `ErrNoKeysFound` if the bucket is empty.
 
 ### kv watch ?*key*? ?-callback *callback*? ?-include_history *include_history*? ?-updates_only *updates_only*? ?-meta_only *meta_only*? ?-ignore_deletes *ignore_deletes*? ?-idle_heartbeat *idle_heartbeat*?
 

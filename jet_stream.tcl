@@ -211,22 +211,9 @@ oo::class create ::nats::jet_stream {
         $conn cancel_request $reqID
     }
     
-    # metadata is encoded in the reply field:
-    # V1: $JS.ACK.<stream>.<consumer>.<delivered>.<sseq>.<cseq>.<time>.<pending>
-    # V2: $JS.ACK.<domain>.<account hash>.<stream>.<consumer>.<delivered>.<sseq>.<cseq>.<time>.<pending>.<random token>
-    # NB! I've got confirmation in Slack that as of Feb 2023, V2 metadata is not implemented yet in NATS
     method metadata {msg} {
-        set mlist [split [dict get $msg reply] .]
-        set mdict [dict create \
-                stream [lindex $mlist 2] \
-                consumer [lindex $mlist 3] \
-                num_delivered [lindex $mlist 4] \
-                stream_seq [lindex $mlist 5] \
-                consumer_seq [lindex $mlist 6] \
-                timestamp [lindex $mlist 7] \
-                num_pending [lindex $mlist 8]]
-        nats::_ns2ms mdict timestamp
-        return $mdict
+        # conceptually part of the jet_stream class, but it doesn't use any JS variables
+        return [nats::_metadata $msg]
     }
     
     # different types of ACKs: https://docs.nats.io/using-nats/developer/develop_jetstream/consumers#delivery-reliability
@@ -782,4 +769,22 @@ proc ::nats::_ns2ms {dict_name args} {
             dict set d $k [expr {entier($val/1000000)}]
         }
     }
+}
+
+# metadata is encoded in the reply field:
+# V1: $JS.ACK.<stream>.<consumer>.<delivered>.<sseq>.<cseq>.<time>.<pending>
+# V2: $JS.ACK.<domain>.<account hash>.<stream>.<consumer>.<delivered>.<sseq>.<cseq>.<time>.<pending>.<random token>
+# NB! I've got confirmation in Slack that as of Feb 2023, V2 metadata is not implemented yet in NATS
+proc ::nats::_metadata {msg} {
+    set mlist [split [dict get $msg reply] .]
+    set mdict [dict create \
+            stream [lindex $mlist 2] \
+            consumer [lindex $mlist 3] \
+            num_delivered [lindex $mlist 4] \
+            stream_seq [lindex $mlist 5] \
+            consumer_seq [lindex $mlist 6] \
+            timestamp [lindex $mlist 7] \
+            num_pending [lindex $mlist 8]]
+    nats::_ns2ms mdict timestamp
+    return $mdict
 }

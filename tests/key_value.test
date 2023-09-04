@@ -5,11 +5,15 @@
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
 # Test summary:
+# - checks that the bucket exists
 # - put
-# - get/get_value
-# - create/update
-# - delete/purge
+# - get, get_value
+# - create, update
+# - delete, revert
 # - UTF8 conversion
+# - KV buckets: create, empty, list, delete
+
+# Note: 'purge' is tested in key_value_watchers
 
 source test_utils.tcl
 
@@ -146,6 +150,7 @@ test key_value-revert-1 "Revert the key" -body {
 
 # this is "Mężny bądź, chroń pułk twój i sześć flag" (Polish pangram) encoded in UTF-8
 set utf8_value [encoding convertfrom utf-8 "\x4d\xc4\x99\xc5\xbc\x6e\x79\x20\x62\xc4\x85\x64\xc5\xba\x2c\x20\x63\x68\x72\x6f\xc5\x84\x20\x70\x75\xc5\x82\x6b\x20\x74\x77\xc3\xb3\x6a\x20\x69\x20\x73\x7a\x65\xc5\x9b\xc4\x87\x20\x66\x6c\x61\x67"]
+# this test crashes Tcl (?) with -singleproc 1
 # see also test extra_opts-6
 test key_value-utf8 "Get a UTF-8 encoded value from a bucket" -setup {
     set def_system [encoding system]
@@ -155,10 +160,10 @@ test key_value-utf8 "Get a UTF-8 encoded value from a bucket" -setup {
     chan configure [tcltest::outputChannel] -encoding utf-8
 } -body {
     execNatsCmd pub --force-stdin "\$KV.$bucket.MY_KEY" <$::tempFilePath 2>@1
-    [logger::servicecmd test_utils]::info "Got a corrupted UTF-8 message: [$kv get_value MY_KEY]"
+    test_utils::log::info "Got a corrupted UTF-8 message: [$kv get_value MY_KEY]"
     $conn configure -utf8_convert true
     set value [$kv get_value MY_KEY]
-    [logger::servicecmd test_utils]::info "Got a correct UTF-8 message: $value"  ;# this should be readable in the terminal
+    test_utils::log::info "Got a correct UTF-8 message: $value"  ;# this should be readable in the terminal
     set value  ;# account for \n added by makeFile
 } -result "$utf8_value\n" -cleanup {
     $conn reset -utf8_convert
@@ -197,14 +202,14 @@ test key_value-list-buckets-1 "Get a list of buckets" -body {
 test key_value-delete-bucket-1 "Delete a bucket" -body {
     $js delete_kv_bucket large_bucket
     $js kv_buckets
-} -result MY_TEST_BUCKET
+} -result MY_TEST_BUCKET -cleanup {
+    $large_kv destroy
+}
 
 test key_value-delete-bucket-2 "Delete the second bucket" -body {
     $js delete_kv_bucket $bucket
     $js kv_buckets
-} -result "" -cleanup {
-    $large_kv destroy
-}
+} -result ""
 
 test key_value-bind-no-bucket-2 "Try to bind to a bucket that was deleted" -body {
     $js bind_kv_bucket $bucket

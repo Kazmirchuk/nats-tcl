@@ -184,12 +184,12 @@ test extra_opts-6 "Check the utf8_convert option" -setup {
     wait_flush $conn
     execNatsCmd pub --force-stdin UTF8_TEST <$::tempFilePath 2>@1  ;# trying to pass UTF-8 just via CLI doesn't work
     wait_for ::inMsg
-    [logger::servicecmd test_utils]::info "Got a corrupted UTF-8 message: $::inMsg"
+    test_utils::log::info "Got a corrupted UTF-8 message: $::inMsg"
     
     $conn configure -utf8_convert true
     execNatsCmd pub --force-stdin UTF8_TEST <$::tempFilePath 2>@1
     wait_for ::inMsg
-    [logger::servicecmd test_utils]::info "Got a correct UTF-8 message: $::inMsg"  ;# this should be readable in the terminal
+    test_utils::log::info "Got a correct UTF-8 message: $::inMsg"  ;# this should be readable in the terminal
     
     set ::inMsg  ;# account for \n added by makeFile
 } -result "$utf8_msg\n" -cleanup {

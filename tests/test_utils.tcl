@@ -12,7 +12,6 @@ package require tcl::transform::observe
 package require tcl::chan::variable
 package require Thread
 package require lambda
-#package require logger::utils
 
 if {$tcl_platform(platform) eq "windows"} {
     package require twapi_process
@@ -228,7 +227,7 @@ namespace eval test_utils {
                 servers valid_str ""
             }
             if {$id eq ""} {
-                set id [namespace tail [self object]]
+                set id [namespace tail [self]]
             }
 
             set thread_script {
@@ -246,14 +245,14 @@ namespace eval test_utils {
             if {$queue ne ""} {
                 append log_msg " queue: $queue"
             }
-            [logger::servicecmd test_utils]::info $log_msg
+            test_utils::log::info $log_msg
             # no need in thread::errorproc - if there's an unexpected error in the thread, it will be logged to stderr by itself
         }
         
         destructor {
             thread::release $responderThread ;# makes the thread return from thread::wait
             thread::join $responderThread
-            [logger::servicecmd test_utils]::info "Responder $id finished"
+            test_utils::log::info "Responder $id finished"
         }
     }
     

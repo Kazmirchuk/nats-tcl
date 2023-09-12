@@ -24,6 +24,7 @@ tcltest::configure -testdir $thisDir -tmpdir $thisDir -verbose pe {*}$argv
 # - Tcl debugger doesn't work
 # - any output to stderr is considered as a failure, and there's no -ignorestderr for tcltest
 # - need to [source] test_utils in every .test file
+# - some Tcl errors become hidden, while they are visible with -singleproc 1
 if {![tcltest::singleProcess]} {
     encoding system utf-8  ;# in test key_value-utf8 printing Unicode to the console produces corrupted output unless I call this
 }

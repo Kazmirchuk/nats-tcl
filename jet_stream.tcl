@@ -122,7 +122,7 @@ oo::class create ::nats::jet_stream {
         
         set pull_reqs($reqID) [dict create]
         while {1} {
-            nats::_coroVwait [self object]::pull_reqs($reqID)
+            nats::_coroVwait [self]::pull_reqs($reqID)
             set sync_pull $pull_reqs($reqID)
             set inMsgs [dict lookup $sync_pull inMsgs]
             set msgCount [llength $inMsgs]

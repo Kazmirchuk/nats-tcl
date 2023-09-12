@@ -90,7 +90,7 @@ oo::class create ::nats::connection {
         set requestsInboxPrefix ""
         set pong 0
         my InitLogger $logger $log_chan $log_level
-        set serverPool [nats::server_pool new [self object]] 
+        set serverPool [nats::server_pool new [self]] 
     }
     
     destructor {
@@ -113,7 +113,7 @@ oo::class create ::nats::connection {
         # default output is stdout; default level is warn
         set loggerName $config(name)
         if {$loggerName eq ""} {
-            set loggerName [namespace tail [self object]]
+            set loggerName [namespace tail [self]]
         }
         
         namespace eval log "variable logChannel $log_chan; \
@@ -131,9 +131,9 @@ oo::class create ::nats::connection {
         # provide the same interface as Tcllib's logger; we use only these 4 logging levels
         foreach level {error warn info debug} {
             if {$belowLogLevel} {
-                interp alias {} [self object]::log::${level} {} [self object]::log::suppressed $level
+                interp alias {} [self]::log::${level} {} [self]::log::suppressed $level
             } else {
-                interp alias {} [self object]::log::${level} {} [self object]::log::log $level
+                interp alias {} [self]::log::${level} {} [self]::log::log $level
             }
             if {$log_level eq $level} {
                 set belowLogLevel 1
@@ -238,7 +238,7 @@ oo::class create ::nats::connection {
             # so we shouldn't vwait in this case
             if {$status == $nats::status_connecting} {
                 log::debug "Waiting for connection status"
-                nats::_coroVwait [self object]::status
+                nats::_coroVwait [self]::status
                 log::debug "Finished waiting for connection status"
             }
             if {$status != $nats::status_connected} {
@@ -442,11 +442,11 @@ oo::class create ::nats::connection {
         # sync request
         # remember that we can get a reply after timeout, so vwait must wait on a specific reqID
         if {$timeout != 0} {
-            set timerID [after $timeout [list dict set [self object]::requests($reqID) timedOut 1]]
+            set timerID [after $timeout [list dict set [self]::requests($reqID) timedOut 1]]
         }
         # if connection is lost, we need to cancel this timer, see also CoroMain
         set requests($reqID) [dict create timer $timerID]
-        nats::_coroVwait [self object]::requests($reqID)
+        nats::_coroVwait [self]::requests($reqID)
         if {![info exists requests($reqID)]} {
             throw {NATS ErrTimeout} "Connection lost"
         }
@@ -485,11 +485,11 @@ oo::class create ::nats::connection {
         }
         #sync request
         if {$timeout != 0} {
-            set timerID [after $timeout [list dict set [self object]::requests($reqID) timedOut 1]]
+            set timerID [after $timeout [list dict set [self]::requests($reqID) timedOut 1]]
         }
         set requests($reqID) [dict create timer $timerID]
         while {1} {
-            nats::_coroVwait [self object]::requests($reqID)
+            nats::_coroVwait [self]::requests($reqID)
             if {![info exists requests($reqID)]} {
                 throw {NATS ErrTimeout} "Connection lost"
             }
@@ -543,12 +543,12 @@ oo::class create ::nats::connection {
             throw {NATS ErrConnectionClosed} "No connection to NATS server"
         }
 
-        set timerID [after $timeout [list set [self object]::pong 0]]
+        set timerID [after $timeout [list set [self]::pong 0]]
 
         lappend outBuffer "PING"
         log::debug "sending PING"
         my ScheduleFlush
-        nats::_coroVwait [self object]::pong
+        nats::_coroVwait [self]::pong
         after cancel $timerID
         if {$pong} {
             return true

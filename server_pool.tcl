@@ -6,8 +6,6 @@
 package require uri
 package require struct::list
 
-namespace eval ::nats {}
-
 oo::class create ::nats::server_pool {
     variable servers conn
     
@@ -15,8 +13,6 @@ oo::class create ::nats::server_pool {
         set servers [list] ;# list of dicts working as FIFO queue
         # each dict contains: host port scheme discovered reconnects last_attempt (ms, mandatory), user password auth_token (optional)
         set conn $c
-    }
-    destructor {
     }
     
     # used only for URL discovered from the INFO message

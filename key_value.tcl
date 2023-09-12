@@ -913,7 +913,7 @@ oo::class create ::nats::kv_watcher {
     method Gather {what} {
         set gathering $what ;# keys or history
         set resultList [list]
-        nats::_coroVwait [self object]::initDone
+        nats::_coroVwait [self]::initDone
         return $resultList
     }
 }

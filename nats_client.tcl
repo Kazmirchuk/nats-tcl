@@ -728,6 +728,9 @@ oo::class create ::nats::connection {
             # if it throws ErrNoServers, we have exhausted all servers in the pool
             # we must stop the coroutine, so let the error propagate
             lassign [$serverPool next_server] host port ;# it may wait for reconnect_time_wait ms!
+            # connect_timeout applies to a connect attempt to one server and includes not only TCP handshake, but also NATS-level handshake
+            # and the first PING/PONG exchange to ensure successful authentication
+            my StartConnectTimer
             log::info "Connecting to the server at $host:$port"
             try {
                 # socket -async can throw e.g. in case of a DNS resolution failure
@@ -1537,7 +1540,8 @@ proc ::nats::_parse_args {args_list spec {doConfig 0}} {
     }
 }
 namespace eval ::nats {
-    namespace export connection msg header timestamp
+    namespace export connection msg header timestamp isotime_to_msec msec_to_isotime
+    # no need to export jet_stream, key_value or kv_watcher, since they are created by factory methods
 }
 
 # Let me respectfully remind you:

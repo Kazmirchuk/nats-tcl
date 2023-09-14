@@ -19,10 +19,10 @@ oo::class create ::nats::key_value {
 
     constructor {connection jet_stream domain_name bucket_name stream_info timeout} {
         set conn $connection
-        set status_var [${connection}::my varname status]
+        set status_var "[info object namespace $conn]::status"
         set js $jet_stream
         set bucket $bucket_name
-        set stream "KV_${bucket_name}"
+        set stream "KV_$bucket_name"
         set _timeout $timeout ;# avoid clash with -timeout option when using _parse_args
         array set requests {} ;# reqID -> dict
         array set watch {} ;# watchID -> dict
@@ -90,7 +90,7 @@ oo::class create ::nats::key_value {
         } trap {NATS ErrMsgNotFound} err {
             throw {NATS ErrKeyNotFound} "Key $key not found in bucket $bucket"
         } trap {NATS ErrStreamNotFound} err {
-            throw {NATS ErrBucketNotFound} "Bucket ${bucket} not found"
+            throw {NATS ErrBucketNotFound} "Bucket $bucket not found"
         }
         
         set entry [dict create \
@@ -173,7 +173,7 @@ oo::class create ::nats::key_value {
         try {
             set stream_info [$js stream_info $stream]
         } trap {NATS ErrStreamNotFound} err {
-            throw {NATS BucketNotFound} "Bucket ${bucket} not found"
+            throw {NATS BucketNotFound} "Bucket $bucket not found"
         }
         return [my StreamInfoToKvInfo $stream_info]
     }

@@ -18,10 +18,11 @@ oo::class create ::nats::server_pool {
     # used only for URL discovered from the INFO message
     # remember that it carries only IP:port, so no scheme etc
     method add {url} {
+        set ns [info object namespace $conn]
         try {
             set newServer [my parse $url]
         } trap {NATS INVALID_ARG} err {
-            [info object namespace $conn]::log::warn $err ;# very unlikely
+            ${ns}::log::warn $err ;# very unlikely
             return
         }
         foreach s $servers {
@@ -31,7 +32,7 @@ oo::class create ::nats::server_pool {
         }
         dict set newServer discovered true
         set servers [linsert $servers 0 $newServer] ;# recall that current server is always at the end of the list
-        [info object namespace $conn]::log::debug "Added $url to the server pool"
+        ${ns}::log::debug "Added $url to the server pool"
     }
     
     # used by "configure". All or nothing: if at least one URL is invalid, the old configuration stays intact
@@ -92,6 +93,7 @@ oo::class create ::nats::server_pool {
     }
     
     method next_server {} {
+        set ns [info object namespace $conn]
         while {1} {
             if { [llength $servers] == 0 } {
                 throw {NATS ErrNoServers} "Server pool is empty"
@@ -101,14 +103,13 @@ oo::class create ::nats::server_pool {
             #"pop" a server; using struct::queue seems like an overkill for such a small list
             set s [lindex $servers 0]
             # during initial connecting process we go through the pool only once
-            set status [set ${conn}::status]
-            if {$status == $nats::status_connecting && [dict get $s reconnects]}  {
+            if {[set ${ns}::status] == $nats::status_connecting && [dict get $s reconnects]}  {
                 throw {NATS ErrNoServers} "No servers available for connection"
             }
             set servers [lreplace $servers 0 0]
             # max_reconnect_attempts == -1 means "unlimited". See also selectNextServer in nats.go
             if {$attempts >= 0 && [dict get $s reconnects] >= $attempts} {
-                [info object namespace $conn]::log::debug "Removed [dict get $s host]:[dict get $s port] from the server pool"
+                ${ns}::log::debug "Removed [dict get $s host]:[dict get $s port] from the server pool"
                 continue
             }
             
@@ -117,7 +118,7 @@ oo::class create ::nats::server_pool {
             if {$now < $last_attempt + $wait} {
                 # other clients simply wait for reconnect_time_wait, but this approach is more precise
                 set waiting_time [expr {$wait - ($now - $last_attempt)}]
-                [info object namespace $conn]::log::debug "Waiting for $waiting_time ms before connecting to the next server"
+                ${ns}::log::debug "Waiting for $waiting_time ms before connecting to the next server"
                 set timer [after $waiting_time [info coroutine]]
                 set reason [yield]
                 if {$reason eq "stop" } {
@@ -131,15 +132,11 @@ oo::class create ::nats::server_pool {
             lappend servers $s
             break
         }
-        
-        # connect_timeout applies to a connect attempt to one server and includes not only TCP handshake, but also NATS-level handshake
-        # and the first PING/PONG exchange to ensure successful authentication
-        ${conn}::my StartConnectTimer
         return [my current_server]
     }
     
     method current_server_connected {ok} {
-        ${conn}::my CancelConnectTimer
+        [info object namespace $conn]::my CancelConnectTimer
         set s [lindex $servers end]
         dict set s last_attempt [clock milliseconds]
         if {$ok} {

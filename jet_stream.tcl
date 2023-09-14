@@ -111,7 +111,7 @@ oo::class create ::nats::jet_stream {
         # if we've got no messages:
         # - server-side timeout raises no error, and we return an empty list
         # - client-side timeout raises ErrTimeout - this is consistent with nats.py
-        set reqID [set ${conn}::counters(request)] 
+        set reqID [set [info object namespace $conn]::counters(request)] 
         incr reqID ;# need to know the next req ID to pass it to the callback
         
         $conn request $subject [nats::_local2json $json_spec] -dictmsg true -timeout $timeout -max_msgs $batch -callback [mymethod ConsumeCb $reqID]
@@ -470,14 +470,14 @@ oo::class create ::nats::jet_stream {
 
     method bind_kv_bucket {bucket} {
         my CheckBucketName $bucket
-        set stream "KV_${bucket}"
+        set stream "KV_$bucket"
         try {
             set stream_info [my stream_info $stream]
         } trap {NATS ErrStreamNotFound} err {
-            throw {NATS ErrBucketNotFound} "Bucket ${bucket} not found"
+            throw {NATS ErrBucketNotFound} "Bucket $bucket not found"
         }
         if {[dict get $stream_info config max_msgs_per_subject] < 1} {
-            throw {NATS ErrBucketNotFound} "Bucket ${bucket} not found"
+            throw {NATS ErrBucketNotFound} "Bucket $bucket not found"
         }
         return [nats::key_value new $conn [self] $domain $bucket $stream_info $_timeout]
     }
@@ -528,26 +528,26 @@ oo::class create ::nats::jet_stream {
 
         if {[info exists mirror_name]} {
             # TODO format JSON
-            set mirror_info [dict create name "KV_${mirror_name}"]
+            set mirror_info [dict create name "KV_$mirror_name"]
             if {[info exists mirror_domain]} {
-                dict set mirror_info external api "\$JS.${mirror_domain}.API"
+                dict set mirror_info external api "\$JS.$mirror_domain.API"
             }
             dict set options -mirror $mirror_info
         } else {
-            dict set stream_config subjects "\$KV.${bucket}.>"
+            dict set stream_config subjects "\$KV.$bucket.>"
         }
 
-        set stream_info [my add_stream "KV_${bucket}" {*}$stream_config]
+        set stream_info [my add_stream "KV_$bucket" {*}$stream_config]
         return [::nats::key_value new $conn [self] $domain $bucket $stream_info $_timeout]
     }
 
     method delete_kv_bucket {bucket} {
         my CheckBucketName $bucket
-        set stream "KV_${bucket}"
+        set stream "KV_$bucket"
         try {
             return [my delete_stream $stream]
         } trap {NATS ErrStreamNotFound} err {
-            throw {NATS ErrBucketNotFound} "Bucket ${bucket} not found"
+            throw {NATS ErrBucketNotFound} "Bucket $bucket not found"
         }
     }
 

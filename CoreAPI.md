@@ -43,7 +43,9 @@ All commands are defined in and exported from the `::nats` namespace.
 [header keys *msgValue ?globPattern?*](#header-keys-msgvalue-globpattern)<br/>
 [header lookup *msgValue key default*](#header-lookup-msgValue-key-default)<br/>
 
-[nats::timestamp](#natstimestamp)
+[nats::timestamp](#natstimestamp)<br/>
+[nats::isotime_to_msec *isotime*](natsisotime_to_msec-isotime)<br/>
+[nats::msec_to_isotime *msec ?tz?*](natsmsec_to_isotime-msec-tz)
 
 ## Event processing
 The client relies on a running event loop to send and deliver messages and uses only non-blocking sockets. Everything works in your Tcl interpreter and no background Tcl threads or interpreters are created under the hood. So, if your application might leave the event loop for a long time (e.g. a long computation without event processing), the NATS client should be created in a separate thread.
@@ -97,7 +99,7 @@ The **configure** method accepts the following options. Make sure to set them *b
 | -secure | boolean | false | If secure=true, connection will fail if a server can't provide a TLS connection |
 | -check_subjects | boolean | true | Enable client-side checking of subjects when publishing or subscribing |
 | -dictmsg | boolean | false | Return messages from `subscribe` and `request` as dicts by default |
-| -utf8_convert | boolean | false | By default, the client does not change a message body when it is sent or received. Setting this option to `true` will encode outgoing messages to UTF-8 and decode incoming messages from UTF-8 |
+| -utf8_convert | boolean | false | By default, the client does not change a message body when it is sent or received. Setting this option to `true` will encode outgoing messages to UTF-8 and decode incoming messages from UTF-8. This option applies to the higher-level classes as well: `jet_stream` and `key_value`. |
 
 ## Commands
 
@@ -151,8 +153,8 @@ Sends `message` (payload) to the specified `subject` with an automatically gener
 You can provide the following options:
 - `-timeout ms` - expire the request after X ms (recommended!). Default timeout is infinite.
 - `-callback cmdPrefix` - do not block and deliver the reply to this callback.
-- `-dictmsg dictmsg` - return the reply as a dict accessible to the [nats::msg](#natsmsg) ensemble.
-- `-max_msgs maxMsgs` - gather multiple replies. If this option is not used, the 'new-style' request is triggered under the hood (uses a shared subscription for all requests), and only the first reply is returned. If this option is used (even with `maxMsgs`=1), it triggers the 'old-style' request that creates its own subscription. `-dictmsg` is always true in this case.
+- `-dictmsg bool` - return the reply as a dict accessible to the [nats::msg](#natsmsg) ensemble.
+- `-max_msgs int` - gather multiple replies. If this option is not used, the 'new-style' request is triggered under the hood (uses a shared subscription for all requests), and only the first reply is returned. If this option is used (even with `maxMsgs`=1), it triggers the 'old-style' request that creates its own subscription. `-dictmsg` is always true in this case.
 
 Depending if there's a callback, the method works in a sync or async manner.
 
@@ -208,6 +210,8 @@ Returns the message payload.
 Returns the message reply-to subject.
 ### msg no_responders *msgValue*
 Returns true if this is a no-responders message (status 503).
+### msg idle_heartbeat *msgValue*
+Returns true if this is an idle heartbeat (status 100).
 ### msg seq *msgValue*
 Returns the message sequence number (only for messages returned by `stream_msg_get`).
 ### msg timestamp *msgValue*
@@ -221,15 +225,19 @@ Sets the `key` header to `value`. Multiple headers can be set at once by repeati
 ### header delete *msgVariable key*
 Deletes the `key` header from the message.
 ### header values *msgValue key*
-Gets a list of all values of the `key` header.
+Returns a list of all values of the `key` header.
 ### header get *msgValue key*
-Gets the first value of the `key` header. This is a convenient shortcut for the `values` command, since usually each header has only one value.
+Returns the first value of the `key` header. This is a convenient shortcut for the `values` command, since usually each header has only one value.
 ### header keys *msgValue ?globPattern?*
-Gets a list of all header keys in the message. With `globPattern`, only matching keys are returned (like in `dict keys`)
+Returns a list of all header keys in the message. With `globPattern`, only matching keys are returned (like in `dict keys`)
 ### header lookup *msgValue key default*
 Same as [header get](#header-get-msgvalue-key), but returns a default value if the key does not exist.
 ### nats::timestamp
-Returns current local time in the ISO format, including milliseconds. Useful for logging.
+Returns current local time in the ISO 8601 format, including milliseconds. Useful for logging.
+### nats::isotime_to_msec *isotime*
+Converts an ISO timestamp (as used by the NATS wire format, e.g. 2022-11-22T13:31:35.4514983Z) to integer milliseconds since the epoch (note possible rounding of fractional seconds).
+### nats::msec_to_isotime *msec ?tz?*
+Converts integer milliseconds to an ISO timestamp in the given timezone (default UTC). The local time zone can be specified as `:localtime` (see the [Tcl reference](https://www.tcl.tk/man/tcl8.6/TclCmd/clock.html#M78)). Note that the time zone designator is not included in the returned string.
 
 ## Error handling
 Error codes are similar to those from the nats.go client as much as possible. A few additional error codes provide more information about failed connection attempts to the NATS server: ErrBrokenSocket, ErrTLS, ErrConnectionRefused.

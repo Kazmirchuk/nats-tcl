@@ -12,10 +12,9 @@ set conn [nats::connection new "KV" -log_chan [tcltest::outputChannel]]
 $conn configure -servers nats://localhost:4222
 $conn connect
 set js [$conn jet_stream]
+set kv [$js create_kv_bucket $bucket -history 64]
 
-test key_value_watchers-history-1 "Get history for an empty bucket" -setup {
-    set kv [$js create_kv_bucket $bucket -history 64]
-} -body {
+test key_value_watchers-history-1 "Get history for an empty bucket" -body {
     $kv history >
 } -result * -match glob -errorCode {NATS ErrKeyNotFound}
 
@@ -87,11 +86,66 @@ test key_value_watchers-keys-2 "Get all keys" -setup {
     $kv put key3 value3
 } -body {
     lsort [$kv keys]
-} -result {key2 key3} -cleanup {
-    $kv destroy
-    $js delete_kv_bucket $bucket
+} -result {key2 key3}
+
+set watcherCallback [lambda {entry} {
+    lappend ::allEntries $entry
+}]
+
+test key_value_watchers-watch-1 "Watch one key" -body {
+    set watcher [$kv watch key2 -callback $watcherCallback]
+    $kv put key2 value3
+    $kv delete key2
+    while {[llength $allEntries] < 4} {
+        wait_for ::allEntries
+    }
+    assert {[dict_in [dict create \
+                      bucket $bucket \
+                      key key2 \
+                      value value2 \
+                      operation PUT] [lindex $allEntries 0]]}
+    assert {[lindex $allEntries 1] eq ""}
+    assert {[dict_in [dict create \
+                      bucket $bucket \
+                      key key2 \
+                      value value3 \
+                      operation PUT] [lindex $allEntries 2]]}
+    assert {[dict_in [dict create \
+                      bucket $bucket \
+                      key key2 \
+                      value {} \
+                      operation DEL] [lindex $allEntries 3]]}
+} -result "" -cleanup {
+    $watcher destroy
+    set allEntries [list]
 }
 
+test key_value_watchers-watch-2 "Watch a wildcard" -body {
+    set watcher [$kv watch keys.* -callback $watcherCallback -ignore_deletes true]
+    $kv put keys.1 value1
+    $kv delete keys.1
+    $kv put keys.2 value2
+    while {[llength $allEntries] < 3} {
+        wait_for ::allEntries
+    }
+    assert {[lindex $allEntries 0] eq ""}
+    assert {[dict_in [dict create \
+                      bucket $bucket \
+                      key keys.1 \
+                      value value1 \
+                      operation PUT] [lindex $allEntries 1]]}
+    assert {[dict_in [dict create \
+                      bucket $bucket \
+                      key keys.2 \
+                      value value2 \
+                      operation PUT] [lindex $allEntries 2]]}
+} -result "" -cleanup {
+    $watcher destroy
+    set allEntries [list]
+}
+
+$kv destroy
+$js delete_kv_bucket $bucket
 $js destroy
 $conn destroy
 stopNats NATS_JS

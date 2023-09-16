@@ -155,7 +155,7 @@ oo::class create ::nats::key_value {
         my PublishStream $msg
         return
     }
-
+    # TODO add revision
     method purge {key} {
         my CheckKeyName $key
         set msg [nats::msg create "$kv_write_prefix.$key"]
@@ -523,7 +523,7 @@ oo::class create ::nats::key_value {
         return $watchID
     }
 
-    method unwatch {watchID} {
+    method _unwatch {watchID} {
         return [my UnwatchImpl $watchID]
     }
 

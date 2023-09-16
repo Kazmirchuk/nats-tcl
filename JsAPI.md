@@ -69,10 +69,12 @@ Note that API of official NATS clients (`JetStreamContext`) is designed in a way
 
 Also, official NATS clients often provide an auto-acknowledgment option (and sometimes even default to it!) - I find it potentially harmful, so it's missing from this client. Always remember to acknoledge JetStream messages according to your policy.
 
-The Tcl client does not provide a dedicated method to subscribe to push consumers. The core NATS subscription is perfectly adequate for the task. If your push consumer is configured with idle heartbeats, you will need to filter them out based on the status header = 100. You can find an example of such subscription in [js_msg.tcl](examples/js_msg.tcl).
+The Tcl client does not provide a dedicated method to subscribe to push consumers. The core NATS subscription is perfectly adequate for the task. If your push consumer is configured with idle heartbeats, you will need to filter them out by checking `nats::msg idle_heartbeat`. You can find an example of such subscription in [js_msg.tcl](examples/js_msg.tcl).
 
 ## JetStream wire format
 The JetStream wire format uses nanoseconds for timestamps and durations in all requests and replies. To be consistent with the rest of the Tcl API, the client converts them to milliseconds before returning to a user. And vice versa: all function arguments are accepted as ms and converted to ns before sending.
+
+Streams and consumers are checked according to the naming rules described in [ADR-6](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-6.md).
 
 Paging with total/offset/limit is not supported.
 
@@ -150,7 +152,7 @@ If a callback is given, the call returns immediately. Return value is a unique I
 
 If less than `batch_size` messages are pulled before the pull request times out, the callback is invoked one last time with `timedOut=1`.
 
-The client handles status messages 404, 408 and 409 transparently. You can see them in the debug log, if needed. Also, they are passed to the callback, in case you need to distinguish between a client-side and server-side timeout.
+The client handles status messages 404, 408 and 409 transparently. You can see them in the debug log, if needed. Also, they are passed to the callback together with `timedOut=1`.
 
 Depending on the consumer's [AckPolicy](https://docs.nats.io/nats-concepts/jetstream/consumers#ackpolicy), you might need to acknowledge the received messages with one of the methods below. [This](https://docs.nats.io/using-nats/developer/develop_jetstream/consumers#delivery-reliability) official doc explains all different kinds of ACKs.
 
@@ -174,7 +176,7 @@ Returns a dict with metadata of the message that is extracted from the reply-to 
 - timestamp (ms)
 - num_pending
 
-Note that when a message is received using `stream_msg_get`, this metadata is not available. Instead, you can get the stream sequence number and the timestamp using `nats::msg`.
+Note that when a message is received using `stream_msg_get`, this metadata is not available. Instead, you can get the stream sequence number and the timestamp using the `nats::msg` ensemble.
 ### js cancel_pull_request *reqID*
 Cancels the asynchronous pull request with the given `reqID`.
 ### js add_stream *stream* ?-option *value*?..

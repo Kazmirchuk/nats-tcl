@@ -4,8 +4,118 @@
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
+oo::class create ::nats::SyncPullRequest {
+    variable conn inMsgs reqStatus reqID
+    
+    constructor {} {
+        set inMsgs [list]
+        set reqStatus running ;# one of: running, done, timeout
+    }
+    method run {c subject msg timeout batch } {
+        set conn $c
+        set reqID [$conn request $subject $msg -dictmsg true -timeout $timeout -max_msgs $batch -callback [mymethod OnMsg]]
+        try {
+            while {1} {
+                nats::_coroVwait [namespace which -variable reqStatus] ;# wait for 1 message
+                set msgCount [llength $inMsgs]
+                switch -- $reqStatus {
+                    timeout {
+                        if {$msgCount > 0} {
+                            break ;# we've received at least some messages - return them
+                        }
+                        # probably wrong stream/consumer - see also https://github.com/nats-io/nats-server/issues/2107
+                        throw {NATS ErrTimeout} "Sync pull request timeout, subject=$subject"
+                    }
+                    done {
+                        # we've received a status message, which means that the pull request is done
+                        if {$batch - $msgCount > 1} {
+                            # no need to cancel the request if this was the last expected message
+                            $conn cancel_request $reqID
+                        }
+                        break
+                    }
+                    default {
+                        if {$msgCount == $batch} {
+                            break
+                        }
+                    }
+                }
+            }
+            return $inMsgs
+        } finally {
+            my destroy
+        }
+    }
+    method OnMsg {timedOut msg} {
+        if {$timedOut} {
+            # client-side timeout or connection lost; we may have received some messages before
+            [info object namespace $conn]::log::debug "Sync pull request $reqID timed out"
+            set reqStatus timeout
+            return
+        }
+        set msgStatus [nats::header lookup $msg Status ""]
+        switch -- $msgStatus {
+            404 - 408 - 409 {
+                [info object namespace $conn]::log::debug "Sync pull request $reqID got status message $msgStatus"
+                set reqStatus done
+            }
+            default {
+                lappend inMsgs $msg
+                set reqStatus running
+            }
+        }
+    }
+}
+
+oo::class create ::nats::AsyncPullRequest {
+    variable conn batch_size userCb msgCount reqID
+    
+    constructor {cb} {
+        set userCb $cb
+        set msgCount 0  ;# only user's messages
+        set reqID 0
+    }
+    method run {c subject msg timeout batch} {
+        set conn $c
+        set batch_size $batch
+        set reqID [$conn request $subject $msg -dictmsg true -timeout $timeout -max_msgs $batch -callback [mymethod OnMsg]]
+        return [self]
+    }
+    method OnMsg {timedOut msg} {
+        if {$timedOut} {
+            # client-side timeout or connection lost; we may have received some messages before
+            [info object namespace $conn]::log::debug "Async pull request $reqID timed out"
+            after 0 [list {*}$userCb 1 ""]
+            set reqID 0 ;# the request has been already cancelled by OldStyleRequest
+            my destroy
+            return
+        }
+        set msgStatus [nats::header lookup $msg Status ""]
+        switch -- $msgStatus {
+            404 - 408 - 409 {
+                [info object namespace $conn]::log::debug "Async pull request $reqID got status message $msgStatus"
+                after 0 [list {*}$userCb 1 $msg] ;# just like with old-style requests, inform the user that the pull request timed out
+                my destroy
+            }
+            default {
+                incr msgCount
+                after 0 [list {*}$userCb 0 $msg]
+                if {$msgCount == $batch_size} {
+                    my destroy
+                }
+            }
+        }
+    }
+    destructor {
+        if {$batch_size - $msgCount <= 1 || $reqID == 0} {
+            return
+        }
+        $conn cancel_request $reqID
+    }
+}
+
 oo::class create ::nats::jet_stream {
-    variable conn _timeout api_prefix pull_reqs domain
+    variable conn _timeout api_prefix domain
 
     # do NOT call directly! instead use [$connection jet_stream]
     constructor {c t d} {
@@ -17,9 +127,6 @@ oo::class create ::nats::jet_stream {
         } else {
             set api_prefix \$JS.$d.API
         }
-        array set pull_reqs {} ;# reqID -> dict
-        # sync pull requests: timedOut: bool, inMsgs: list (excluding status messages)
-        # async pull requests: recMsgs: int, callback: str, batch: int
     }
 
     # JetStream wire API Reference https://docs.nats.io/reference/reference-protocols/nats_api_reference
@@ -79,7 +186,7 @@ oo::class create ::nats::jet_stream {
             callback valid_str ""
         }
         # timeout specifies the client-side timeout; if not given, this is a no_wait fetch
-        # expires specifies the server-side timeout (undocumented arg only for testing)
+        # expires specifies the server-side timeout (undocumented option only for testing)
         if {[info exists timeout]} {
             set no_wait false
             if {![info exists expires]} {
@@ -97,118 +204,32 @@ oo::class create ::nats::jet_stream {
         # 2. followed by a long fetch
         # and they have a special optimized case for batch=1.
         # I don't see a need for such intricacies in this client
-
         set json_spec {
             expires ns null
             batch   int null
             no_wait bool null
         }
         set batch $batch_size
-
-        # if there are no messages at all, I get a single 404
+        # if there are no messages at all, and I send a no_wait request, I get back 404
+        # if there are no messages, and I send no_wait=false, I get 408 after the request expires
         # if there are some messages, I get them followed by 408
         # if there are all needed messages, there's no additional status message
         # if we've got no messages:
         # - server-side timeout raises no error, and we return an empty list
         # - client-side timeout raises ErrTimeout - this is consistent with nats.py
-        set reqID [set [info object namespace $conn]::counters(request)] 
-        incr reqID ;# need to know the next req ID to pass it to the callback
+        # TODO check on Slack if this is canonical? doesn't look logical
         
-        $conn request $subject [nats::_local2json $json_spec] -dictmsg true -timeout $timeout -max_msgs $batch -callback [mymethod ConsumeCb $reqID]
-        if {$callback ne ""} {
-            set pull_reqs($reqID) [dict create recMsgs 0 callback $callback batch $batch]
-            return $reqID
+        # both classes self-destruct, when the pull request is done
+        if {$callback eq ""} {
+            set req [nats::SyncPullRequest new]
+        } else {
+            set req [nats::AsyncPullRequest new $callback]
         }
-        
-        set pull_reqs($reqID) [dict create]
-        while {1} {
-            nats::_coroVwait [self]::pull_reqs($reqID)
-            set sync_pull $pull_reqs($reqID)
-            set inMsgs [dict lookup $sync_pull inMsgs]
-            set msgCount [llength $inMsgs]
-            switch -- [dict lookup $sync_pull timedOut -1] {
-                1 {
-                    if {$msgCount > 0} {
-                        break ;# we've received at least some messages - return them
-                    }
-                    unset pull_reqs($reqID)
-                    # probably wrong stream/consumer - see also https://github.com/nats-io/nats-server/issues/2107
-                    throw {NATS ErrTimeout} "Consume timeout! stream=$stream consumer=$consumer"
-                }
-                0 {
-                    # we've received a status message, which means that the pull request is done
-                    if {$batch - $msgCount > 1} {
-                        # no need to cancel the request if this was the last expected message
-                        $conn cancel_request $reqID
-                    }
-                    break
-                }
-                default {
-                    if {$msgCount == $batch} {
-                        break
-                    }
-                }
-            }
-        }
-        unset pull_reqs($reqID)
-        return $inMsgs
-    }
-    
-    method ConsumeCb {reqID timedOut msg} {
-        if {![info exists pull_reqs($reqID)]} {
-            return ;# pull request was cancelled after the callback has been already scheduled
-        }
-        set pull_req $pull_reqs($reqID)
-        set userCb [dict lookup $pull_req callback]
-        if {$userCb ne ""} {
-            set recMsgs [dict get $pull_reqs($reqID) recMsgs]
-            set batch [dict get $pull_reqs($reqID) batch]
-        }
-        if {$timedOut} {
-            # client-side timeout or connection lost; we may have received some messages before
-            [info object namespace $conn]::log::debug "Pull request $reqID timed out"
-            if {$userCb eq ""} {
-                dict set pull_reqs($reqID) timedOut 1
-            } else {
-                after 0 [list {*}$userCb 1 ""]
-                unset pull_reqs($reqID)
-            }
-            return
-        } 
-        set msgStatus [nats::header lookup $msg Status ""]
-        switch -- $msgStatus {
-            404 - 408 - 409 {
-                [info object namespace $conn]::log::debug "Pull request $reqID got status message $msgStatus"
-                if {$userCb eq ""} {
-                    dict set pull_reqs($reqID) timedOut 0
-                } else {
-                    if {$batch - $recMsgs > 1} {
-                        $conn cancel_request $reqID
-                    }
-                    unset pull_reqs($reqID)
-                    # just like with old-style requests, inform the user that the pull request timed out
-                    after 0 [list {*}$userCb 1 $msg]
-                }
-            }
-            default {
-                if {$userCb eq ""} {
-                    dict lappend pull_reqs($reqID) inMsgs $msg
-                } else {
-                    incr recMsgs
-                    after 0 [list {*}$userCb 0 $msg]
-                    if {$recMsgs == $batch} {
-                        unset pull_reqs($reqID)
-                    } else {
-                        dict set pull_reqs($reqID) recMsgs $recMsgs
-                    }
-                }
-            }
-        }
+        return [$req run $conn $subject [nats::_local2json $json_spec] $timeout $batch]
     }
     
     method cancel_pull_request {reqID} {
-        unset pull_reqs($reqID)
-        $conn cancel_request $reqID
+        $reqID destroy
     }
     
     method metadata {msg} {

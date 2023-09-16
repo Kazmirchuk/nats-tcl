@@ -204,7 +204,7 @@ test jet_stream-4.2 "Fetch with expires - no messages - client-side timeout" -bo
     } elapsed
     assert {[approx $elapsed 500]}
     dict get $errOpts -errorcode
-} -result {NATS ErrTimeout} {*}[test_stdout "Pull request*timed out"]
+} -result {NATS ErrTimeout} {*}[test_stdout "pull request*timed out"]
 
 test jet_stream-4.3 "Fetch with expires - get some messages" -setup {
     foreach msg { 1 2 3 } {
@@ -259,7 +259,7 @@ test jet_stream-5.2 "Async fetch - no messages - client-side timeout" -body {
     } elapsed
     assert {[approx $elapsed 500]}
     set inMsg
-} -result timeout {*}[test_stdout "Pull request*timed out"]
+} -result timeout {*}[test_stdout "pull request*timed out"]
 
 set autoAckCallback [lambda {js timedOut msg} {
     lappend ::gotMsgs [list $timedOut $msg]
@@ -318,7 +318,7 @@ test jet_stream-5.4 "Async fetch - get some messages then timeout" -setup {
     lassign [lindex $gotMsgs 3] timedOut msg
     assert {$timedOut}
     set msg
-} -result "" {*}[test_stdout "Pull request*timed out"]
+} -result "" {*}[test_stdout "pull request*timed out"]
                 
 test jet_stream-5.5 "Async fetch - get all messages" -setup {
     set gotMsgs [list]
@@ -370,7 +370,9 @@ test jet_stream-7 "Cancel a pull request" -setup {
 } -result 0
 
 test jet_stream-8 "Check there are no pending pull requests left" -body {
-    array size ${jet_stream}::pull_reqs
+    assert {[llength [info class instances nats::AsyncPullRequest]] == 0} 1
+    assert {[llength [info class instances nats::SyncPullRequest]] == 0} 1
+    array size ${conn}::requests
 } -result 0
 
 $jet_stream delete_stream $stream_name

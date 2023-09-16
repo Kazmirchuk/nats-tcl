@@ -115,7 +115,7 @@ oo::class create ::nats::connection {
         if {$loggerName eq ""} {
             set loggerName [namespace tail [self]]
         }
-        
+        # the destructor will delete this namespace 
         namespace eval log "variable logChannel $log_chan; \
                             variable loggerName $loggerName;"
         

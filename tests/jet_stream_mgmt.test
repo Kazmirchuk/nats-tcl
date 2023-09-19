@@ -9,7 +9,7 @@
 # - actions on a message: get, delete
 source test_utils.tcl
 
-startNats NATS --jetstream --store_dir [tcltest::temporaryDirectory]
+startNats NATS --jetstream
 set conn [nats::connection new "JS_mgmt" -log_chan [tcltest::outputChannel]]
 $conn configure -servers nats://localhost:4222
 $conn connect

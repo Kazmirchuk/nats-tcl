@@ -44,8 +44,8 @@ All commands are defined in and exported from the `::nats` namespace.
 [header lookup *msgValue key default*](#header-lookup-msgValue-key-default)<br/>
 
 [nats::timestamp](#natstimestamp)<br/>
-[nats::isotime_to_msec *isotime*](natsisotime_to_msec-isotime)<br/>
-[nats::msec_to_isotime *msec ?tz?*](natsmsec_to_isotime-msec-tz)
+[nats::isotime_to_msec *isotime*](#natsisotime_to_msec-isotime)<br/>
+[nats::msec_to_isotime *msec ?tz?*](#natsmsec_to_isotime-msec-tz)
 
 ## Event processing
 The client relies on a running event loop to send and deliver messages and uses only non-blocking sockets. Everything works in your Tcl interpreter and no background Tcl threads or interpreters are created under the hood. So, if your application might leave the event loop for a long time (e.g. a long computation without event processing), the NATS client should be created in a separate thread.

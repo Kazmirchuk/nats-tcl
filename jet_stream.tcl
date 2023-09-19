@@ -115,10 +115,10 @@ oo::class create ::nats::AsyncPullRequest {
 }
 
 oo::class create ::nats::jet_stream {
-    variable conn _timeout api_prefix domain
+    variable conn _timeout api_prefix domain doTrace
 
     # do NOT call directly! instead use [$connection jet_stream]
-    constructor {c t d} {
+    constructor {c t d do_trace} {
         set conn $c
         set _timeout $t ;# avoid clash with -timeout option when using _parse_args
         set domain $d
@@ -127,6 +127,7 @@ oo::class create ::nats::jet_stream {
         } else {
             set api_prefix \$JS.$d.API
         }
+        set doTrace $do_trace
     }
 
     # JetStream wire API Reference https://docs.nats.io/reference/reference-protocols/nats_api_reference
@@ -160,7 +161,7 @@ oo::class create ::nats::jet_stream {
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_msg_delete_request
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_msg_delete_response
     method stream_msg_delete {stream args} {
-        set spec {no_erase bool null
+        set spec {no_erase bool true
                   seq      int  NATS_TCL_REQUIRED}
         set response [my ApiRequest "STREAM.MSG.DELETE.$stream" [nats::_dict2json $spec $args]]
         return [dict get $response success]
@@ -500,7 +501,7 @@ oo::class create ::nats::jet_stream {
         if {[dict get $stream_info config max_msgs_per_subject] < 1} {
             throw {NATS ErrBucketNotFound} "Bucket $bucket not found"
         }
-        return [nats::key_value new $conn [self] $domain $bucket $stream_info $_timeout]
+        return [nats::key_value new $conn [self] $domain $bucket [dict get $stream_info config]]
     }
 
     method create_kv_bucket {bucket args} {
@@ -559,7 +560,7 @@ oo::class create ::nats::jet_stream {
         }
 
         set stream_info [my add_stream "KV_$bucket" {*}$stream_config]
-        return [::nats::key_value new $conn [self] $domain $bucket $stream_info $_timeout]
+        return [::nats::key_value new $conn [self] $domain $bucket [dict get $stream_info config]]
     }
 
     method delete_kv_bucket {bucket} {
@@ -617,7 +618,14 @@ oo::class create ::nats::jet_stream {
     }
     method ApiRequest {subj msg {checkSubj true}} {
         try {
-            set response [json::json2dict [$conn request "$api_prefix.$subj" $msg -timeout $_timeout -dictmsg false -check_subj $checkSubj]]
+            if {$doTrace} {
+                [info object namespace $conn]::log::debug ">>> $api_prefix.$subj $msg"
+            }
+            set replyJson [$conn request "$api_prefix.$subj" $msg -timeout $_timeout -dictmsg false -check_subj $checkSubj]
+            if {$doTrace} {
+                [info object namespace $conn]::log::debug "<<< $api_prefix.$subj $replyJson"
+            }
+            set response [json::json2dict $replyJson]
         } trap {NATS ErrNoResponders} err {
             throw {NATS ErrJetStreamNotEnabled} "JetStream is not enabled in the server"
         }

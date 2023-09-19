@@ -16,7 +16,7 @@ package require logger::utils
 set stream_name MY_STREAM
 set consumer_name PULL_CONSUMER
 
-startNats NATS --jetstream --store_dir [tcltest::temporaryDirectory]
+startNats NATS --jetstream
 
 # some test cases here check for logging output
 set natsLogger [logger::init nats]

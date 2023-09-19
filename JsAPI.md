@@ -31,12 +31,13 @@ JetStream functionality of NATS can be accessed by creating the `nats::jet_strea
 [*js* consumer_names *stream*](#js-consumer_names-stream)<br/>
 
 [*js* stream_msg_get *stream* ?-last_by_subj *subj*? ?-next_by_subj *subj*? ?-seq *int*?](#js-stream_msg_get-stream--last_by_subj-subj--next_by_subj-subj--seq-int)<br/>
-[*js* stream_msg_delete *stream* -seq *sequence* ?-no_erase *no_erase*?](#js-stream_msg_delete-stream--seq-sequence--no_erase-no_erase)<br/>
+[*js* stream_msg_delete *stream* -seq *int* ?-no_erase *bool*?](#js-stream_msg_delete-stream--seq-int--no_erase-bool)<br/>
 
-[*js* bind_kv_bucket *bucket*](#js-bind_kv_bucket-bucket) <br/>
-[*js* create_kv_bucket *bucket* ?-option *value*?..](#js-create_kv_bucket-bucket--option-value) <br/>
-[*js* delete_kv_bucket *bucket*](#js-delete_kv_bucket-bucket) <br/>
-[*js* kv_buckets *bucket*](#js-kv_buckets) <br/>
+[*js* bind_kv_bucket *bucket*](#js-bind_kv_bucket-bucket)<br/>
+[*js* create_kv_bucket *bucket* ?-option *value*?..](#js-create_kv_bucket-bucket--option-value)<br/>
+[*js* delete_kv_bucket *bucket*](#js-delete_kv_bucket-bucket)<br/>
+[*js* kv_buckets *bucket*](#js-kv_buckets)<br/>
+[*js* empty_kv_bucket *bucket*](#js-empty_kv_bucket-bucket)<br/>
 
 [*js* destroy](#js-destroy)<br/>
 
@@ -259,8 +260,8 @@ Returns consumer information as a dict.
 Returns a list of all consumers defined on this stream.
 ### js stream_msg_get *stream* ?-last_by_subj *subj*? ?-next_by_subj *subj*? ?-seq *int*?
 'Direct Get' a message from stream `stream` by given `subject` or `sequence`. See also [ADR-31](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-31.md).
-### js stream_msg_delete *stream* -seq *int* ?-no_erase *no_erase*?
-Deletes a message from `stream` with the given `sequence` number.
+### js stream_msg_delete *stream* -seq *int* ?-no_erase *bool*?
+Deletes a message from `stream` with the given `sequence` number. `-no_erase` is true by default. Set it to false if NATS should overwrite the message with random data, like `SecureDeleteMsg` in nats.go.
 ### js bind_kv_bucket *bucket*
 This 'factory' method creates [KeyValueObject](KvAPI.md) to access the `bucket`.
 ### js create_kv_bucket *bucket* ?-option *value*?..
@@ -304,4 +305,3 @@ In addition to all [core NATS errors](CoreAPI.md#error-handling), the `jet_strea
 | ErrJSResponse | | Other JetStream error. `code` and `err_code` is passed in the Tcl error code and `description` is used for the error message. |
  
  See also "Error Response" in [ADR-1](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-1.md#error-response).
-

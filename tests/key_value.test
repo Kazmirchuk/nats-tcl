@@ -18,7 +18,7 @@
 source test_utils.tcl
 
 set bucket MY_TEST_BUCKET
-startNats NATS_JS --jetstream --store_dir [tcltest::temporaryDirectory]
+startNats NATS_JS --jetstream
 
 set conn [nats::connection new "KV" -log_chan [tcltest::outputChannel]]
 $conn configure -servers nats://localhost:4222
@@ -114,8 +114,8 @@ test key_value-create-3 "Delete the key and create again" -body {
     $kv get_value key3
 } -result value1
 
-# need to call this outside of -setup so that $rev is available to -result
 $js empty_kv_bucket $bucket
+# need to call this outside of -setup so that $rev is available to -result
 set rev [$kv put key1 some_val]
 test key_value-update-1 "Update a key" -body {
     $kv update key1 value1 $rev

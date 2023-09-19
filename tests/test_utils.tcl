@@ -168,6 +168,8 @@ namespace eval test_utils {
             }
         }
         variable natsPid
+        # NATS ignores --store_dir if JS is not enabled
+        lappend args --store_dir [file join [tcltest::temporaryDirectory] $id]
         # tcltest -singleproc 0 considers stderr from NATS as a test failure; we don't need these logs, so just send them to /dev/null
         # Tcllib's processman package doesn't offer much value
         if {$::tcl_platform(platform) eq "windows"} {

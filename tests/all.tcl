@@ -8,14 +8,14 @@ package require tcltest 2.5  ;# -errorCode option is relatively recent - make su
 # called automatically by tcltest::cleanupTests
 proc tcltest::cleanupTestsHook {} {
     # ensure each test starts with an empty JetStream
-    file delete -force [file join [tcltest::temporaryDirectory] jetstream]
+    file delete -force [tcltest::temporaryDirectory]
 }
 
 set thisDir [file dirname [file normalize [info script]]]
 # doing a simple [cd] and -testdir is enough for the tests to work
 # but [workingDirectory] and -tmpdir are needed for an accurate output header
 tcltest::workingDirectory $thisDir
-tcltest::configure -testdir $thisDir -tmpdir $thisDir -verbose pe {*}$argv
+tcltest::configure -testdir $thisDir -tmpdir [file join $thisDir temp] -verbose pe {*}$argv
 # Default is -singleproc 0, so every .test file is run in a subprocess
 # PROs:
 # - isolation of global variables etc

@@ -560,8 +560,9 @@ oo::class create ::nats::connection {
         nats::_parse_args $args {
             timeout timeout 5000
             domain valid_str ""
+            trace bool false
         }
-        return [nats::jet_stream new [self] $timeout $domain]
+        return [nats::jet_stream new [self] $timeout $domain $trace]
     }
     
     method inbox {} {
@@ -1424,7 +1425,7 @@ proc ::nats::_format_header { header } {
     return $result
 }
 
-# pending TIP 342 in Tcl 8.7
+# pending TIP 342
 proc ::nats::_dict_get_default {dict_val key {def ""}} {
     if {[dict exists $dict_val $key]} {
         return [dict get $dict_val $key]
@@ -1432,14 +1433,11 @@ proc ::nats::_dict_get_default {dict_val key {def ""}} {
         return $def
     }
 }
-
-namespace eval ::nats {
-    # now add it to the standard "dict" ensemble under the name "lookup"; no support needed for nested dicts
-    variable map [namespace ensemble configure ::dict -map]
-    dict set map lookup ::nats::_dict_get_default
-    namespace ensemble configure ::dict -map $map
-    unset map
-}
+# now add it to the standard "dict" ensemble under the name "lookup"
+# note that we can either support nested dicts or have an empty default - the latter is more useful
+namespace ensemble configure dict -map \
+    [dict replace [namespace ensemble configure dict -map] \
+        lookup ::nats::_dict_get_default]
 
 # official NATS clients use the sophisticated NUID algorithm, but this should be enough for the Tcl client
 # note that NUID chars are only a subset of what is allowed in a subject name

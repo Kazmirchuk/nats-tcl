@@ -419,7 +419,7 @@ oo::class create ::nats::jet_stream {
             deny_purge              bool null
             allow_rollup_hdrs       bool null
             allow_direct            bool null
-            _mirror                 json null
+            mirror                  json null
         }
 
         if {![my CheckFilenameSafe $stream]} {
@@ -549,12 +549,11 @@ oo::class create ::nats::jet_stream {
         }
 
         if {[info exists mirror_name]} {
-            # TODO format JSON
-            set mirror_info [dict create name "KV_$mirror_name"]
+            set mirror_info [dict create name [json::write::string "KV_$mirror_name"]]
             if {[info exists mirror_domain]} {
-                dict set mirror_info external api "\$JS.$mirror_domain.API"
+                dict set mirror_info external [json::write object-strings api "\$JS.$mirror_domain.API"]
             }
-            dict set options -mirror $mirror_info
+            dict set stream_config mirror [json::write::object {*}$mirror_info]
         } else {
             dict set stream_config subjects "\$KV.$bucket.>"
         }

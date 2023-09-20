@@ -6,7 +6,7 @@
 
 # based on https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-8.md
 oo::class create ::nats::key_value {
-    variable conn js bucket stream kv_read_prefix kv_write_prefix
+    variable conn js bucket stream kv_read_prefix kv_write_prefix mirrored_bucket
 
     constructor {connection jet_stream domain bucket_name stream_config} {
         set conn $connection
@@ -16,10 +16,11 @@ oo::class create ::nats::key_value {
         set stream "KV_$bucket_name"
         set kv_read_prefix [expr {$domain eq "" ? "\$KV.$bucket" : "\$JS.$domain.API.\$KV.$bucket"}]
         set kv_write_prefix $kv_read_prefix
+        set mirrored_bucket ""
         if {[dict exists $stream_config mirror name]} {
             set mirrored_stream_name [dict get $stream_config mirror name]
-            set mirrored_bucket_name [string range $mirrored_stream_name 3 end] ;# remove "KV_" from "KV_bucket_name"
-            set kv_write_prefix "\$KV.${mirrored_bucket_name}"
+            set mirrored_bucket [string range $mirrored_stream_name 3 end] ;# remove "KV_" from "KV_bucket_name"
+            set kv_write_prefix "\$KV.${mirrored_bucket}"
 
             if {[dict exists $stream_config mirror external api]} {
                 set external_api [dict get $stream_config mirror external api]
@@ -59,7 +60,11 @@ oo::class create ::nats::key_value {
         # nats --trace --js-domain=hub --user acc --password acc --server localhost:4111 stream get KV_MY_HUB_BUCKET -S $KV.MY_HUB_BUCKET.key1
         # Subject $KV.MY_HUB_BUCKET.key1
         #set subject "\$KV.*.$key"
+        
         set subject "\$KV.$bucket.$key"
+        if {$mirrored_bucket ne ""} {
+            set subject "\$KV.$mirrored_bucket.$key"
+        }
         try {
             if {$revision ne ""} {
                 set msg [$js stream_msg_get $stream -seq $revision]
@@ -171,8 +176,12 @@ oo::class create ::nats::key_value {
         
         nats::_parse_args $args $spec
         set deliver_policy [expr {$include_history ? "all" : "last_per_subject"}]
-        # TODO why use $kv_write_prefix here?
-        return [nats::kv_watcher new [self] "$kv_write_prefix.$key_pattern" $stream $deliver_policy $meta_only $callback $ignore_deletes $updates_only]
+        # TODO why use $kv_write_prefix here? filter_subject = "$kv_write_prefix.$key_pattern" ??
+        set filter_subject "\$KV.$bucket.$key_pattern"
+        if {$mirrored_bucket ne ""} {
+            set filter_subject "\$KV.$mirrored_bucket.$key_pattern"
+        }
+        return [nats::kv_watcher new [self] $filter_subject $stream $deliver_policy $meta_only $callback $ignore_deletes $updates_only]
     }
 
     method keys {} {
@@ -234,13 +243,12 @@ oo::class create ::nats::kv_watcher {
     # watcher options/vars
     variable subID userCb initDone ignore_deletes updates_only gathering resultList
     # copied from the parent KV bucket, so that the user can destroy it while the watcher is living
-    variable conn kv_read_prefix bucket
+    variable conn bucket
     
     constructor {kv filter_subject stream deliver_policy meta_only cb ignore_del upd_only} {
         set initDone false  ;# becomes true after the current/historical data has been received
         set gathering ""
         set conn [set ${kv}::conn]
-        set kv_read_prefix [set ${kv}::kv_read_prefix]
         set bucket [set ${kv}::bucket]
         set userCb $cb
         set ignore_deletes $ignore_del
@@ -268,7 +276,7 @@ oo::class create ::nats::kv_watcher {
         set subID [$conn subscribe $inbox -callback [mymethod SubscriberCb] -dictmsg true -post false]
     }
     destructor {
-        $conn unsubscribe $subID
+        $conn unsubscribe $subID ;# TODO: NATS CLI deletes the consumer too; nats.py doesn't
     }
     method InitDone {} {
         set initDone true
@@ -291,7 +299,7 @@ oo::class create ::nats::kv_watcher {
                 return
             }
         }
-        set key [string range $subj [string length $kv_read_prefix]+1 end]
+        set key [lindex [split $subj .] end]
         set entry [dict create \
             bucket $bucket \
             key $key \

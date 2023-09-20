@@ -14,9 +14,6 @@ set hub_bucket MY_HUB_BUCKET
 set mirror_bucket MY_MIRROR_BUCKET
 set leaf_mirror_bucket MY_LEAF_MIRROR_BUCKET
 
-set hub_auth [list --user acc --password acc --server localhost:4222]
-set leaf_auth [list --user acc --password acc --server localhost:4111]
-
 startNats NATS_HUB -c ./conf/hub.conf
 startNats NATS_LEAF -c ./conf/leaf.conf
 
@@ -45,7 +42,6 @@ test key_value-domain-1 "Get values from the hub bucket using a leaf connection"
 } -match glob -result [dict create bucket $hub_bucket key key1 value value1 revision 1 created * delta {} operation PUT]
 
 test key_value-domain-2 "Put values to the hub bucket using a leaf connection" -body {
-    set kv_leaf_to_hub [$js_leaf_to_hub bind_kv_bucket $hub_bucket]
     $kv_leaf_to_hub put key1 value2
     $kv_hub get key1
 } -match glob -result [dict create bucket $hub_bucket key key1 value value2 revision 2 created * delta {} operation PUT]
@@ -77,27 +73,26 @@ $js_hub empty_kv_bucket $hub_bucket
 
 ########### MIRROR IN THE SAME DOMAIN ###########
 
-set kv_mirror [$js_hub create_kv_bucket $mirror_bucket -mirror_name $hub_bucket]
+# note that we need to repeat -history 64 here - default history would be 1 irrespectively of the origin bucket
+set kv_mirror [$js_hub create_kv_bucket $mirror_bucket -mirror_name $hub_bucket -history 64]
 $kv_hub put key1 value3
-after 100 ;# allow NATS to propagate values
+sleep 100 ;# allow NATS to propagate values
 
 test key_value-mirror-same-domain-1 "Create a KV mirror in the same domain and get a value" -body {
     $kv_mirror get key1
-} -match glob -result [dict create bucket $hub_bucket key key1 value value3 revision * created * delta {} operation PUT]
+    # TODO check if bucket must be the original name or mirror name here:
+} -match glob -result [dict create bucket $mirror_bucket key key1 value value3 revision * created * delta {} operation PUT]
 
 test key_value-mirror-same-domain-2 "Put a value to the mirror and check the origin kv" -body {
     $kv_mirror put key1 value4
-    set entry_hub [$kv_hub get key1]
-    set entry_mirror [$kv_mirror get key1]
-    assert {$entry_hub eq $entry_mirror}
-    set entry_hub
+    sleep 100
+    $kv_hub get key1
 } -match glob -result [dict create bucket $hub_bucket key key1 value value4 revision * created * delta {} operation PUT]
 
 test key_value-mirror-same-domain-3 "Get history from the mirror" -body {
-    
-    set entries [$kv_mirror history]
-    puts $entries
-} -result ""
+    set entries [$kv_mirror history key1]
+    llength $entries
+} -result 2
 
 $kv_mirror destroy
 

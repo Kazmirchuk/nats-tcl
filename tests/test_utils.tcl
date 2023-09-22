@@ -29,7 +29,7 @@ namespace eval test_utils {
             puts [tcltest::outputChannel] "\[[nats::timestamp] test_utils info\] $msg"
         }
     }
-    
+    # how it was supposed to be...
     #logger::initNamespace [namespace current] info  ;# the logging level can be changed to debug, warn etc
     #set appenderArgs [list -outputChannel [tcltest::outputChannel]]
     #lappend appenderArgs -conversionPattern {\[[nats::timestamp] %c %p\] %m}

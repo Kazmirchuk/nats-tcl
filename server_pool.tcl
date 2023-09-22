@@ -155,16 +155,16 @@ oo::class create ::nats::server_pool {
         set def_token [$conn cget token]
         
         if {[dict exists $s user] && [dict exists $s password]} {
-            return [list user [json::write::string [dict get $s user]] pass [json::write::string [dict get $s password]]]
+            return [list user [json::write string [dict get $s user]] pass [json::write string [dict get $s password]]]
         }
         if {[dict exists $s auth_token]} {
-            return [list auth_token [json::write::string [dict get $s auth_token]]]
+            return [list auth_token [json::write string [dict get $s auth_token]]]
         }
         if {$def_user ne "" && $def_pass ne ""} {
-            return [list user [json::write::string $def_user] pass [json::write::string $def_pass]]
+            return [list user [json::write string $def_user] pass [json::write string $def_pass]]
         }
         if {$def_token ne ""} {
-            return [list auth_token [json::write::string $def_token]]
+            return [list auth_token [json::write string $def_token]]
         }
         throw {NATS ErrAuthorization} "No credentials known for NATS server at [dict get $s host]:[dict get $s port]"
     }

@@ -341,7 +341,7 @@ oo::class create ::nats::jet_stream {
             set subject "CONSUMER.CREATE.$stream"
         }
 
-        set msg [json::write::object stream_name [json::write string $stream] config [nats::_local2json $spec]]
+        set msg [json::write object stream_name [json::write string $stream] config [nats::_local2json $spec]]
         set response [my ApiRequest $subject $msg $check_subj]
         set result_config [dict get $response config]
         nats::_ns2ms result_config ack_wait idle_heartbeat inactive_threshold
@@ -362,7 +362,7 @@ oo::class create ::nats::jet_stream {
     }
     
     method add_consumer_from_json {stream consumer json_config} {
-        set msg [json::write::object stream_name [json::write string $stream] config $json_config]
+        set msg [json::write object stream_name [json::write string $stream] config $json_config]
         set json_response [$conn request "$api_prefix.CONSUMER.DURABLE.CREATE.$stream.$consumer" $msg -timeout $_timeout -dictmsg false]
         set dict_response [json::json2dict $json_response]
         nats::_checkJsError $dict_response
@@ -525,6 +525,7 @@ oo::class create ::nats::jet_stream {
         if {$history < 1 || $history > 64} {
             throw {NATS ErrInvalidArg} "History must be between 1 and 64"
         }
+        # TODO allow_direct=true
         set stream_config [dict create \
             allow_rollup_hdrs true \
             deny_delete true \
@@ -549,11 +550,11 @@ oo::class create ::nats::jet_stream {
         }
 
         if {[info exists mirror_name]} {
-            set mirror_info [dict create name [json::write::string "KV_$mirror_name"]]
+            set mirror_info [dict create name [json::write string "KV_$mirror_name"]]
             if {[info exists mirror_domain]} {
-                dict set mirror_info external [json::write object-strings api "\$JS.$mirror_domain.API"]
+                dict set mirror_info external [json::write object api [json::write string "\$JS.$mirror_domain.API"]]
             }
-            dict set stream_config mirror [json::write::object {*}$mirror_info]
+            dict set stream_config mirror [json::write object {*}$mirror_info]
         } else {
             dict set stream_config subjects "\$KV.$bucket.>"
         }
@@ -748,9 +749,9 @@ proc ::nats::_local2json {spec} {
         }
     }
     if {[dict size $json_dict]} {
-        json::write::indented false
-        json::write::aligned false
-        return [json::write::object {*}$json_dict]
+        json::write indented false
+        json::write aligned false
+        return [json::write object {*}$json_dict]
     } else {
         return ""
     }
@@ -777,9 +778,9 @@ proc ::nats::_dict2json {spec src} {
         }
     }
     if {[dict size $json_dict]} {
-        json::write::indented false
-        json::write::aligned false
-        return [json::write::object {*}$json_dict]
+        json::write indented false
+        json::write aligned false
+        return [json::write object {*}$json_dict]
     } else {
         return ""
     }

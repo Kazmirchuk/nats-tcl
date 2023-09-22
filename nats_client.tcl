@@ -757,9 +757,9 @@ oo::class create ::nats::connection {
             set connectParams [list verbose $config(verbose) \
                                     pedantic $config(pedantic) \
                                     tls_required $tls_done \
-                                    name [json::write::string $config(name)] \
-                                    lang [json::write::string Tcl] \
-                                    version [json::write::string 2.0.2] \
+                                    name [json::write string $config(name)] \
+                                    lang [json::write string Tcl] \
+                                    version [json::write string 2.0.2] \
                                     protocol 1 \
                                     echo $config(echo)]
             
@@ -769,9 +769,9 @@ oo::class create ::nats::connection {
             if {[info exists serverInfo(auth_required)] && $serverInfo(auth_required)} {
                 lappend connectParams {*}[$serverPool format_credentials]
             }
-            json::write::indented false
-            json::write::aligned false
-            set jsonMsg [json::write::object {*}$connectParams]
+            json::write indented false
+            json::write aligned false
+            set jsonMsg [json::write object {*}$connectParams]
         } trap {NATS ErrAuthorization} err {
             # no credentials could be found for this server, try next one
             my AsyncError ErrAuthorization $err 1

@@ -61,7 +61,7 @@ test key_value_watchers-history-2 "Get history for a key" -setup {
                       value value1_3 \
                       revision 4 \
                       operation PUT] [lindex $entries 3]]}
-} -result ""
+}
 
 test key_value_watchers-history-3 "Get history for a key that doesn't exist" -body {
     $kv history key2
@@ -85,7 +85,7 @@ test key_value_watchers-history-4 "Get history for a purged key" -setup {
                       value value1_4 \
                       revision 6 \
                       operation PUT] [lindex $entries 1]]}
-} -result ""
+}
 
 test key_value_watchers-keys-2 "Get all keys" -setup {
     $kv delete key1
@@ -122,7 +122,7 @@ test key_value_watchers-watch-1 "Watch one key" -body {
                       key key2 \
                       value {} \
                       operation DEL] [lindex $allEntries 3]]}
-} -result "" -cleanup {
+} -cleanup {
     $watcher destroy
     set allEntries [list]
 }
@@ -146,9 +146,24 @@ test key_value_watchers-watch-2 "Watch a wildcard" -body {
                       key keys.2 \
                       value value2 \
                       operation PUT] [lindex $allEntries 2]]}
-} -result "" -cleanup {
+} -cleanup {
     $watcher destroy
     set allEntries [list]
+}
+
+test key_value_watchers-watch-3 "Watch with an array" -body {
+    set watcher [$kv watch params.* -values_array ::vals]
+    $kv put params.P1 VAL1
+    $kv put params.P2 VAL2
+    $kv put params.P3 VAL3
+    $kv delete params.P1
+    sleep 100
+    
+    assert {[array size vals] == 2}
+    assert {$vals(params.P2) eq "VAL2"}
+    assert {$vals(params.P3) eq "VAL3"}
+} -cleanup {
+    $watcher destroy
 }
 
 $kv destroy

@@ -24,7 +24,7 @@ oo::class create ::nats::key_value {
 
             if {[dict exists $stream_config mirror external api]} {
                 set external_api [dict get $stream_config mirror external api]
-                set kv_write_prefix "${external_api}.\$KV.${mirrored_bucket_name}"
+                set kv_write_prefix "${external_api}.\$KV.${mirrored_bucket}"
             }
         }
     }
@@ -172,7 +172,8 @@ oo::class create ::nats::key_value {
                   include_history bool false
                   meta_only       bool false
                   ignore_deletes  bool false
-                  updates_only    bool false}
+                  updates_only    bool false
+                  values_array     str  ""}
         
         nats::_parse_args $args $spec
         set deliver_policy [expr {$include_history ? "all" : "last_per_subject"}]
@@ -181,7 +182,7 @@ oo::class create ::nats::key_value {
         if {$mirrored_bucket ne ""} {
             set filter_subject "\$KV.$mirrored_bucket.$key_pattern"
         }
-        return [nats::kv_watcher new [self] $filter_subject $stream $deliver_policy $meta_only $callback $ignore_deletes $updates_only]
+        return [nats::kv_watcher new [self] $filter_subject $stream $deliver_policy $meta_only $callback $ignore_deletes $updates_only $values_array]
     }
 
     method keys {} {
@@ -241,18 +242,20 @@ oo::class create ::nats::key_value {
 
 oo::class create ::nats::kv_watcher {
     # watcher options/vars
-    variable subID userCb initDone ignore_deletes updates_only gathering resultList
+    variable subID userCb initDone ignore_deletes updates_only gathering resultList valuesArray
     # copied from the parent KV bucket, so that the user can destroy it while the watcher is living
-    variable conn bucket
+    variable conn bucket kv_write_prefix
     
-    constructor {kv filter_subject stream deliver_policy meta_only cb ignore_del upd_only} {
+    constructor {kv filter_subject stream deliver_policy meta_only cb ignore_del upd_only arr} {
         set initDone false  ;# becomes true after the current/historical data has been received
         set gathering ""
         set conn [set ${kv}::conn]
         set bucket [set ${kv}::bucket]
+        set kv_write_prefix [set ${kv}::kv_write_prefix]
         set userCb $cb
         set ignore_deletes $ignore_del
         set updates_only $upd_only  ;# TODO
+        set valuesArray $arr
         set inbox [$conn inbox]
         # ordered_consumer is a shorthand for several options - taken from nats.py
         # ack_wait is 22h
@@ -275,15 +278,18 @@ oo::class create ::nats::kv_watcher {
         }
         set subID [$conn subscribe $inbox -callback [mymethod SubscriberCb] -dictmsg true -post false]
     }
+    
     destructor {
         $conn unsubscribe $subID ;# TODO: NATS CLI deletes the consumer too; nats.py doesn't
     }
+    
     method InitDone {} {
         set initDone true
         if {$userCb ne ""} {
             after 0 [list {*}$userCb ""]
         }
     }
+    
     method SubscriberCb {subj msg reply} {
         if {[nats::msg idle_heartbeat $msg]} {
             return  ;# not sure yet what to do with idle HBs
@@ -294,12 +300,19 @@ oo::class create ::nats::kv_watcher {
         if {$ignore_deletes} {
             if {$op in {PURGE DEL}} {
                 if {$delta == 0 && !$initDone} {
-                    
+                    set initDone true
+                    if {$userCb ne ""} {
+                        after 0 [list {*}$userCb ""]
+                    }
                 }
                 return
             }
         }
-        set key [lindex [split $subj .] end]
+        #set key [lindex [split $subj .] end] - this would be simple, but keys can have dots!
+        set b [lindex [split $kv_write_prefix .] end]
+        regexp ".*$b\.(.*)" $subj -> key ;# TODO simplify
+        #set key [string range $subj [string length $kv_write_prefix]+1 end]
+        #puts "SUBJ: $subj kv_write_prefix: $kv_write_prefix KEY: $key" 
         set entry [dict create \
             bucket $bucket \
             key $key \
@@ -317,7 +330,16 @@ oo::class create ::nats::kv_watcher {
                 lappend resultList $entry
             }
             default {
-                after 0 [list {*}$userCb $entry]
+                if {$userCb ne ""} {
+                    after 0 [list {*}$userCb $entry]
+                }
+                if {$valuesArray ne ""} {
+                    if {$op eq "PUT"} {
+                        set ${valuesArray}($key) [dict get $entry value]
+                    } else {
+                        unset ${valuesArray}($key)
+                    }
+                }
             }
         }
         
@@ -328,6 +350,7 @@ oo::class create ::nats::kv_watcher {
             }
         }
     }
+    
     method Gather {what} {
         set gathering $what ;# keys or history
         set resultList [list]

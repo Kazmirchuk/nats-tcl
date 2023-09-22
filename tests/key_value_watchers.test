@@ -101,6 +101,9 @@ set watcherCallback [lambda {entry} {
 
 test key_value_watchers-watch-1 "Watch one key" -body {
     set watcher [$kv watch key2 -callback $watcherCallback]
+    # make sure we flush the SUB before calling [$kv put]
+    # otherwise the test sometimes fails on Linux, because the 2nd and 3rd callbacks swap places
+    wait_flush $conn
     $kv put key2 value3
     $kv delete key2
     while {[llength $allEntries] < 4} {

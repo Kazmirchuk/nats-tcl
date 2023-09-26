@@ -19,12 +19,13 @@ Key-Value functionality of NATS can be accessed by creating the `nats::key_value
 [*kv* destroy](#kv-destroy)<br/>
 
 ## Description
-The `key_value` object provides access to a specific KV bucket. A bucket is merely a JS `stream` that has some default options, and its name always starts with "KV_". And a key is, in fact, a (portion of) subject that this stream listens to. Therefore, all KV operations are implemented in terms of standard JetStream operations such as  `publish`, `stream_msg_get` etc. They all block in a (coroutine-aware) `vwait` with the same timeout as in the parent `jet_stream`.
+The `key_value` object provides access to a specific KV bucket. A bucket is merely a JS `stream` that has some default options, and its name always starts with "KV_". And a key is, in fact, a (portion of) a subject that this stream listens to. Therefore, all KV operations are implemented in terms of standard JetStream operations such as  `publish`, `stream_msg_get` etc. They all block in a (coroutine-aware) `vwait` with the same timeout as in the parent `jet_stream`.
+
+[NATS by Example](https://natsbyexample.com/examples/kv/intro/go) provides a good overview of how KV buckets work on top of streams.
 
 The [naming rules](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-6.md) of NATS subjects apply to keys as well, and keys can't start with "_kv".
 
-- `cross-domain` requests are supported (`domain` is copied from `jet_stream` object) so acting on kv from another domain is possible (see examples),
-- `mirroring` (as well as `cross-domain` mirroring) is supported.
+You can access a KV bucket across JetStream domains and create KV mirrors as well. These concepts are explained in the chapters about [NATS Leaf Nodes](https://docs.nats.io/running-a-nats-service/configuration/leafnodes/jetstream_leafnodes) and [Stream Replication](https://docs.nats.io/running-a-nats-service/nats_admin/jetstream_admin/replication).
 
 ## Entry
 A KV entry is a dict with the following fields:

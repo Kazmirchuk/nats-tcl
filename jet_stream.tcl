@@ -16,7 +16,7 @@ oo::class create ::nats::SyncPullRequest {
         set reqID [$conn request $subject $msg -dictmsg true -timeout $timeout -max_msgs $batch -callback [mymethod OnMsg]]
         try {
             while {1} {
-                nats::_coroVwait [namespace which -variable reqStatus] ;# wait for 1 message
+                nats::_coroVwait [self namespace]::reqStatus ;# wait for 1 message
                 set msgCount [llength $inMsgs]
                 switch -- $reqStatus {
                     timeout {
@@ -180,6 +180,7 @@ oo::class create ::nats::jet_stream {
         }
 
         set subject "$api_prefix.CONSUMER.MSG.NEXT.$stream.$consumer"
+        # TODO add idle_heartbeat
         nats::_parse_args $args {
             timeout timeout null
             batch_size pos_int 1
@@ -294,7 +295,6 @@ oo::class create ::nats::jet_stream {
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_create_request
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_create_response
     method add_consumer {stream args} {
-        # what is opt_start_time??
         set spec {name             valid_str null
                   durable_name     valid_str null
                   description      valid_str null
@@ -393,7 +393,27 @@ oo::class create ::nats::jet_stream {
         set response [my ApiRequest "CONSUMER.NAMES.$stream" ""]
         return [dict get $response consumers]
     }
-
+    
+    method ordered_consumer {stream args} {
+        if {![my CheckFilenameSafe $stream]} {
+            throw {NATS ErrInvalidArg} "Invalid stream name $stream"
+        }
+        # TODO add max_msgs ?
+        set spec {callback       valid_str ""
+                  description    valid_str null
+                  headers_only   bool null
+                  deliver_policy str null
+                  idle_heartbeat ns 5000
+                  filter_subject valid_str null
+                  post           bool true}
+        nats::_parse_args $args $spec
+        set consumerConfig [nats::_local2dict $spec]
+        # remove the args that do not belong to a consumer configuration
+        dict unset consumerConfig callback
+        dict unset consumerConfig post
+        return [nats::ordered_consumer new $conn [self] $stream $consumerConfig $callback $post]
+    }
+    
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_create_request
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_create_response
     method add_stream {stream args} {
@@ -634,6 +654,144 @@ oo::class create ::nats::jet_stream {
         return $response
     }
 }
+# see ADR-15 and ADR-17
+oo::class create ::nats::ordered_consumer {
+    variable Conn Js Stream Config StreamSeq ConsumerSeq Name SubID UserCb Timer PostEvent RetryInterval
+    # "public" variable
+    variable last_error
+    
+    constructor {connection jet_stream streamName conf cb post} {
+        set Conn $connection
+        set Js $jet_stream
+        set Stream $streamName
+        set UserCb $cb
+        set StreamSeq 0
+        set ConsumerSeq 0
+        set Name ""
+        set SubID ""
+        set Timer "" ;# used both for HB and reset retries
+        set RetryInterval 10000 ;# same as in nats.go/jetstream/ordered.go
+        set PostEvent $post
+        set Config [dict replace $conf \
+                    flow_control true \
+                    ack_policy none \
+                    max_deliver 1 \
+                    ack_wait [expr {22 * 3600 * 1000}] \
+                    num_replicas 1 \
+                    mem_storage true \
+                    inactive_threshold 2000]
+        set last_error ""
+        my Reset
+    }
+    destructor {
+        after cancel $Timer
+        if {$SubID eq ""} {
+            return
+        }
+        $Conn unsubscribe $SubID ;# NATS will delete the ephemeral consumer
+    }
+    method Reset {{errCode ""}} {
+        set inbox "_INBOX.[nats::_random_string]"
+        dict set Config deliver_subject $inbox
+        if {$errCode ne ""} {
+            dict set Config deliver_policy by_start_sequence
+            set startSeq [expr {$StreamSeq + 1}]
+            dict set Config opt_start_seq $startSeq
+            my AsyncError $errCode "reset with opt_start_seq = $startSeq due to $errCode"
+        }
+        if {$errCode eq ""} {
+            set reply [$Js add_consumer $Stream {*}$Config] ;# let any error propagate to the caller
+        } else {
+            # we are working in the background, so all errors must be reported via AsyncError
+            try {
+                set reply [$Js add_consumer $Stream {*}$Config]
+            } trap {NATS ErrStreamNotFound} {err opts} {
+                my AsyncError ErrStreamNotFound "stopped due to $err"
+                return ;# can't recover from this
+            } trap {NATS} {err opts} {
+                # most likely ErrTimeout if we're reconnecting to NATS or ErrJetStreamNotEnabled if a JetStream cluster is electing a new leader
+                my AsyncError [lindex [dict get $opts -errorcode] 1] "failed to reset: $err"
+                if {[$Conn cget status] == $nats::status_closed} {
+                    my AsyncError ErrConnectionClosed "stopped"
+                    return
+                }
+                # default delay is 10s to avoid spamming the log with warnings
+                my ScheduleReset $errCode $RetryInterval
+                return
+            }
+        }
+        
+        set Config [dict get $reply config]
+        set Name [dict get $reply name]
+        set StreamSeq [dict get $reply delivered stream_seq]
+        set ConsumerSeq [dict get $reply delivered consumer_seq]
+        set SubID [$Conn subscribe $inbox -dictmsg 1 -callback [mymethod OnMsg] -post false]
+        my RestartHbTimer
+        [info object namespace $Conn]::log::debug "Ordered consumer $Name subscribed to $Stream, stream_seq = $StreamSeq, filter = [dict get $Config filter_subject]"
+    }
+    method RestartHbTimer {} {
+        after cancel $Timer
+        # reset if we don't receive any message within interval*3 ms; works also if somebody deletes the consumer in NATS
+        set Timer [after [expr {[dict get $Config idle_heartbeat] * 3}] [mymethod OnMissingHb]]
+    }
+    method ScheduleReset {errCode {delay 0}} {
+        set Name "" ;# make the name blank while reset in is progress
+        after cancel $Timer ;# stop the HB timer
+        if {$SubID ne ""} {
+            $Conn unsubscribe $SubID ;# unsub immediately to avoid OnMsg being called again while reset is in progress
+            set SubID ""
+        }
+        set Timer [after $delay [mymethod Reset $errCode]] ;# due to -post=false we are inside the coroutine, so can't call reset directly
+    }
+    method OnMsg {subj msg reply} {
+        my RestartHbTimer
+        if {[nats::msg idle_heartbeat $msg]} {
+            set flowControlReply [nats::header lookup $msg Nats-Consumer-Stalled ""]
+            if {$flowControlReply ne ""} {
+                $Conn publish $flowControlReply ""
+            }
+            set cseq [nats::header get $msg Nats-Last-Consumer]
+            if {$cseq == $ConsumerSeq} {
+                return
+            }
+            my ScheduleReset ErrConsumerSequenceMismatch
+            return
+        } elseif {[nats::msg flow_control $msg]} {
+            $Js ack $msg
+            return
+        }
+        set meta [$Js metadata $msg]
+        set cseq [dict get $meta consumer_seq]
+        if {$cseq != $ConsumerSeq + 1} {
+            my ScheduleReset ErrConsumerSequenceMismatch
+            return
+        }
+        incr ConsumerSeq
+        set StreamSeq [dict get $meta stream_seq]
+        if {$PostEvent} {
+            after 0 [list {*}$UserCb $msg]
+        } else {
+            {*}$UserCb $msg  ;# only for KV watcher with -values_array
+        }
+    }
+    method OnMissingHb {} {
+        $Conn unsubscribe $SubID
+        set SubID ""
+        set Name ""
+        my Reset ErrConsumerNotActive
+    }
+    method config {} {
+        return $Config
+    }
+    method name {} {
+        return $Name
+    }
+    method AsyncError {code msg} {
+        set logMsg "Ordered consumer [self]: $msg"
+        [info object namespace $Conn]::log::warn $logMsg
+        set last_error [dict create code [list NATS $code] errorMessage $msg]
+    }
+}
 
 # these clients have more specific JS errors
 # https://github.com/nats-io/nats.go/blob/main/jserrors.go
@@ -756,7 +914,19 @@ proc ::nats::_local2json {spec} {
         return ""
     }
 }
-
+proc ::nats::_local2dict {spec} {
+    set result [dict create]
+    foreach {name type def} $spec {
+        try {
+            set val [uplevel 1 [list set $name]]
+            dict set result $name $val
+        } trap {TCL READ VARNAME} {err errOpts} - \
+          trap {TCL LOOKUP VARNAME} {err errOpts} {
+            # nothing to do
+        }
+    }
+    return $result
+}
 proc ::nats::_dict2json {spec src} {
     if {[llength $src] % 2} {
         throw {NATS ErrInvalidArg} "Missing value for option [lindex $src end]"

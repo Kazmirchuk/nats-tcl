@@ -59,15 +59,16 @@ oo::class create ::nats::connection {
     variable status last_error serverInfo
 
     constructor { { conn_name "" } args } {
+        # if _parse_args throws, TclOO will call the destructor, so at least these vars must be valid
+        set serverPool [nats::server_pool new [self]]
+        set status $nats::status_closed
+        
         nats::_parse_args $args {
             logger valid_str ""
             log_chan valid_str stdout
             log_level valid_str warn
         }
-        
-        set status $nats::status_closed
         set last_error ""
-
         # initialise default configuration
         foreach {name type def} $nats::_option_spec {
             set config($name) $def
@@ -90,7 +91,6 @@ oo::class create ::nats::connection {
         set requestsInboxPrefix ""
         set pong 0
         my InitLogger $logger $log_chan $log_level
-        set serverPool [nats::server_pool new [self]] 
     }
     
     destructor {
@@ -99,9 +99,10 @@ oo::class create ::nats::connection {
     }
     
     method InitLogger {logger log_chan log_level} {
+        set ns [self namespace]
         if {$logger ne ""} {
             # user has provided a pre-configured logger object
-            logger::import -namespace log [${logger}::servicename]
+            logger::import -namespace ${ns}::log [${logger}::servicename]
             # log_chan and log_level have no effect in this case
             return
         }
@@ -126,14 +127,13 @@ oo::class create ::nats::connection {
         }
         
         proc log::suppressed {level msg} {}
-        
         set belowLogLevel 0
         # provide the same interface as Tcllib's logger; we use only these 4 logging levels
         foreach level {error warn info debug} {
             if {$belowLogLevel} {
-                interp alias {} [self]::log::${level} {} [self]::log::suppressed $level
+                interp alias {} ${ns}::log::${level} {} ${ns}::log::suppressed $level
             } else {
-                interp alias {} [self]::log::${level} {} [self]::log::log $level
+                interp alias {} ${ns}::log::${level} {} ${ns}::log::log $level
             }
             if {$log_level eq $level} {
                 set belowLogLevel 1
@@ -143,6 +143,9 @@ oo::class create ::nats::connection {
     
     method cget {option} {
         set opt [string trimleft $option -]
+        if {$opt eq "status"} {
+            return $status
+        }
         if {[info exists config($opt)]} {
             return $config($opt)
         }
@@ -238,7 +241,7 @@ oo::class create ::nats::connection {
             # so we shouldn't vwait in this case
             if {$status == $nats::status_connecting} {
                 log::debug "Waiting for connection status"
-                nats::_coroVwait [self]::status
+                nats::_coroVwait [self namespace]::status
                 log::debug "Finished waiting for connection status"
             }
             if {$status != $nats::status_connected} {
@@ -442,11 +445,11 @@ oo::class create ::nats::connection {
         # sync request
         # remember that we can get a reply after timeout, so vwait must wait on a specific reqID
         if {$timeout != 0} {
-            set timerID [after $timeout [list dict set [self]::requests($reqID) timedOut 1]]
+            set timerID [after $timeout [list dict set [self namespace]::requests($reqID) timedOut 1]]
         }
         # if connection is lost, we need to cancel this timer, see also CoroMain
         set requests($reqID) [dict create timer $timerID]
-        nats::_coroVwait [self]::requests($reqID)
+        nats::_coroVwait [self namespace]::requests($reqID)
         if {![info exists requests($reqID)]} {
             throw {NATS ErrTimeout} "Connection lost"
         }
@@ -485,11 +488,11 @@ oo::class create ::nats::connection {
         }
         #sync request
         if {$timeout != 0} {
-            set timerID [after $timeout [list dict set [self]::requests($reqID) timedOut 1]]
+            set timerID [after $timeout [list dict set [self namespace]::requests($reqID) timedOut 1]]
         }
         set requests($reqID) [dict create timer $timerID]
         while {1} {
-            nats::_coroVwait [self]::requests($reqID)
+            nats::_coroVwait [self namespace]::requests($reqID)
             if {![info exists requests($reqID)]} {
                 throw {NATS ErrTimeout} "Connection lost"
             }
@@ -543,12 +546,12 @@ oo::class create ::nats::connection {
             throw {NATS ErrConnectionClosed} "No connection to NATS server"
         }
 
-        set timerID [after $timeout [list set [self]::pong 0]]
+        set timerID [after $timeout [list set [self namespace]::pong 0]]
 
         lappend outBuffer "PING"
         log::debug "sending PING"
         my ScheduleFlush
-        nats::_coroVwait [self]::pong
+        nats::_coroVwait [self namespace]::pong
         after cancel $timerID
         if {$pong} {
             return true
@@ -962,7 +965,7 @@ oo::class create ::nats::connection {
         if {$postEvent} {
             after 0 [list {*}$callback $subject $msg $replyTo]
         } else {
-            # request callbacks
+            # direct call - exercise with caution
             {*}$callback $subject $msg $replyTo
         }
         # now we return back to CoroMain and enter "yield" there
@@ -1120,7 +1123,7 @@ oo::class create ::nats::connection {
                 } trap {POSIX} {err errOpts} {
                     # can be ECONNABORTED or ECONNRESET
                     lassign [my current_server] host port
-                    my AsyncError ErrBrokenSocket "Server $host:$port [lindex [dict get $errOpts -errorcode] end]" 1
+                    my AsyncError ErrBrokenSocket "Connection to $host:$port broken - [lindex [dict get $errOpts -errorcode] end]" 1
                     return
                 }
                 # Tcl documentation for non-blocking gets is very misleading
@@ -1149,7 +1152,7 @@ oo::class create ::nats::connection {
                 if {$protocol_op in {MSG HMSG INFO -ERR +OK PING PONG}} {
                     my $protocol_op $protocol_arg
                 } else {
-                    log::error "Invalid protocol $protocol_op $protocol_arg"
+                    my AsyncError ErrProtocol "Invalid protocol $protocol_op $protocol_arg" 1
                 }
             }
             default {
@@ -1199,11 +1202,11 @@ oo::class create ::nats::connection {
             throw {NATS ErrConnectionClosed} "No connection to NATS server"
         }
     }
-    
+
     method AsyncError {code msg { doReconnect 0 }} {
         # lower severity than "error", because the client can recover and connect to another NATS
         log::warn $msg
-        set last_error [dict create code "NATS $code" errorMessage $msg]
+        set last_error [dict create code [list NATS $code] errorMessage $msg]
         if {$doReconnect} {
             my CloseSocket 1
             my ConnectNextServer ;# can be done only in the coro
@@ -1260,10 +1263,24 @@ namespace eval ::nats::msg {
         return [dict get $msg reply]
     }
     proc no_responders {msg} {
-        return [expr {[dict lookup [dict get $msg header] Status 0] == 503}]
+        return [expr {[nats::header lookup $msg Status 0] == 503}]
+    }
+    proc IsCtrlMsg {msg descr} {
+        if {[string length [dict get $msg data]]} {
+            return 0
+        }
+        ::set s [nats::header lookup $msg Status 0]
+        if {$s != 100} {
+            return 0
+        }
+        ::set d [nats::header lookup $msg Description ""]
+        return [string match $descr $d]
     }
     proc idle_heartbeat {msg} {
-        return [expr {[dict lookup [dict get $msg header] Status 0] == 100}]
+        return [IsCtrlMsg $msg "Idle*"]
+    }
+    proc flow_control {msg} {
+        return [IsCtrlMsg $msg "Flow*"]
     }
     # only messages fetched using STREAM.MSG.GET will have it
     proc seq {msg} {
@@ -1281,7 +1298,7 @@ namespace eval ::nats::msg {
         }
     }
     
-    namespace export *
+    namespace export {[a-z]*}
     namespace ensemble create
 }
 namespace eval ::nats::header {
@@ -1340,7 +1357,7 @@ namespace eval ::nats::header {
         }
         return [lindex [dict get $h $key] 0]
     }
-    namespace export *
+    namespace export {[a-z]*}
     namespace ensemble create
 }
 

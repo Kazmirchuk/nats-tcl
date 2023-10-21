@@ -159,7 +159,12 @@ namespace eval test_utils {
             set ::inMsg $msg
         }
     }
-
+    proc errorTrace {var idx op } {
+        upvar 1 $var e
+        if {$e ne ""} {
+            lappend ::allErrors [lindex [dict get $e code] 1]
+        }
+    }
     # start NATS server in the background unless it is already running; it must be available in $PATH
     proc startNats {id args} {
         if {$id eq "NATS"} {
@@ -282,6 +287,20 @@ namespace eval test_utils {
         }
         return -code error $msg
     }
+    # for nats::connection and nats::ordered_consumer
+    proc lastError {obj {errVar ""}} {
+        set ns [info object namespace $obj]
+        set lastError [set ${ns}::last_error]
+        if {$lastError eq ""} {
+            return ""
+        }
+        set errCode [lindex [dict get $lastError code] 1]
+        if {$errVar ne ""} {
+            upvar 1 $errVar errMsg
+            set errMsg [dict get $lastError errorMessage]
+        }
+        return $errCode
+    }
     
     #check that actual == ref within certain tolerance - useful for timers/duration
     proc approx {actual ref {tolerance 50}} {
@@ -298,6 +317,29 @@ namespace eval test_utils {
             }
         }
         return true
+    }
+    
+    # replace/delete data passed through the channel using [string map]
+    proc intercept {channel read_mapping write_mapping} {
+        chan push $channel [interceptor new $read_mapping $write_mapping]
+        # the interceptor object will be automatically deleted when the socket is closed
+    }
+    
+    oo::class create interceptor {
+        superclass tcl::transform::core
+        variable read_map
+        variable write_map
+        
+        constructor {read_mapping write_mapping} {
+            set read_map $read_mapping
+            set write_map $write_mapping
+        }
+        method write {c data} {
+            return [string map $write_map $data]
+        }
+        method read {c data} {
+            return [string map $read_map $data]
+        }
     }
     
     namespace export {[a-z]*}

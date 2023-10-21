@@ -12,7 +12,7 @@ All commands are defined in and exported from the `::nats` namespace.
 [*objectName* disconnect](#objectName-disconnect) <br/>
 [*objectName* publish *subject message* ?-reply *replyTo*?](#objectname-publish-subject-message--reply-replyto) <br/>
 [*objectName* publish_msg *msg*](#objectname-publish_msg-msg) <br/>
-[*objectName* subscribe *subject* ?-queue *queueGroup*? ?-callback *cmdPrefix*? ?-max_msgs *maxMsgs*? ?-dictmsg *dictmsg?*](#objectName-subscribe-subject--queue-queueGroup--callback-cmdPrefix--max_msgs-maxMsgs--dictmsg-dictmsg) <br/>
+[*objectName* subscribe *subject ?args?*](#objectName-subscribe-subject-args) <br/>
 [*objectName* unsubscribe *subID* ?-max_msgs *maxMsgs*?](#objectName-unsubscribe-subID--max_msgs-maxMsgs) <br/>
 [*objectName* request *subject message ?args?*](#objectName-request-subject-message-args) <br/>
 [*objectName* request_msg *msg* ?-timeout *ms* ?-callback *cmdPrefix*? ?-dictmsg *dictmsg*?](#objectname-request_msg-msg--timeout-ms--callback-cmdprefix--dictmsg-dictmsg)<br/>
@@ -21,7 +21,7 @@ All commands are defined in and exported from the `::nats` namespace.
 [*objectName* current_server](#objectName-current_server) <br/>
 [*objectName* all_servers](#objectName-all_servers) <br/>
 [*objectName* server_info](#objectName-server_info) <br/>
-[*objectName* jet_stream ?-timeout *ms*? ?-domain *domain*?](#objectname-jet_stream--timeout-ms--domain-domain) <br/>
+[*objectName* jet_stream ?-timeout *ms*? ?-domain *domain*? ?-trace *bool*?](#objectname-jet_stream--timeout-ms--domain-domain--trace-bool) <br/>
 [*objectName* destroy](#objectName-destroy) <br/>
 
 [nats::msg](#natsmsg) <br/>
@@ -71,12 +71,11 @@ The connection object exposes 3 "public" read-only variables:
 - `last_error` - used to deliver asynchronous errors, e.g. if the network fails. It is a dict with 2 keys similar to the arguments for `throw`:
   - code: error code, e.g. {NATS ErrAuthorization}
   - errorMessage: human-readable error message
-- `status` - connection status, one of `$nats::status_closed`, `$nats::status_connecting`, `$nats::status_connected` or `$nats::status_reconnecting`.
+- `status` - connection status, one of `$nats::status_closed`, `$nats::status_connecting`, `$nats::status_connected` or `$nats::status_reconnecting`. Also you can query the status using `$connection cget status`.
 - `serverInfo` - array with INFO from the current server. Intended only for tracing. Note there is `server_info` method that returns a dict with the same data.
 
-You can set up traces on these variables to get notified e.g. when the connection status changes or NATS server enters `ldm` - lame duck mode. 
+You can set up traces on these variables to get notified e.g. when the connection status changes or NATS server enters `ldm` - lame duck mode. See the example below in the paragraph about asynchronous error handling.
 ## Options
-
 The **configure** method accepts the following options. Make sure to set them *before* calling **connect**.
 
 | Option        | Type   | Default | Comment |
@@ -112,7 +111,7 @@ The constructor also initializes the logging functionality. With no arguments, t
 See also the [examples](examples) folder.
 
 ### objectName cget *option*
-Returns the current value of a NATS option as described below. 
+Returns the current value of a NATS option as described in the table above. You can also query the connection status.
 
 ### objectName configure *?option? ?value option value...?*
 When given no arguments, returns a dict of all options with their current values. When given one option, returns its current value (same as `cget`). When given more arguments, assigns each value to an option. The only mandatory option is `servers`, and others have reasonable defaults.
@@ -137,12 +136,20 @@ Publishes a message to the specified subject. See the NATS [documentation](https
 ### objectName publish_msg *msg*
 Publishes a message created using [nats::msg](#natsmsg) commands. This method is especially useful if you need to send a message with headers.
 
-### objectName subscribe *subject* ?-queue *queueGroup*? ?-callback *cmdPrefix*? ?-max_msgs *maxMsgs*? ?-dictmsg *dictmsg*?
-Subscribes to a subject (possibly with wildcards) and returns a subscription ID. Whenever a message arrives, the command prefix will be invoked from the event loop. It must have the following signature:<br/>
+### objectName subscribe *subject* ?*args*?
+Subscribes to a subject (possibly with wildcards) and returns a subscription ID. 
+
+You can provide the following options:
+- `-callback cmdPrefix` (mandatory - see below)
+- `-queue queueGroup` - subscribe to a [queue group](https://docs.nats.io/developing-with-nats/receiving/queues)
+- `-max_msgs int` - automatically unsubscribe after `max_msgs` messages have been received
+- `-dictmsg bool` - if false (default), only a payload is delivered in `message`. Set to true to receive `message` as a dict, e.g. to access headers using the `nats::msg` ensemble. You can also `configure` the connection to have `-dictmsg` as true by default.
+- `-post bool` - controls how the callback is invoked, see below. Default true. Exercise with caution.
+
+Whenever a message arrives, the command prefix `cmdPrefix` will be invoked from the event loop. It must have the following signature:<br/>
 **subscriptionCallback** *subject message replyTo*<br/>
 
-If you use the [-queue option](https://docs.nats.io/developing-with-nats/receiving/queues), only one subscriber in a given queueGroup will receive each message (useful for load balancing). When given `-max_msgs`, the client will automatically unsubscribe after `maxMsgs` messages have been received.<br />
-By default, only a payload is delivered in `message`. Use `-dictmsg true` to receive `message` as a dict, e.g. to access headers using the `nats::msg` ensemble. You can also `configure` the connection to have `-dictmsg` as true by default.
+The default invocation by posting a Tcl event ensures that user code is separated from the library code, e.g. in case the user code throws an error or takes a long time, the library can still function normally. However, posting a Tcl event has a performance cost. If your callback is trivial, e.g. only sets a variable or posts another Tcl event, you can use `-post false`. Then the library will invoke your callback directly. Note that it is done in the library's coroutine, so in your callback you can't use such functions as `publish` or `request`.
 
 ### objectName unsubscribe *subID* ?-max_msgs *maxMsgs*? 
 Unsubscribes from a subscription with a given `subID` immediately. If `-max_msgs` is given, unsubscribes after this number of messages has been received **on this `subID`**. In other words, if you have already received 10 messages, and then you call `unsubscribe $subID -max_msgs 10`, you will be unsubscribed immediately.
@@ -188,8 +195,10 @@ Returns a list with all servers in the pool.
 ### objectName server_info
 Returns a dict with the INFO message from the current server.
 
-### objectName jet_stream ?-timeout *ms*? ?-domain *domain*?
+### objectName jet_stream ?-timeout *ms*? ?-domain *domain*? ?-trace *bool*?
 This 'factory' method creates [jetStreamObject](JsAPI.md) to work with JetStream. `-timeout` (default 5s) is applied for all requests to JetStream NATS API. `domain` (empty string by default) specifies the JetStream [domain](https://docs.nats.io/running-a-nats-service/configuration/leafnodes/jetstream_leafnodes).
+
+The `-trace` option enables debug logging of every request by `jetStreamObject` to the NATS JS API similar to the `--trace` option in NATS CLI. Remember to set the logging level in `connection` to `debug` as well.
 
 Remember to destroy this object when it is no longer needed - there's no built-in garbage collection in `connection`.
 
@@ -201,7 +210,7 @@ This ensemble encapsulates all commands to work with a NATS message. Accessing i
 ### msg create *subject* ?-data *payload*? ?-reply *replySubj*?
 Returns a new message with the specified subject, payload and reply subject.
 ### msg set *msgVariable option value*
-Updates the message. Possible `options` are `-subject`, `-data` and `-reply`.
+Updates the message. Possible options are `-subject`, `-data` and `-reply`.
 ### msg subject *msgValue*
 Returns the message subject.
 ### msg data *msgValue*
@@ -271,7 +280,9 @@ try {
 Asynchronous errors are sent to the logger and can also be queried/traced using 
 `$last_error`, for example:
 ```Tcl
-set err [set ${conn}::last_error]
+# the proper way to access an object's internal namespace
+set ns [info object namespace $conn]
+set err [set ${ns}::last_error]
 puts "Error code: [dict get $err code]"
 puts "Error text: [dict get $err errorMessage]"
 ```
@@ -291,6 +302,7 @@ puts "Error text: [dict get $err errorMessage]"
 | ErrAuthExpired | User authorization has expired | yes |
 | ErrAuthRevoked | User authorization has been revoked | yes |
 | ErrAccountAuthExpired | NATS server account authorization has expired| yes |
+| ErrProtocol | Received an invalid protocol token | yes |
 
 ## Connection status and the reconnection process
 The connection can have one of the four statuses:

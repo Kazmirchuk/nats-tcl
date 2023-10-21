@@ -8,6 +8,7 @@
 # - sync, async publishing to a stream
 # - fetching from a durable pull consumer with various ACK's
 # - fetching a batch of messages under various scenarios
+# - ordered consumers
 
 source test_utils.tcl
 
@@ -45,7 +46,7 @@ test jet_stream-setup "Create a stream and a pull consumer" -body {
     $conn subscribe "\$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED.$stream_name.$consumer_name" -callback [lambda {subj msg reply} {
         incr ::term_msgs
     }]
-    set response [$jet_stream add_stream $stream_name -subjects [list test.*] -storage memory]
+    set response [$jet_stream add_stream $stream_name -subjects [list test.*]]
     assert {[dict get $response did_create]}
     set response [$jet_stream add_pull_consumer $stream_name $consumer_name -ack_wait 1000] ;# rather short ack_wait=1s
     assert {[dict get $response name] eq $consumer_name}
@@ -59,7 +60,7 @@ test jet_stream-1.1 "Publish a message to JetStream synchronously" -body {
 } -result 1
 
 test jet_stream-1.2 "Publish a message to JetStream asynchronously" -body {
-    $jet_stream publish test.1 "msg 2" -stream MY_STREAM -callback [lambda {timedOut pubAck pubError} {
+    $jet_stream publish test.1 "msg 2" -stream $stream_name -callback [lambda {timedOut pubAck pubError} {
         set ::pubAck $pubAck
     }]
     wait_for ::pubAck
@@ -158,7 +159,7 @@ test jet_stream-3.1 "Fetch with no_wait - no messages" -setup {
 
 test jet_stream-3.2 "Fetch with no_wait - get some messages" -setup {
     foreach msg { 1 2 3 } {
-        $jet_stream publish test.3 $msg -stream MY_STREAM
+        $jet_stream publish test.3 $msg -stream $stream_name
     }
 } -body {
     duration {
@@ -173,7 +174,7 @@ test jet_stream-3.2 "Fetch with no_wait - get some messages" -setup {
 
 test jet_stream-3.3 "Fetch with no_wait - get all messages" -setup {
     foreach msg { 1 2 3 4 5 6 7 8 9 10 } {
-        $jet_stream publish test.3 $msg -stream MY_STREAM
+        $jet_stream publish test.3 $msg -stream $stream_name
     }
 } -body {
     duration {
@@ -208,7 +209,7 @@ test jet_stream-4.2 "Fetch with expires - no messages - client-side timeout" -bo
 
 test jet_stream-4.3 "Fetch with expires - get some messages" -setup {
     foreach msg { 1 2 3 } {
-        $jet_stream publish test.4 $msg -stream MY_STREAM
+        $jet_stream publish test.4 $msg -stream $stream_name
     }
 } -body {
     duration {
@@ -224,7 +225,7 @@ test jet_stream-4.3 "Fetch with expires - get some messages" -setup {
 
 test jet_stream-4.4 "Fetch with expires - get all messages" -setup {
     foreach msg { 1 2 3 4 5 6 7 8 9 10 } {
-        $jet_stream publish test.4 $msg -stream MY_STREAM
+        $jet_stream publish test.4 $msg -stream $stream_name
     }
 } -body {
     duration {
@@ -271,7 +272,7 @@ set autoAckCallback [lambda {js timedOut msg} {
 test jet_stream-5.3 "Async fetch - get some messages then expire" -setup {
     set gotMsgs [list]
     foreach msg { 1 2 3 } {
-        $jet_stream publish test.5 $msg -stream MY_STREAM
+        $jet_stream publish test.5 $msg -stream $stream_name
     }
 } -body {
     duration {
@@ -298,7 +299,7 @@ test jet_stream-5.3 "Async fetch - get some messages then expire" -setup {
 test jet_stream-5.4 "Async fetch - get some messages then timeout" -setup {
     set gotMsgs [list]
     foreach msg { 1 2 3 } {
-        $jet_stream publish test.5 $msg -stream MY_STREAM
+        $jet_stream publish test.5 $msg -stream $stream_name
     }
 } -body {
     duration {
@@ -323,7 +324,7 @@ test jet_stream-5.4 "Async fetch - get some messages then timeout" -setup {
 test jet_stream-5.5 "Async fetch - get all messages" -setup {
     set gotMsgs [list]
     foreach msg { 1 2 3 4 5 6 7 8 9 10 } {
-        $jet_stream publish test.5 $msg -stream MY_STREAM
+        $jet_stream publish test.5 $msg -stream $stream_name
     }
 } -body {
     duration {
@@ -375,7 +376,185 @@ test jet_stream-8 "Check there are no pending pull requests left" -body {
     array size ${conn}::requests
 } -result 0
 
-$jet_stream delete_stream $stream_name
+#TODO check consumer deleted status 409
+
+# ------------------------------- ORDERED CONSUMERS --------------------------------------
+proc consumerCallback {msg} {
+    lappend ::gotMsgs $msg ;# no ACK needed when using Ordered Consumer
+}
+
+# catching specific messages in the socket using "intercept" is tedious
+# instead we override message handling in nats::ordered_consumer
+proc intercept_msg {obj} {
+    oo::objdefine $obj {
+        method OnMsg {subj msg reply} {
+            # MsgFilter returns true if the message should be dropped
+            if {![MsgFilter $msg]} {
+                next $subj $msg $reply
+            }
+        }
+    }
+}
+proc intercept_clear {obj} {
+    oo::objdefine $obj {
+        deletemethod OnMsg
+    }
+}
+
+test jet_stream-9.1 "Ordered consumer - no such stream" -body {
+    $jet_stream ordered_consumer BOGUS_STREAM -callback consumerCallback
+} -result {stream not found} -errorCode {NATS ErrStreamNotFound}
+
+test jet_stream-9.2 "Ordered consumer - nominal case" -body {
+    set gotMsgs [list]
+    # publish a few messages *before* creating the consumer
+    foreach msg { 1 2 3 } {
+        $jet_stream publish test.9 $msg -stream $stream_name
+    }
+    duration {
+        set cons [$jet_stream ordered_consumer $stream_name -callback consumerCallback -description "Ordered consumer" -filter_subject test.9]
+        while {[llength $gotMsgs] < 3} {
+            wait_for ::gotMsgs
+        }
+    } elapsed
+    assert {$elapsed < 500}
+    assert {[llength $gotMsgs] == 3} 1
+    set myconfig [$cons config]
+    set consumerConfig [dict get [$jet_stream consumer_info $stream_name [$cons name]] config]
+    assert {[dict_in $myconfig $consumerConfig]}
+    # publish a few messages *while* we have the consumer
+    foreach msg { 4 5 6 } {
+        $jet_stream publish test.9 $msg -stream $stream_name
+    }
+    duration {
+        while {[llength $gotMsgs] < 6} {
+            wait_for ::gotMsgs
+        }
+    } elapsed
+    assert {$elapsed < 500}
+    assert {[lastError $cons] eq ""} 1
+    lmap msg $gotMsgs {nats::msg data $msg}
+} -result {1 2 3 4 5 6} -cleanup {
+    $cons destroy
+}
+
+test jet_stream-10 "Ordered consumer - reset - missing heartbeats" -body {
+    proc MsgFilter {msg} {
+        return [nats::msg idle_heartbeat $msg]  ;# drop all HB
+    }
+    set gotMsgs [list]
+    set cons [$jet_stream ordered_consumer $stream_name -callback consumerCallback -filter_subject test.10 -idle_heartbeat 300]
+    set consumerName [$cons name]
+    foreach msg { 1 2 3 } {
+        $jet_stream publish test.10 $msg -stream $stream_name
+    }
+    while {[llength $gotMsgs] < 3} {
+        wait_for ::gotMsgs
+    }
+    intercept_msg $cons
+    wait_for ${cons}::last_error 1200  ;# wait for at least hb interval * 3
+    intercept_clear $cons
+    assert {[lastError $cons] eq "ErrConsumerNotActive"} 1
+    # reset in progress; meanwhile publish more messages
+    foreach msg { 4 5 6 } {
+        $jet_stream publish test.10 $msg -stream $stream_name
+    }
+    while {[llength $gotMsgs] < 6} {
+        wait_for ::gotMsgs
+    }
+    assert {$consumerName ne [$cons name]} 1  ;# check that the push consumer was recreated
+    lmap msg $gotMsgs {nats::msg data $msg}
+} -result {1 2 3 4 5 6} -cleanup {
+    rename MsgFilter ""
+    $cons destroy
+}
+
+test jet_stream-11 "Ordered consumer - reset - sequence mismatch in HB" -body {
+    proc MsgFilter {msg} {
+        return [expr {[nats::msg data $msg] == 3}]  ;# drop the 3rd message
+    }
+    set gotMsgs [list]
+    set cons [$jet_stream ordered_consumer $stream_name -callback consumerCallback -filter_subject test.11 -idle_heartbeat 500]
+    set consumerName [$cons name]
+    intercept_msg $cons
+    foreach msg { 1 2 3 } {
+        $jet_stream publish test.11 $msg -stream $stream_name
+    }
+    # the 1st HB triggers a reset
+    wait_for ${cons}::last_error 800
+    intercept_clear $cons
+    assert {[lastError $cons] eq "ErrConsumerSequenceMismatch"} 1
+    while {[llength $gotMsgs] < 3} {
+        wait_for ::gotMsgs
+    }
+    assert {$consumerName ne [$cons name]} 1  ;# check that the push consumer was recreated
+    lmap msg $gotMsgs {nats::msg data $msg}
+} -result {1 2 3} -cleanup {
+    rename MsgFilter ""
+    $cons destroy
+}
+
+test jet_stream-12 "Ordered consumer - reset - sequence mismatch in a message" -body {
+    proc MsgFilter {msg} {
+        return [expr {[nats::msg data $msg] == 2}]  ;# drop the 2nd message
+    }
+    set gotMsgs [list]
+    set cons [$jet_stream ordered_consumer $stream_name -callback consumerCallback -filter_subject test.12]
+    set consumerName [$cons name]
+    intercept_msg $cons
+    foreach msg { 1 2 3 } {
+        $jet_stream publish test.12 $msg -stream $stream_name
+    }
+    # the 3rd message triggers a reset
+    wait_for ${cons}::last_error
+    intercept_clear $cons
+    assert {[lastError $cons] eq "ErrConsumerSequenceMismatch"} 1
+    while {[llength $gotMsgs] < 3} {
+        wait_for ::gotMsgs 1000
+    }
+    assert {$consumerName ne [$cons name]} 1  ;# check that the push consumer was recreated
+    lmap msg $gotMsgs {nats::msg data $msg}
+} -result {1 2 3} -cleanup {
+    rename MsgFilter ""
+    $cons destroy
+}
+
+test jet_stream-13 "Ordered consumer - reset - server restart" -body {
+    set gotMsgs [list]
+    set allErrors [list]
+    $jet_stream publish test.13 1 -stream $stream_name
+    set cons [$jet_stream ordered_consumer $stream_name -callback consumerCallback -filter_subject test.13 -idle_heartbeat 300]
+    trace add variable ${cons}::last_error write errorTrace
+    set ${cons}::RetryInterval 700 ;# default interval 10s is recommended for production, but it's too long for the test
+    wait_for ::gotMsgs
+    stopNats NATS
+    # consumer resets but fails to create a new push consumer due to a timeout
+    wait_for ::allErrors 2000
+    startNats NATS --jetstream
+    wait_for ${cons}::Name 2000 ;# wait until the consumer recreates the subscription
+    assert {$allErrors eq {ErrConsumerNotActive ErrTimeout ErrConsumerNotActive}}
+    $jet_stream publish test.13 2 -stream $stream_name
+    wait_for ::gotMsgs 500
+    lmap msg $gotMsgs {nats::msg data $msg}
+} -result {1 2} -cleanup {
+    $cons destroy
+}
+
+test jet_stream-14 "Ordered consumer - reset - stream deleted" -body {
+    set gotMsgs [list]
+    set allErrors [list]
+    set cons [$jet_stream ordered_consumer $stream_name -callback consumerCallback -filter_subject test.14 -idle_heartbeat 500]
+    trace add variable ${cons}::last_error write errorTrace
+    $jet_stream delete_stream $stream_name
+    while {[llength $allErrors] < 2} {
+        wait_for ::allErrors 2000
+    }
+    assert {$allErrors eq {ErrConsumerNotActive ErrStreamNotFound}}
+    assert {[$cons name] eq ""}
+} -cleanup {
+    $cons destroy
+}
+
 $jet_stream destroy
 $conn destroy
 stopNats NATS

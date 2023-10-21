@@ -91,29 +91,6 @@ test extra_opts-3 "PING/PONG protocol initiated by client" -body {
 
 stopNats NATS
 
-# replace/delete data passed through the channel using [string map]
-proc intercept {channel read_mapping write_mapping} {
-    chan push $channel [interceptor new $read_mapping $write_mapping]
-}
-
-oo::class create interceptor {
-    superclass tcl::transform::core
-    variable read_map
-    variable write_map
-    
-    constructor {read_mapping write_mapping} {
-        set read_map $read_mapping
-        set write_map $write_mapping
-    }
-    method write {c data} {
-        return [string map $write_map $data]
-    }
-
-    method read {c data} {
-        return [string map $read_map $data]
-    }
-}
-
 test extra_opts-4.1 "PING/PONG protocol initiated by server" -body {
     # I can't pass ping_interval as a command line argument to the NATS server, so have to create a config file
     # older NATS (v1.4) doesn't accept ping_interval: 2s, so just use int

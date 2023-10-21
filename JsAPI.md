@@ -29,6 +29,7 @@ JetStream functionality of NATS can be accessed by creating the `nats::jet_strea
 [*js* delete_consumer *stream consumer*](#js-delete_consumer-stream-consumer)<br/>
 [*js* consumer_info *stream consumer*](#js-consumer_info-stream-consumer)<br/>
 [*js* consumer_names *stream*](#js-consumer_names-stream)<br/>
+[*js* ordered_consumer *stream ?args?*](#js-ordered_consumer-stream-args)<br/>
 
 [*js* stream_msg_get *stream* ?-last_by_subj *subj*? ?-next_by_subj *subj*? ?-seq *int*?](#js-stream_msg_get-stream--last_by_subj-subj--next_by_subj-subj--seq-int)<br/>
 [*js* stream_msg_delete *stream* -seq *int* ?-no_erase *bool*?](#js-stream_msg_delete-stream--seq-int--no_erase-bool)<br/>
@@ -258,6 +259,8 @@ Deletes the consumer.
 Returns consumer information as a dict.
 ### js consumer_names *stream*
 Returns a list of all consumers defined on this stream.
+### js ordered_consumer *stream ?args?*
+Creates an ordered ephemeral push consumer
 ### js stream_msg_get *stream* ?-last_by_subj *subj*? ?-next_by_subj *subj*? ?-seq *int*?
 'Direct Get' a message from stream `stream` by given `subject` or `sequence`. See also [ADR-31](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-31.md).
 ### js stream_msg_delete *stream* -seq *int* ?-no_erase *bool*?
@@ -305,3 +308,9 @@ In addition to all [core NATS errors](CoreAPI.md#error-handling), the `jet_strea
 | ErrJSResponse | | Other JetStream error. `code` and `err_code` is passed in the Tcl error code and `description` is used for the error message. |
  
  See also "Error Response" in [ADR-1](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-1.md#error-response).
+
+| Async Errors | Signalled via | Reason  | 
+| ------------- |------|--------|
+| ErrConsumerNotActive | `$last_error` | Ordered consumer received no heartbeats, and it will be restarted |
+| ErrConsumerSequenceMismatch | `$last_error` | Ordered consumer received a message with unexpected `consumer_seq`, and it will be restarted |
+

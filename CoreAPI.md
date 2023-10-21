@@ -305,9 +305,15 @@ puts "Error text: [dict get $err errorMessage]"
 | ErrProtocol | Received an invalid protocol token | yes |
 
 ## Connection status and the reconnection process
+You can check the connection status as follows:
+```Tcl
+if {[$conn cget status] eq $nats::status_closed} {
+    puts "Connection closed!"
+}
+```
 The connection can have one of the four statuses:
 - `$nats::status_closed`: initial state after creating the object. The TCP socket is closed. Calling `subscribe`, `unsubscribe`, `publish`, `request` etc raises `ErrConnectionClosed`. Calling `disconnect` is no-op.
-- `$nats::status_connecting`: triggered by calling `connect`. The client is trying to connect to servers in the pool one by one. All servers are tried only once regardless of `-max_reconnect_attempts`. If no servers are available, the client logs the error and transitions into `$nats::status_closed`. If the synchronous version of `connect` is used, it raises `ErrNoServers` (in case of multiple servers configured in the pool) or a more specific error if the pool has only one server. Calling `subscribe`, `unsubscribe` and `publish` is allowed - they will be flushed as soon as the client transitions into `$nats::status_connected`.
+- `$nats::status_connecting`: triggered by calling `connect`. The client is trying to connect to servers in the pool one by one. All servers are tried only once regardless of `-max_reconnect_attempts`. If no servers are available, the client logs the error and transitions into `$nats::status_closed`. If the synchronous version of `connect` is used, it raises `ErrNoServers` (in case of multiple servers configured in the pool) or a more specific error if the pool has only one server. Calling `subscribe`, `unsubscribe` and `publish` is allowed - they will be flushed as soon as the client transitions into `$nats::status_connected`. You can also use `request`, if the timeout is sufficiently long.
 - `$nats::status_connected`: the TCP connection to a NATS server is established (including TLS upgrade and credentials verification, if needed). Calling `disconnect` transitions the client into `$nats::status_closed`. If the connection is lost, the client transitions into `$nats::status_reconnecting`.
 - `$nats::status_reconnecting` - triggered by any of the above asynchronous errors that terminate the connection. The client is trying to connect to servers in the pool one by one. Consecutive attempts to connect to a specific server are at least `-reconnect_time_wait` ms apart. Every failed connection to a server increments its `reconnects` counter. Once this counter exceeds `-max_reconnect_attempts`, the server is removed from the pool. Once no servers are left in the pool, or the user calls `disconnect`, the client transitions into `$nats::status_closed`. Calling `subscribe`, `unsubscribe`, `publish` etc is allowed. As soon as the client transitions into `$nats::status_connected`, they will be flushed along with restoring all current subscriptions.
 
@@ -337,7 +343,7 @@ Most likely you will need to provide additional options via `-tls_opts`: at leas
 $connection configure -tls_opts {-cadir /etc/ssl}
 ```
 Consult the documentation of [tls::import](https://core.tcl-lang.org/tcltls/wiki?name=Documentation#tls::import) for all supported options. 
-The client supplies default options `-require 1` and `-command ::nats::tls_callback` that you can override.
+The client supplies default options `-require 1` and `-command ::nats::tls_callback` that you can override. The default callback does nothing.
 
 If NATS server requires clients to authenticate using TLS certificates, you need to use `-certfile` and `-keyfile` options.
 

@@ -13,7 +13,7 @@ source test_utils.tcl
 startNats NATS
 
 set conn [nats::connection new "ExtraConfigOptions" -log_chan [tcltest::outputChannel]]
-
+set connNs [info object namespace $conn]
 $conn configure -servers nats://localhost:4222
 
 test extra_opts-1 "Check verbose and pedantic modes" -body {
@@ -23,15 +23,15 @@ test extra_opts-1 "Check verbose and pedantic modes" -body {
     $conn configure -verbose true -pedantic true -check_subjects false
     $conn connect -async ;# NATS sends back INFO, then replies +OK to our CONNECT
     sniffer $conn {
-        while {[set ${conn}::status] ne $nats::status_connected} {
-            wait_for ${conn}::status
+        while {[$conn cget status] ne $nats::status_connected} {
+            wait_for ${connNs}::status
         }
         $conn publish dummy_subj "Hello NATS" ;# NATS sends back +OK
         $conn publish invalid_subj.* "Hello NATS 2" ;# NATS sends back -ERR and +OK (?!)
         sleep 300
     } readData writtenData -all_lines 1
     
-    assert {[set ${conn}::status] == $nats::status_connected} 1 ;# the connection should be still alive
+    assert {[$conn cget status] eq $nats::status_connected} 1 ;# the connection should be still alive
 
     set connectDict [getConnectOpts [lindex $writtenData 0]] 
     assert {[dict get $connectDict verbose] eq "true"}
@@ -40,9 +40,8 @@ test extra_opts-1 "Check verbose and pedantic modes" -body {
     assert {[lindex $readData 1] eq "+OK"}
     assert {[lindex $readData 2] eq "+OK"}
     
-    set err [set ${conn}::last_error]
-    assert {[dict get $err code] eq [list NATS ErrBadSubject]}
-} -cleanup {
+    lastError $conn
+} -result ErrBadSubject -cleanup {
     $conn disconnect
     $conn reset -verbose -pedantic -check_subjects
 }
@@ -52,8 +51,8 @@ test extra_opts-2 "Check the echo=false option" -body {
     $conn configure -echo false
     $conn connect -async
     sniffer $conn {
-        while {[set ${conn}::status] ne $nats::status_connected} {
-            wait_for ${conn}::status
+        while {[$conn cget status] ne $nats::status_connected} {
+            wait_for ${connNs}::status
         }
     } rdata wdata
     set connectDict [getConnectOpts $wdata]
@@ -64,9 +63,8 @@ test extra_opts-2 "Check the echo=false option" -body {
     assert {[catch {wait_for ::inMsg}] == 1}
     # but a request to another subscriber still works fine
     set resp [responder new -subject no_echo]
-    set result [$conn request no_echo "0 hello"]
-    assert {$result eq "hello"}
-} -cleanup {
+    $conn request no_echo "0 hello"
+} -result "hello" -cleanup {
     $resp destroy
     $conn disconnect
     $conn reset -echo
@@ -77,7 +75,7 @@ test extra_opts-3 "PING/PONG protocol initiated by client" -body {
     $conn connect
     sniffer $conn {
         duration {
-            wait_for ${conn}::pong 2000
+            wait_for ${connNs}::pong 2000
         } elapsed
     } readData writtenData -all_lines 1 -filter_ping 0
     assert {$elapsed >= 1000 && $elapsed < 1300}
@@ -112,12 +110,12 @@ test extra_opts-4.2 "PING/PONG - no response from the client" -body {
     # wait for the next PING/PONG exchange initiated by the server
     # the interceptor will delete all PONGs sent by the client, so the server will report an error with -ERR and close the socket
     # which will make the client go into the reconnecting mode
-    intercept [set ${conn}::sock] "" [dict create "PONG\r\n" {}]
+    intercept $conn "" [dict create "PONG\r\n" {}]
     duration {
-        wait_for ${conn}::status 6000
+        wait_for ${connNs}::status 6000
     } elapsed
-    assert {[dict get [set ${conn}::last_error] code] eq [list NATS ErrStaleConnection]}
-    assert {[set ${conn}::status] == $nats::status_reconnecting} 1
+    assert {[lastError $conn] eq "ErrStaleConnection"}
+    assert {[$conn cget status] eq $nats::status_reconnecting} 1
     # after sending PING, the server will wait for 2s more before declaring 'Stale Connection'
     assert {$elapsed < 5000}
 } -cleanup {
@@ -129,14 +127,14 @@ test extra_opts-4.3 "PING/PONG - no response from the server" -body {
     # default max_outstanding_pings=2
     $conn connect
     # delete all PONGs sent by the server
-    intercept [set ${conn}::sock] [dict create "PONG\r\n" {}] ""
+    intercept $conn [dict create "PONG\r\n" {}] ""
     duration {
         # the client will send 2 PINGs without reply; when Pinger runs for the 3rd time, it will raise the error
         # and the client will go into reconnecting
-        wait_for ${conn}::status 4000
+        wait_for ${connNs}::status 4000
     } elapsed
-    assert {[dict get [set ${conn}::last_error] code] eq [list NATS ErrStaleConnection]}
-    assert {[set ${conn}::status] == $nats::status_reconnecting} 1
+    assert {[lastError $conn] eq "ErrStaleConnection"}
+    assert {[$conn cget status] eq $nats::status_reconnecting} 1
     assert {[approx $elapsed 3000]}
 } -cleanup {
     $conn disconnect
@@ -176,7 +174,7 @@ test extra_opts-6 "Check the utf8_convert option" -setup {
 }
 
 test extra_opts-7.1 "Error handling when connection is closed" -body {
-    assert {[set ${conn}::status] eq $nats::status_closed}
+    assert {[$conn cget status] eq $nats::status_closed}
     try {
         $conn publish foo bar
     } trap {NATS ErrConnectionClosed} err {}
@@ -186,7 +184,7 @@ test extra_opts-7.1 "Error handling when connection is closed" -body {
 test extra_opts-7.2 "connect -async allows to PUB/SUB" -body {
     # PUB/SUB/UNSUB are buffered and flushed after a connection is established
     $conn connect -async
-    assert {[set ${conn}::status] == $nats::status_connecting}
+    assert {[$conn cget status] eq $nats::status_connecting}
     $conn subscribe subject1 -callback subCallback
     $conn publish subject1 "hello"
     wait_for ::inMsg 1000

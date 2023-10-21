@@ -10,7 +10,6 @@ oo::class create ::nats::key_value {
 
     constructor {connection jet_stream domain bucket_name stream_config} {
         set conn $connection
-        set status_var "[info object namespace $conn]::status"
         set js $jet_stream
         set bucket $bucket_name
         set stream "KV_$bucket_name"
@@ -259,6 +258,7 @@ oo::class create ::nats::kv_watcher {
         set inbox [$conn inbox]
         # ordered_consumer is a shorthand for several options - taken from nats.py
         # ack_wait is 22h
+        # TODO sinmplify
         set consumer_opts [dict create \
                            -flow_control true \
                            -ack_policy none \

@@ -33,9 +33,10 @@ logger::utils::applyAppender -appender fileAppend -service main::nats -appenderA
 ${mainLogger}::setlevel info ;# changing a logging level of a parent logger propagates to children
 
 # now instead of -log_chan and -log_level we pass the logger object to be used by the connection
-set conn [nats::connection new "Connection_2" -logger $natsLogger]
+# also, for the sake of example let's use TclOO "create" instead of "new"
+nats::connection create conn "Connection_2" -logger $natsLogger
 # let's add a non-existing server to the pool just to get more logs about failed connection attempts
-$conn configure -servers [list nats://dummy.org:4222 nats://localhost:4222] -randomize false
+conn configure -servers [list nats://dummy.org:4222 nats://localhost:4222] -randomize false
 
 proc statusTrace {var idx op } {
     upvar 1 $var s
@@ -51,14 +52,15 @@ proc errorTrace {var idx op } {
         ${::mainLogger}::error "NATS error: [dict get $err errorMessage]"
     }
 }
-
-trace add variable ${conn}::status write statusTrace
-trace add variable ${conn}::last_error write errorTrace
+# the proper way to get object's internal namespace - this should be used both for objects created with "create" and "new"
+set ns [info object namespace conn]
+trace add variable ${ns}::status write statusTrace
+trace add variable ${ns}::last_error write errorTrace
 
 # now connect to NATS; you can run nats-server -DV to see verbose logging from it too
-$conn connect
-$conn disconnect ;# just for the example; the destructor calls disconnect anyway
-$conn destroy
+conn connect
+conn disconnect ;# just for the example; the destructor calls disconnect anyway
+conn destroy
 
 ${mainLogger}::info "Done"
 ${mainLogger}::delete ;# clean up the logger and its children

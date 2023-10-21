@@ -71,10 +71,10 @@ namespace eval test_utils {
             all_lines bool false
             filter_ping bool true
         }
-        
+        set ns [info object namespace $connection]
         upvar 1 $readVar r_link
         upvar 1 $writtenVar w_link
-        upvar 1 ${connection}::sock chanHandle
+        upvar 1 ${ns}::sock chanHandle
         
         # tcl::chan::variable can't work with local variables
         # and it requires explicit namespace qualifiers
@@ -85,7 +85,7 @@ namespace eval test_utils {
         
         if {$chanHandle eq ""} {
             # the socket hasn't been created yet
-            trace add variable ${connection}::sock write [lambda { writeChan readChan var idx op} {
+            trace add variable ${ns}::sock write [lambda { writeChan readChan var idx op} {
                 upvar 1 $var chanHandle
                 if {$chanHandle ne ""} {
                     tcl::transform::observe $chanHandle $writeChan $readChan
@@ -105,11 +105,11 @@ namespace eval test_utils {
             }
             close $writeChan
             close $readChan
-            foreach traceInfo [trace info variable ${connection}::sock] {
+            foreach traceInfo [trace info variable ${ns}::sock] {
                 # remove our trace, if any
                 lassign $traceInfo op cmd
                 if {$op eq "write"} {
-                    trace remove variable ${connection}::sock write $cmd
+                    trace remove variable ${ns}::sock write $cmd
                 }
             }
             set r_link $::test_utils::readData
@@ -320,7 +320,9 @@ namespace eval test_utils {
     }
     
     # replace/delete data passed through the channel using [string map]
-    proc intercept {channel read_mapping write_mapping} {
+    proc intercept {conn read_mapping write_mapping} {
+        set ns [info object namespace $conn]
+        set channel [set ${ns}::sock]
         chan push $channel [interceptor new $read_mapping $write_mapping]
         # the interceptor object will be automatically deleted when the socket is closed
     }

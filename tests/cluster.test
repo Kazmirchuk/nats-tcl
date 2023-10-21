@@ -26,6 +26,7 @@ proc startClusterNats2 {} {
 test cluster-1.1 "Dynamic expansion of the server pool with INFO message" -setup {
     startClusterNats1
     set conn [nats::connection new "Cluster" -log_chan [tcltest::outputChannel]]
+    set connNs [info object namespace $conn]
 } -body {
     # start with only the seed server
     $conn configure -servers nats://localhost:4222
@@ -33,7 +34,7 @@ test cluster-1.1 "Dynamic expansion of the server pool with INFO message" -setup
     assert {[llength [$conn all_servers]] == 1}
     # add another server to the cluster
     startClusterNats2
-    while {[llength [$conn all_servers]] != 2} {
+    while {[llength [$conn all_servers]] == 1} {
         test_utils::log::info "Wait for the INFO message with connect_urls..."
         vwait ${conn}::serverInfo ;# can't use wait_for with arrays
     }
@@ -51,26 +52,20 @@ test cluster-1.2 "Restore subscriptions after reconnecting to another server" -b
     $conn subscribe eupnea -callback subCallback
     $conn ping
     set all_statuses [list]
-    set status_trace [lambda {var idx op } {
+    proc status_trace {var idx op } {
         upvar 1 $var s
         lappend ::all_statuses $s
-    }]
-    trace add variable ${conn}::status write $status_trace
+    }
+    trace add variable ${connNs}::status write status_trace
     
-    set all_errors [list]
-    set error_trace [lambda {var idx op } {
-        upvar 1 $var e
-        if {$e ne ""} {
-            lappend ::all_errors [lindex [dict get $e code] 1]
-        }
-    }]    
-    trace add variable ${conn}::last_error write $error_trace
+    set allErrors [list]
+    trace add variable ${connNs}::last_error write errorTrace
     
     stopNats NATS1
     $conn publish foo bar ;# find out about the failure ASAP
     sleep 500
     
-    assert {$all_errors eq "ErrBrokenSocket"}
+    assert {$allErrors eq "ErrBrokenSocket"}
     assert {$all_statuses eq {reconnecting connected}}
     
     lassign [$conn current_server] host port
@@ -80,8 +75,8 @@ test cluster-1.2 "Restore subscriptions after reconnecting to another server" -b
     $conn publish eupnea "back online"
     wait_for ::inMsg
 } -result "back online" -cleanup {
-    trace remove variable ${conn}::status write $status_trace
-    trace remove variable ${conn}::last_error write $error_trace
+    trace remove variable ${connNs}::status write status_trace
+    trace remove variable ${connNs}::last_error write errorTrace
     $conn disconnect
     stopNats NATS2
 }
@@ -96,7 +91,7 @@ test cluster-2 "Outgoing messages are buffered while reconnecting" -body {
     catch {$conn ping -timeout 500} err errOpts ;# find out about the failure ASAP
     set errCode [lindex [dict get $errOpts -errorcode] 1]
     assert {$errCode eq "ErrTimeout" || $errCode eq "ErrConnectionClosed"} ;# most likely ErrTimeout, but both are valid
-    assert {[set ${conn}::status] eq $nats::status_reconnecting} 1
+    assert {[$conn cget status] eq $nats::status_reconnecting} 1
     
     $conn publish subj "Buffered message"
     sleep 100 ;# reconnect to NATS2, restore the subscription and publish the message
@@ -105,7 +100,7 @@ test cluster-2 "Outgoing messages are buffered while reconnecting" -body {
         wait_flush $conn
     } elapsed
     assert {$elapsed <= [$conn cget -reconnect_time_wait]} 1 ;# 2s by default
-    assert {[set ${conn}::status] == $nats::status_connected} 1
+    assert {[$conn cget status] eq $nats::status_connected} 1
     sleep 500    
     assert {$inMsg eq "Buffered message"}
     $conn publish subj "Buffered message 2"
@@ -135,7 +130,7 @@ test cluster-3.1 "Requests time out if connection is lost - async" -setup {
         catch {$conn ping -timeout 800} err errOpts
     } elapsed
     assert {$elapsed < 900}
-    assert {[set ${conn}::status] == $nats::status_closed} 1
+    assert {[$conn cget status] eq $nats::status_closed} 1
     lassign $cbResult timedOut msg timestamp
     assert {$timedOut}
     assert {$timestamp - $now < 1100} ;# stopNats=500ms + connect_timeout=500ms
@@ -161,7 +156,7 @@ test cluster-3.2 "Requests time out if connection is lost - sync" -setup {
         wait_for ::request_done 5000
     } elapsed
     assert {$elapsed < 600} ;# connect_timeout=500ms
-    assert {[set ${conn}::status] == $nats::status_closed} 1
+    assert {[$conn cget status] eq $nats::status_closed} 1
     dict get $request_done -errorcode
 } -result {NATS ErrTimeout} -cleanup {
     $resp destroy
@@ -192,15 +187,15 @@ test cluster-4 "Requests can transfer from one server to another within a cluste
     stopNats NATS1 ;# takes 500ms
     # $conn ping - involves vwait, so the whole failover process can succeed by the time we return from 'ping'
     $conn publish foo bar ;# find out about the failure
-    while {[set ${conn}::status] != $nats::status_reconnecting} {
-        wait_for ${conn}::status 2000
+    while {[$conn cget status] ne $nats::status_reconnecting} {
+        wait_for ${connNs}::status 2000
     }
     test_utils::log::info "The client is reconnecting..."
     duration {
         wait_for ::inMsg 2000
     } elapsed
     assert {$elapsed < 1200} ;# should be ~1000ms
-    assert {[set ${conn}::status] == $nats::status_connected} 1
+    assert {[$conn cget status] eq $nats::status_connected} 1
     assert {[$conn current_server] eq {localhost 5222}} 1
     set inMsg
 } -result "hello" -cleanup {

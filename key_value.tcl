@@ -172,7 +172,8 @@ oo::class create ::nats::key_value {
                   meta_only       bool false
                   ignore_deletes  bool false
                   updates_only    bool false
-                  values_array     str  ""}
+                  values_array    str  ""
+                  idle_heartbeat  str  ""}
         
         nats::_parse_args $args $spec
         set deliver_policy [expr {$include_history ? "all" : "last_per_subject"}]
@@ -181,7 +182,7 @@ oo::class create ::nats::key_value {
         if {$mirrored_bucket ne ""} {
             set filter_subject "\$KV.$mirrored_bucket.$key_pattern"
         }
-        return [nats::kv_watcher new [self] $filter_subject $stream $deliver_policy $meta_only $callback $ignore_deletes $updates_only $values_array]
+        return [nats::kv_watcher new [self] $filter_subject $deliver_policy $meta_only $callback $ignore_deletes $updates_only $values_array $idle_heartbeat]
     }
 
     method keys {} {
@@ -241,80 +242,69 @@ oo::class create ::nats::key_value {
 
 oo::class create ::nats::kv_watcher {
     # watcher options/vars
-    variable subID userCb initDone ignore_deletes updates_only gathering resultList valuesArray
+    variable SubID UserCb InitDone IgnoreDeletes UpdatesOnly Gathering ResultList ValuesArray Consumer
     # copied from the parent KV bucket, so that the user can destroy it while the watcher is living
-    variable conn bucket kv_write_prefix
+    variable Conn Bucket kv_write_prefix
     
-    constructor {kv filter_subject stream deliver_policy meta_only cb ignore_del upd_only arr} {
-        set initDone false  ;# becomes true after the current/historical data has been received
-        set gathering ""
-        set conn [set ${kv}::conn]
-        set bucket [set ${kv}::bucket]
-        set kv_write_prefix [set ${kv}::kv_write_prefix]
-        set userCb $cb
-        set ignore_deletes $ignore_del
-        set updates_only $upd_only  ;# TODO
-        set valuesArray $arr
-        set inbox [$conn inbox]
-        # ordered_consumer is a shorthand for several options - taken from nats.py
-        # ack_wait is 22h
-        # TODO sinmplify
-        set consumer_opts [dict create \
-                           -flow_control true \
-                           -ack_policy none \
-                           -max_deliver 1 \
-                           -ack_wait [expr {22*3600*1000}] \
-                           -idle_heartbeat 5000 \
-                           -num_replicas 1 \
-                           -mem_storage true \
-                           -deliver_policy $deliver_policy \
-                           -deliver_subject $inbox \
-                           -filter_subject $filter_subject \
-                           -headers_only $meta_only]
-        # create an ephemeral push consumer
-        set consumer_info [[set ${kv}::js] add_consumer $stream {*}$consumer_opts]
-        if {[dict get $consumer_info num_pending] == 0} {
-            after 0 [mymethod InitDone] ;# NB do not call it directly, because the user should be able to call e.g. "history" right after "watch"
+    constructor {kv filter_subject deliver_policy meta_only cb ignore_del upd_only arr idle_hb} {
+        set InitDone false  ;# becomes true after the current/historical data has been received
+        set Gathering ""
+        set kvNS [info object namespace $kv]
+        set Conn [set ${kvNS}::conn]
+        set Bucket [set ${kvNS}::bucket]
+        set stream [set ${kvNS}::stream]
+        set js [set ${kvNS}::js]
+        set kv_write_prefix [set ${kvNS}::kv_write_prefix]
+        set UserCb $cb
+        set IgnoreDeletes $ignore_del
+        set UpdatesOnly $upd_only  ;# TODO
+        if {$arr ne ""} {
+            upvar 2 $arr [self namespace]::ValuesArray
         }
-        set subID [$conn subscribe $inbox -callback [mymethod SubscriberCb] -dictmsg true -post false]
+
+        set consumerOpts [list -description "KV watcher" -headers_only $meta_only -deliver_policy $deliver_policy -filter_subject $filter_subject]
+        if {$idle_hb ne ""} {
+            lappend consumerOpts -idle_heartbeat $idle_hb
+        }
+        set Consumer [$js ordered_consumer $stream -callback [mymethod OnMsg] -post false {*}$consumerOpts]
+        if {[dict get [$Consumer info] num_pending] == 0} {
+            after 0 [mymethod InitStageDone] ;# NB do not call it directly, because the user should be able to call e.g. "history" right after "watch"
+        }
     }
     
     destructor {
-        $conn unsubscribe $subID ;# TODO: NATS CLI deletes the consumer too; nats.py doesn't
+        $Consumer destroy
     }
     
-    method InitDone {} {
-        set initDone true
-        if {$userCb ne ""} {
-            after 0 [list {*}$userCb ""]
+    method InitStageDone {} {
+        set InitDone true
+        if {$UserCb ne ""} {
+            after 0 [list {*}$UserCb ""]
         }
     }
     
-    method SubscriberCb {subj msg reply} {
+    method OnMsg {msg} {
         if {[nats::msg idle_heartbeat $msg]} {
             return  ;# not sure yet what to do with idle HBs
         }
         set meta [::nats::_metadata $msg]
         set delta [dict get $meta num_pending]
         set op [nats::header lookup $msg KV-Operation PUT] ;# note that normal PUT entries are delivered using MSG, so they can't have headers
-        if {$ignore_deletes} {
+        if {$IgnoreDeletes} {
             if {$op in {PURGE DEL}} {
-                if {$delta == 0 && !$initDone} {
-                    set initDone true
-                    if {$userCb ne ""} {
-                        after 0 [list {*}$userCb ""]
-                    }
+                if {$delta == 0 && !$InitDone} {
+                    my InitStageDone
                 }
                 return
             }
         }
         #set key [lindex [split $subj .] end] - this would be simple, but keys can have dots!
         set b [lindex [split $kv_write_prefix .] end]
-        regexp ".*$b\.(.*)" $subj -> key ;# TODO simplify
+        regexp ".*$b\.(.*)" [nats::msg subject $msg] -> key ;# TODO simplify
         #set key [string range $subj [string length $kv_write_prefix]+1 end]
         #puts "SUBJ: $subj kv_write_prefix: $kv_write_prefix KEY: $key" 
         set entry [dict create \
-            bucket $bucket \
+            bucket $Bucket \
             key $key \
             value [nats::msg data $msg] \
             revision [dict get $meta stream_seq] \
@@ -322,39 +312,39 @@ oo::class create ::nats::kv_watcher {
             delta $delta \
             operation $op]
         
-        switch -- $gathering {
+        switch -- $Gathering {
             keys {
-                lappend resultList $key
+                lappend ResultList $key
             }
             history {
-                lappend resultList $entry
+                lappend ResultList $entry
             }
             default {
-                if {$userCb ne ""} {
-                    after 0 [list {*}$userCb $entry]
+                if {$UserCb ne ""} {
+                    after 0 [list {*}$UserCb $entry]
                 }
-                if {$valuesArray ne ""} {
+                if {[info exists ValuesArray]} {
                     if {$op eq "PUT"} {
-                        set ${valuesArray}($key) [dict get $entry value]
+                        set ValuesArray($key) [dict get $entry value]
                     } else {
-                        unset ${valuesArray}($key)
+                        unset ValuesArray($key)
                     }
                 }
             }
         }
         
-        if {$delta == 0 && !$initDone} {
-            set initDone true
-            if {$userCb ne ""} {
-                after 0 [list {*}$userCb ""]
-            }
+        if {$delta == 0 && !$InitDone} {
+            my InitStageDone
         }
     }
     
     method Gather {what} {
-        set gathering $what ;# keys or history
-        set resultList [list]
-        nats::_coroVwait [self]::initDone
-        return $resultList
+        set Gathering $what ;# keys or history
+        set ResultList [list]
+        nats::_coroVwait [self]::InitDone
+        return $ResultList
+    }
+    method consumer {} {
+        return $Consumer
     }
 }

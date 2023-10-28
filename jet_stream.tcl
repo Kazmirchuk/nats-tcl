@@ -656,7 +656,7 @@ oo::class create ::nats::jet_stream {
 }
 # see ADR-15 and ADR-17
 oo::class create ::nats::ordered_consumer {
-    variable Conn Js Stream Config StreamSeq ConsumerSeq Name SubID UserCb Timer PostEvent RetryInterval
+    variable Conn Js Stream Config StreamSeq ConsumerSeq Name SubID UserCb Timer PostEvent RetryInterval ConsumerInfo
     # "public" variable
     variable last_error
     
@@ -700,11 +700,11 @@ oo::class create ::nats::ordered_consumer {
             my AsyncError $errCode "reset with opt_start_seq = $startSeq due to $errCode"
         }
         if {$errCode eq ""} {
-            set reply [$Js add_consumer $Stream {*}$Config] ;# let any error propagate to the caller
+            set ConsumerInfo [$Js add_consumer $Stream {*}$Config] ;# let any error propagate to the caller
         } else {
             # we are working in the background, so all errors must be reported via AsyncError
             try {
-                set reply [$Js add_consumer $Stream {*}$Config]
+                set ConsumerInfo [$Js add_consumer $Stream {*}$Config]
             } trap {NATS ErrStreamNotFound} {err opts} {
                 my AsyncError ErrStreamNotFound "stopped due to $err"
                 return ;# can't recover from this
@@ -721,11 +721,11 @@ oo::class create ::nats::ordered_consumer {
             }
         }
         
-        set Config [dict get $reply config]
-        set Name [dict get $reply name]
-        set StreamSeq [dict get $reply delivered stream_seq]
-        set ConsumerSeq [dict get $reply delivered consumer_seq]
-        set SubID [$Conn subscribe $inbox -dictmsg 1 -callback [mymethod OnMsg] -post false]
+        set Config [dict get $ConsumerInfo config]
+        set Name [dict get $ConsumerInfo name]
+        set StreamSeq [dict get $ConsumerInfo delivered stream_seq]
+        set ConsumerSeq [dict get $ConsumerInfo delivered consumer_seq]
+        set SubID [$Conn subscribe $inbox -dictmsg true -callback [mymethod OnMsg] -post false]
         my RestartHbTimer
         [info object namespace $Conn]::log::debug "Ordered consumer $Name subscribed to $Stream, stream_seq = $StreamSeq, filter = [dict get $Config filter_subject]"
     }
@@ -780,8 +780,8 @@ oo::class create ::nats::ordered_consumer {
         set Name ""
         my Reset ErrConsumerNotActive
     }
-    method config {} {
-        return $Config
+    method info {} {
+        return $ConsumerInfo
     }
     method name {} {
         return $Name

@@ -84,39 +84,48 @@ Returns all historical entries for the `key`. A NATS wildcard pattern can be use
 Returns all keys in the bucket. Throws `ErrKeyNotFound` if the bucket is empty.
 
 ### kv watch *key args*
-Starts watching the `key` (that can be a NATS wildcard) and returns a new `watcher` TclOO object. Destroy this object to stop watching.
+Starts watching the `key` (that can be a NATS wildcard) and returns a new object `nats::kv_watcher`. `destroy` this object to stop watching.
+
+[Ordered consumer](JsAPI.md#js-ordered_consumer-stream-args) is used under the hood.
 
 KV entries can be delivered to a callback or to an array (or both):
-- `-callback cmdPrefix` - deliver entries to this callback.
-- `-values_array varName` - deliver values to this array. `varName` must be a fully qualified name.
+- `-callback cmdPrefix` - deliver **entries** to this callback.
+- `-values_array varName` - deliver **values** to this array. `varName` must be a namespace or global array variable. Usual namespace resolution rules apply, like for `trace`.
 
-At least, one of `-callback` or `-values_array` must be provided.
+At least one of `-callback` or `-values_array` must be provided.
 
-You can further refine what is delivered using these options:
+You can refine what is delivered using these options:
 - `-include_history bool` - deliver historical entries as well (default false).
 - `-meta_only bool` - deliver entries without values (default false). E.g. to watch for available keys.
 - `-ignore_deletes bool` - do not deliver DELETE and PURGE entries (default false).
 - `-updates_only bool` - deliver only updates (default false).
+
+The underlying `nats::ordered_consumer` can be configured with these options:
+- `-idle_heartbeat ms`
 
 If you opt for the **callback** option, it will be invoked from the event loop with the following signature:
 
 **cmdPrefix** *entry*
 
 The callback is invoked in the following order, once for each entry:
-1. Historical entries for all matching keys (only with `-include_history=true`).
-1. Current entries for all matching keys (if `-updates_only=false`).
+1. Historical entries for all matching keys (only with `-include_history true`).
+1. Current entries for all matching keys (if `-updates_only false`).
 2. Then it is invoked once again with an empty `entry` to signal "end of current data".
 3. When a key is updated, it is invoked with a new entry.
 
 If you opt for the **array** option:
 1. Current keys and values from the bucket are inserted into this array.
-2. Afterwards, updates in KV are delivered as they happen.
+2. Afterwards, updates in the bucket are delivered as they happen.
 
-If a key is deleted or purged from the KV, and `-ignore_deletes=false`, the corresponding key will be removed from the array as well.
+If a key is deleted or purged from the bucket, and `-ignore_deletes false`, the corresponding key will be removed from the array as well.
 
 Thus, you effectively have a local cache of a whole KV bucket or its portion that is always up-to-date. Depending on your use case, this might be more efficient than querying the bucket with `[$kv get]`.
 
 The array can't be a local variable.
+
+The returned `kv_watcher` object has the following methods:
+- `consumer` - returns the internal `nats::ordered_consumer` object (for advanced use cases).
+- `destroy` - stops watching and destroys the object.
 
 ### kv destroy
 TclOO destructor. Remember to call it before destroying the parent `nats::jet_stream`.

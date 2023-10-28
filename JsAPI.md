@@ -245,7 +245,7 @@ Creates or updates a pull or push consumer defined on `stream`. See the [officia
 | -num_replicas | int | |
 | -mem_storage | boolean | |
 
-Note that starting from NATS 2.9.0, there is a new option `-name` that is not fully equivalent to `-durable_name`. If you provide `-durable_name`, the consumer's default `InactiveThreshold` is unlimited. But if you provide `-name`, the default `InactiveThreshold` is only 5s.<br/>
+Note that starting from NATS 2.9.0, there is a new option `-name` that is not the same as `-durable_name`. If you provide `-durable_name`, the consumer's default `InactiveThreshold` is unlimited. But if you provide `-name`, the default `InactiveThreshold` is only 5s.<br/>
 Returns a JetStream response as a dict.
 ### js add_pull_consumer *stream consumer ?args?*
 A shortcut for `add_consumer` to create a durable pull consumer. Rest of `args` are the same as above.
@@ -260,7 +260,34 @@ Returns consumer information as a dict.
 ### js consumer_names *stream*
 Returns a list of all consumers defined on this stream.
 ### js ordered_consumer *stream ?args?*
-Creates an ordered ephemeral push consumer
+Creates an [ordered](https://docs.nats.io/using-nats/developer/develop_jetstream/consumers#python) ephemeral push consumer on a `stream` and returns a new object `nats::ordered_consumer`.
+You can provide the following options that have the same meaning as in `add_consumer`:
+- `-description`
+- `-headers_only bool` default false
+- `-deliver_policy policy` default `all`
+- `-idle_heartbeat ms` default 5000
+- `-filter_subject subject`
+- `-callback cmdPrefix` (mandatory)
+
+Whenever a message arrives, the command prefix `cmdPrefix` will be invoked from the event loop. It must have the following signature:<br/>
+**cmdPrefix** *message*<br/>
+`message` is delivered as a dict to be used with the `nats::msg` ensemble. Since ordered consumers always have `-ack_policy none`, you don't need to `ack` the message.
+
+The returned object has the following methods:
+- `info` - returns the cached consumer info, same as `$js consumer_info`.
+- `name` - returns the auto-generated consumer name, like `QWGBg8xp`. It is a shortcut for `dict get [$consumer info] name`.
+- `destroy` - unsubscribes from messages and destroys the object. NATS server will delete the push consumer after InactiveThreshold=2s.
+
+The ordered consumer handles idle heartbeats and flow control, and guarantees to deliver messages in the order of `consumer_seq` with no gaps. If any problem happens e.g.:
+- the push consumer is deleted or lost due to NATS restart
+- the connection to NATS is lost and the client reconnects to another server in the cluster
+- a message is lost
+- no idle heartbeats arrive for longer than 3*idle_heartbeat ms
+
+the consumer object will reset and recreate the push consumer requesting messages starting from the last known message using the `-opt_start_seq` option. Such events are logged as warnings to the connection's logger and also signalled using the "public" variable `last_error` (see **Async Errors** below).
+
+Ordered consumers are explained in detail in [ADR-17](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-17.md).
+
 ### js stream_msg_get *stream* ?-last_by_subj *subj*? ?-next_by_subj *subj*? ?-seq *int*?
 'Direct Get' a message from stream `stream` by given `subject` or `sequence`. See also [ADR-31](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-31.md).
 ### js stream_msg_delete *stream* -seq *int* ?-no_erase *bool*?

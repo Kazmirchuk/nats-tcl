@@ -419,7 +419,7 @@ test jet_stream-9.2 "Ordered consumer - nominal case" -body {
     } elapsed
     assert {$elapsed < 500}
     assert {[llength $gotMsgs] == 3} 1
-    set myconfig [$cons config]
+    set myconfig [dict get [$cons info] config]
     set consumerConfig [dict get [$jet_stream consumer_info $stream_name [$cons name]] config]
     assert {[dict_in $myconfig $consumerConfig]}
     # publish a few messages *while* we have the consumer

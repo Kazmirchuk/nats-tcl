@@ -155,7 +155,8 @@ test key_value_watchers-watch-2 "Watch a wildcard" -body {
 }
 
 test key_value_watchers-watch-3 "Watch with an array" -body {
-    set watcher [$kv watch params.* -values_array ::vals]
+    array set vals {}
+    set watcher [$kv watch params.* -values_array vals]
     $kv put params.P1 VAL1
     $kv put params.P2 VAL2
     $kv put params.P3 VAL3

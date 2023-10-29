@@ -3,7 +3,8 @@
 
 All commands are defined in and exported from the `::nats` namespace.
 
-## Synopsis
+# Synopsis
+## Class `nats::connection`
 [nats::connection new ?*conn_name*? ?-logger *logger*? ?-log_chan *channel*? ?-log_level *level*?](#constructor-conn_name--logger-logger--log_chan-channel--log_level-level) <br/>
 [*objectName* cget *option*](#objectName-cget-option) <br/>
 [*objectName* configure *?option? ?value option value ...?*](#objectName-configure-option-value-option-value) <br/>
@@ -24,6 +25,7 @@ All commands are defined in and exported from the `::nats` namespace.
 [*objectName* jet_stream ?-timeout *ms*? ?-domain *domain*? ?-trace *bool*?](#objectname-jet_stream--timeout-ms--domain-domain--trace-bool) <br/>
 [*objectName* destroy](#objectName-destroy) <br/>
 
+## Ensembles
 [nats::msg](#natsmsg) <br/>
 [msg create *subject* ?-data *payload*? ?-reply *replyTo*?](#msg-create-subject--data-payload--reply-replysubj)<br/>
 [msg set *msgVariable option value*](#msg-set-msgvariable-option-value)<br/>
@@ -31,6 +33,8 @@ All commands are defined in and exported from the `::nats` namespace.
 [msg data *msgValue*](#msg-data-msgvalue)<br/>
 [msg reply *msgValue*](#msg-reply-msgvalue)<br/>
 [msg no_responders *msgValue*](#msg-no_responders-msgvalue)<br/>
+[msg idle_heartbeat *msgValue*](#msg-idle_heartbeat-msgvalue)<br/>
+[msg flow_control *msgValue*](#msg-flow_control-msgvalue)<br/>
 [msg seq *msgValue*](#msg-seq-msgvalue)<br/>
 [msg timestamp *msgValue*](#msg-timestamp-msgvalue)<br/>
 
@@ -43,10 +47,13 @@ All commands are defined in and exported from the `::nats` namespace.
 [header keys *msgValue ?globPattern?*](#header-keys-msgvalue-globpattern)<br/>
 [header lookup *msgValue key default*](#header-lookup-msgValue-key-default)<br/>
 
+## Namespace Commands
 [nats::timestamp](#natstimestamp)<br/>
 [nats::isotime_to_msec *isotime*](#natsisotime_to_msec-isotime)<br/>
-[nats::msec_to_isotime *msec ?tz?*](#natsmsec_to_isotime-msec-tz)
+[nats::msec_to_isotime *msec ?tz?*](#natsmsec_to_isotime-msec-tz)<br/>
+[nats::metadata *message*](#natsmetadata-message)
 
+# Description
 ## Event processing
 The client relies on a running event loop to send and deliver messages and uses only non-blocking sockets. Everything works in your Tcl interpreter and no background Tcl threads or interpreters are created under the hood. So, if your application might leave the event loop for a long time (e.g. a long computation without event processing), the NATS client should be created in a separate thread.
 
@@ -76,7 +83,7 @@ The connection object exposes 3 "public" read-only variables:
 
 You can set up traces on these variables to get notified e.g. when the connection status changes or NATS server enters `ldm` - lame duck mode. See the example below in the paragraph about asynchronous error handling.
 ## Options
-The **configure** method accepts the following options. Make sure to set them *before* calling **connect**.
+The `configure` method accepts the following options. Make sure to set them *before* calling `connect`.
 
 | Option        | Type   | Default | Comment |
 | ------------- |--------|---------|---------|
@@ -100,8 +107,8 @@ The **configure** method accepts the following options. Make sure to set them *b
 | -dictmsg | boolean | false | Return messages from `subscribe` and `request` as dicts by default |
 | -utf8_convert | boolean | false | By default, the client does not change a message body when it is sent or received. Setting this option to `true` will encode outgoing messages to UTF-8 and decode incoming messages from UTF-8. This option applies to the higher-level classes as well: `jet_stream` and `key_value`. |
 
-## Commands
-
+# Commands
+## `nats::connection`
 ### constructor ?*conn_name*? ?-logger *logger*? ?-log_chan *channel*? ?-log_level *level*?
 Creates a new instance of the TclOO object `nats::connection`. If you provide a connection name (recommended!), it is sent to NATS in the `CONNECT` message.<br/>
 The constructor also initializes the logging functionality. With no arguments, the default severity level is `warn` and destination is `stdout`. You can configure logging in 2 ways:
@@ -165,9 +172,9 @@ You can provide the following options:
 
 Depending if there's a callback, the method works in a sync or async manner.
 
-If no callback is given, the request is synchronous and blocks in a (coroutine-aware) `vwait` and then returns a reply. If `-max_msgs` is used, the returned value is a list of message dicts (note: if the timeout has fired, this list contains only the messages received so far). If no reply arrives within `timeout`, it raises the error `ErrTimeout`. When using NATS server version 2.2+, `ErrNoResponders` is raised if nobody is subscribed to `subject`.
+If no callback is given, the request is synchronous and blocks in a (coroutine-aware) `vwait` and then returns a reply. If `-max_msgs` is used, the returned value is a list of message dicts. If the timeout has fired, this list contains only the messages received so far. If no reply arrives within `timeout`, it raises the error `ErrTimeout`. When using NATS server version 2.2+, `ErrNoResponders` is raised if nobody is subscribed to `subject`.
 
-If a callback is given, the call returns immediately. Return value is a unique ID that can be used to cancel the request. When a reply is received or a timeout fires, the callback will be invoked from the event loop. It must have the following signature:<br/>
+If a callback is given, the call returns immediately. The return value is a unique ID that can be used to cancel the request. When a reply is received or a timeout fires, the callback will be invoked from the event loop. It must have the following signature:<br/>
 **asyncRequestCallback** *timedOut reply*<br/>
 `timedOut` is `true`, if the request timed out or no responders are available. In the latter case, the no-responders message is passed to the callback in `reply`.<br/>
 `reply` is the received message. If `-max_msgs`>1, the callback is invoked for each message. If the timeout fires before `-max_msgs` are received, the callback is invoked one last time with `timedOut=true`.
@@ -205,7 +212,7 @@ Remember to destroy this object when it is no longer needed - there's no built-i
 ### objectName destroy
 TclOO destructor. It calls `disconnect` and then destroys the object.
 
-## nats::msg
+## Ensemble `nats::msg`
 This ensemble encapsulates all commands to work with a NATS message. Accessing it as a dict is deprecated. 
 ### msg create *subject* ?-data *payload*? ?-reply *replySubj*?
 Returns a new message with the specified subject, payload and reply subject.
@@ -220,12 +227,14 @@ Returns the message reply-to subject.
 ### msg no_responders *msgValue*
 Returns true if this is a no-responders message (status 503).
 ### msg idle_heartbeat *msgValue*
-Returns true if this is an idle heartbeat (status 100).
+Returns true if this is an idle heartbeat.
+### msg flow_control *msgValue*
+Returns true if this is a flow control message.
 ### msg seq *msgValue*
 Returns the message sequence number (only for messages returned by `stream_msg_get`).
 ### msg timestamp *msgValue*
 Returns the message timestamp in the ISO format, e.g. 2022-11-22T13:31:35.4514983Z (only for messages returned by `stream_msg_get`).
-## nats::header
+## Ensemble `nats::header`
 This ensemble encapsulates all commands to work with message headers. Accessing them as a dict is deprecated. 
 ### header add *msgVariable key value*
 Appends a new value to the `key` header in the message. If this header does not exist yet, it is created.
@@ -241,14 +250,25 @@ Returns the first value of the `key` header. This is a convenient shortcut for t
 Returns a list of all header keys in the message. With `globPattern`, only matching keys are returned (like in `dict keys`)
 ### header lookup *msgValue key default*
 Same as [header get](#header-get-msgvalue-key), but returns a default value if the key does not exist.
+## Namespace Commands
 ### nats::timestamp
 Returns current local time in the ISO 8601 format, including milliseconds. Useful for logging.
 ### nats::isotime_to_msec *isotime*
 Converts an ISO timestamp (as used by the NATS wire format, e.g. 2022-11-22T13:31:35.4514983Z) to integer milliseconds since the epoch (note possible rounding of fractional seconds).
 ### nats::msec_to_isotime *msec ?tz?*
 Converts integer milliseconds to an ISO timestamp in the given timezone (default UTC). The local time zone can be specified as `:localtime` (see the [Tcl reference](https://www.tcl.tk/man/tcl8.6/TclCmd/clock.html#M78)). Note that the time zone designator is not included in the returned string.
+### nats::metadata *message*
+Specific to [JetStream](#JsApi.md). Returns a dict with metadata of the message that is extracted from the reply-to field. The dict has these fields:
+- stream
+- consumer
+- num_delivered
+- stream_seq
+- consumer_seq
+- timestamp (ms)
+- num_pending
 
-## Error handling
+Note that when a message is received using `stream_msg_get`, this metadata is not available. Instead, you can get the stream sequence number and the timestamp using the `nats::msg` ensemble.
+# Error handling
 Error codes are similar to those from the nats.go client as much as possible. A few additional error codes provide more information about failed connection attempts to the NATS server: ErrBrokenSocket, ErrTLS, ErrConnectionRefused.
 
 All synchronous errors are raised using `throw {NATS <error_code>} human-readable message`, so you can handle them using try&trap, for example: 
@@ -304,7 +324,7 @@ puts "Error text: [dict get $err errorMessage]"
 | ErrAccountAuthExpired | NATS server account authorization has expired| yes |
 | ErrProtocol | Received an invalid protocol token | yes |
 
-## Connection status and the reconnection process
+# Connection status and the reconnection process
 You can check the connection status as follows:
 ```Tcl
 if {[$conn cget status] eq $nats::status_closed} {
@@ -328,7 +348,7 @@ Official NATS clients have a few more statuses:
   - `unsubscribe -max_msgs` + `ping` and wait until the subscription callback is no longer invoked
   - or use JetStream
 
-## Encrypted TLS connections
+# Encrypted TLS connections
 NATS can be [configured](https://docs.nats.io/running-a-nats-service/configuration/securing_nats/tls) to encrypt connections using TLS. Note that according to the NATS protocol, the handshake always starts with plain TCP. If the [INFO](https://docs.nats.io/reference/reference-protocols/nats-protocol#info) message from NATS contains `tls_required=true`, then the client upgrades the connection to TLS before sending the `CONNECT` message.
 
 You can configure the client to require a TLS connection in two ways:

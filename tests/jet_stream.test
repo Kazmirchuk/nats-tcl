@@ -103,7 +103,7 @@ test jet_stream-2.2 "Pull a message and ack" -body {
     assert {[llength $msgList] == 1} 1
     set msg [lindex $msgList 0]
     assert {[nats::msg subject $msg] eq "test.1"} 1
-    set metadata [$jet_stream metadata $msg]
+    set metadata [nats::metadata $msg]
     assert {[dict get $metadata num_delivered] == 2} 1
     assert {[dict get $metadata num_pending] == 0} 1
     $jet_stream ack_sync $msg
@@ -136,7 +136,7 @@ test jet_stream-2.5 "Send nack with delay" -body {
     } elapsed
     assert {[approx $elapsed 2000]}
     assert {[nats::msg data $msg] eq "msg 2"} 1
-    dict get [$jet_stream metadata $msg] num_delivered
+    dict get [nats::metadata $msg] num_delivered
 } -result 2
 
 test jet_stream-2.6 "Send term" -body {
@@ -554,7 +554,7 @@ test jet_stream-14 "Ordered consumer - reset - stream deleted" -body {
 } -cleanup {
     $cons destroy
 }
-
+# TODO connection lost+quick reconnect without push consumer lost
 $jet_stream destroy
 $conn destroy
 stopNats NATS

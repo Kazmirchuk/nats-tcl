@@ -1,9 +1,9 @@
 # Key-Value API
 
-Key-Value functionality of NATS can be accessed by creating the `nats::key_value` TclOO object. Do not create it directly - instead, call the [bind_kv_bucket](JsAPI.md#js-bind_kv_bucket-bucket) or [create_kv_bucket](JsAPI.md#js-create_kv_bucket-bucket--option-value) method of your `nats::jet_stream`. Please refer to the [official documentation](https://docs.nats.io/nats-concepts/jetstream/key-value-store) for the description of general concepts.
+Key-Value functionality of NATS can be accessed by creating the `nats::key_value` TclOO object. Do not create it directly - instead, call the [bind_kv_bucket](JsAPI.md#js-bind_kv_bucket-bucket) or [create_kv_bucket](JsAPI.md#js-create_kv_bucket-bucket--option-value) method of your `nats::jet_stream`. Please refer to the [official documentation](https://docs.nats.io/nats-concepts/jetstream/key-value-store) for the description of general concepts and to [ADR-8](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-8.md) for implementation details.
 
-## Synopsis
-
+# Synopsis
+## Class `nats::key_value`
 [*kv* get *key* ?-revision *int*?](#kv-get-key--revision-int)<br/>
 [*kv* get_value *key* ?-revision *int*?](#kv-get_value-key--revision-int)<br/>
 [*kv* put *key value*](#kv-put-key-value)<br/>
@@ -17,8 +17,11 @@ Key-Value functionality of NATS can be accessed by creating the `nats::key_value
 [*kv* keys](#kv-keys)<br/>
 [*kv* watch *key args*](#kv-watch-key-args)<br/>
 [*kv* destroy](#kv-destroy)<br/>
+## Class `nats::kv_watcher`
+[*watcher* consumer](#watcher-consumer)<br/>
+[*watcher* destroy](#watcher-destroy)<br/>
 
-## Description
+# Description
 The `key_value` object provides access to a specific KV bucket. A bucket is merely a JS `stream` that has some default options, and its name always starts with "KV_". And a key is, in fact, a (portion of) a subject that this stream listens to. Therefore, all KV operations are implemented in terms of standard JetStream operations such as  `publish`, `stream_msg_get` etc. They all block in a (coroutine-aware) `vwait` with the same timeout as in the parent `jet_stream`.
 
 [NATS by Example](https://natsbyexample.com/examples/kv/intro/go) provides a good overview of how KV buckets work on top of streams.
@@ -34,7 +37,7 @@ A KV entry is a dict with the following fields:
 - `value` - a value or an empty string if it is a DEL or PURGE entry
 - `revision` - revision number, starting with 1 (`seq` of the message in the underlying stream)
 - `created` - creation timestamp as milliseconds since the epoch
-- `delta`
+- `delta` - distance from the latest revision, starting with 0
 - `operation` - one of `PUT`, `DEL` or `PURGE`
 
 ## Bucket status
@@ -49,7 +52,8 @@ A bucket status is a dict with the following fields:
 - `stream_config` - configuration of the backing stream
 - `stream_state` - state of the backing stream
 
-## Commands
+# Commands
+## `nats::key_value`
 ### kv get *key* ?-revision *int*?
 Returns the latest entry for the `key` or the entry with the specified `revision`. Throws `ErrKeyNotFound` if the key doesn't exist or was deleted.
 
@@ -84,7 +88,9 @@ Returns all historical entries for the `key`. A NATS wildcard pattern can be use
 Returns all keys in the bucket. Throws `ErrKeyNotFound` if the bucket is empty.
 
 ### kv watch *key args*
-Starts watching the `key` (that can be a NATS wildcard) and returns a new object `nats::kv_watcher`. `destroy` this object to stop watching.
+Starts watching the `key` (that can be a NATS wildcard) and returns a new object [nats::kv_watcher](#natskv_watcher). To watch the whole bucket, use:
+
+```kv watch >```
 
 [Ordered consumer](JsAPI.md#js-ordered_consumer-stream-args) is used under the hood.
 
@@ -110,25 +116,25 @@ If you opt for the **callback** option, it will be invoked from the event loop w
 The callback is invoked in the following order, once for each entry:
 1. Historical entries for all matching keys (only with `-include_history true`).
 1. Current entries for all matching keys (if `-updates_only false`).
-2. Then it is invoked once again with an empty `entry` to signal "end of current data".
+2. Then it is invoked once again with an empty `entry` to signal "end of current data" (even if `-updates_only true`).
 3. When a key is updated, it is invoked with a new entry.
 
 If you opt for the **array** option:
 1. Current keys and values from the bucket are inserted into this array.
 2. Afterwards, updates in the bucket are delivered as they happen.
-
-If a key is deleted or purged from the bucket, and `-ignore_deletes false`, the corresponding key will be removed from the array as well.
+3. If a key is deleted or purged from the bucket, and `-ignore_deletes false`, the corresponding key will be removed from the array as well.
 
 Thus, you effectively have a local cache of a whole KV bucket or its portion that is always up-to-date. Depending on your use case, this might be more efficient than querying the bucket with `[$kv get]`.
 
 The array can't be a local variable.
 
-The returned `kv_watcher` object has the following methods:
-- `consumer` - returns the internal `nats::ordered_consumer` object (for advanced use cases).
-- `destroy` - stops watching and destroys the object.
-
 ### kv destroy
 TclOO destructor. Remember to call it before destroying the parent `nats::jet_stream`.
 
-## Error handling
+## `nats::kv_watcher`
+### watcher consumer
+Returns the internal `nats::ordered_consumer` object (for advanced use cases). 
+### watcher destroy
+Stops watching and destroys the object.
+# Error handling
 KV-specific errors are listed in JsAPI.md

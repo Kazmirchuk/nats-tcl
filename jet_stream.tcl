@@ -167,11 +167,14 @@ oo::class create ::nats::jet_stream {
         return [dict get $response success]
     }
 
-    # equivalent to "fetch" in other NATS clients
+    # for backwards compatibility; do not confuse with the new "consume" algorithm from JetStream client API 2.0
+    method consume {args} {
+        return [my fetch {*}$args]
+    }
     # Pull Subscribe internals https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-13.md
     # JetStream Subscribe Workflow https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-15.md
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_getnext_request
-    method consume {stream consumer args} {
+    method fetch {stream consumer args} {
         if {![my CheckFilenameSafe $stream]} {
             throw {NATS ErrInvalidArg} "Invalid stream name $stream"
         }
@@ -232,11 +235,6 @@ oo::class create ::nats::jet_stream {
     
     method cancel_pull_request {reqID} {
         $reqID destroy
-    }
-    
-    method metadata {msg} {
-        # conceptually part of the jet_stream class, but it doesn't use any JS variables
-        return [nats::_metadata $msg]
     }
     
     # different types of ACKs: https://docs.nats.io/using-nats/developer/develop_jetstream/consumers#delivery-reliability
@@ -760,7 +758,7 @@ oo::class create ::nats::ordered_consumer {
             $Js ack $msg
             return
         }
-        set meta [$Js metadata $msg]
+        set meta [nats::metadata $msg]
         set cseq [dict get $meta consumer_seq]
         if {$cseq != $ConsumerSeq + 1} {
             my ScheduleReset ErrConsumerSequenceMismatch
@@ -771,7 +769,7 @@ oo::class create ::nats::ordered_consumer {
         if {$PostEvent} {
             after 0 [list {*}$UserCb $msg]
         } else {
-            {*}$UserCb $msg  ;# only for KV watcher with -values_array
+            {*}$UserCb $msg  ;# only for KV watchers
         }
     }
     method OnMissingHb {} {
@@ -974,7 +972,7 @@ proc ::nats::_ns2ms {dict_name args} {
 # V1: $JS.ACK.<stream>.<consumer>.<delivered>.<sseq>.<cseq>.<time>.<pending>
 # V2: $JS.ACK.<domain>.<account hash>.<stream>.<consumer>.<delivered>.<sseq>.<cseq>.<time>.<pending>.<random token>
 # NB! I've got confirmation in Slack that as of Feb 2023, V2 metadata is not implemented yet in NATS
-proc ::nats::_metadata {msg} {
+proc ::nats::metadata {msg} {
     set mlist [split [dict get $msg reply] .]
     set mdict [dict create \
             stream [lindex $mlist 2] \

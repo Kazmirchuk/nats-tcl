@@ -2,17 +2,16 @@
 
 JetStream functionality of NATS can be accessed by creating the `nats::jet_stream` TclOO object. Do not create it directly - instead, call the [jet_stream](CoreAPI.md#objectname-jet_stream--timeout-ms--domain-domain) method of your `nats::connection`. You can have multiple JS objects created from the same connection, each having its own timeout and domain.
 
-## Synopsis
-
+# Synopsis
+## Class `nats::jet_stream`
 [*js* publish *subject message ?args?*](#js-publish-subject-message-args)<br/>
 [*js* publish_msg *message ?args?*](#js-publish_msg-message-args)<br/>
-[*js* consume *stream consumer ?args?*](#js-consume-stream-consumer-args)<br/>
+[*js* fetch *stream consumer ?args?*](#js-fetch-stream-consumer-args)<br/>
 [*js* ack *message*](#js-ack-message)<br/>
 [*js* ack_sync *message*](#js-ack_sync-message)<br/>
 [*js* nak *message* ?-delay *ms*?](#js-nak-message--delay-ms)<br/>
 [*js* in_progress *message*](#js-in_progress-message)<br/>
 [*js* term *message*](#js-term-message)<br/>
-[*js* metadata *message*](#js-metadata-message)<br/>
 [*js* cancel_pull_request *reqID*](#js-cancel_pull_request-reqID)<br/>
 
 [*js* add_stream *stream* ?-option *value*?..](#js-add_stream-stream--option-value)<br/>
@@ -42,7 +41,12 @@ JetStream functionality of NATS can be accessed by creating the `nats::jet_strea
 
 [*js* destroy](#js-destroy)<br/>
 
-## Description
+## Class `nats::ordered_consumer`
+[*consumer* info](#consumer-info)<br/>
+[*consumer* name](#consumer-name)<br/>
+[*consumer* destroy](#consumer-destroy)<br/>
+
+# Description
 The [Core NATS](CoreAPI.md) pub/sub functionality offers the at-most-once delivery guarantee based on TCP. This is sufficient for many applications, where an individual message doesn't have much value. In case of a transient network disconnection, a subscriber simply waits until the connection is restored and a new message is delivered. 
 
 In some applications, however, each message has a real business value and must not be lost in transit. These applications should use [JetStream](https://docs.nats.io/nats-concepts/jetstream) that offers at-least-once and exactly-once delivery guarantees despite network disruptions or software crashes. Also, JetStream provides temporal decoupling of publishers and subscribers (consumers), i.e. each published message is persisted on disk and delivered to a consumer when it is ready.
@@ -97,7 +101,8 @@ This approach has 2 benefits:
 
 You can find an example in [js_mgmt.tcl](examples/js_mgmt.tcl).
 
-## Commands
+# Commands
+## `nats::jet_stream`
 ### js publish *subject message ?args?*
 Publishes `message` (payload) to a [stream](https://docs.nats.io/jetstream/concepts/streams) on the specified `subject` and returns an acknowledgement (`pubAck`) from the NATS server. The method uses [request](CoreAPI.md#objectName-request-subject-message-args) under the hood.
 
@@ -126,7 +131,7 @@ If a callback is given, the call returns immediately. When a reply from JetStrea
 Note that you can publish messages to a stream using [nats::connection publish](CoreAPI.md#objectname-publish-subject-message--reply-replyto) as well. But in this case you have no confirmation that the message has reached the NATS server, so it misses the whole point of using JetStream.
 ### js publish_msg *message ?args?*
 Publishes `message` (created with [nats::msg create](CoreAPI.md#msg-create-subject--data-payload--reply-replysubj)) to a stream. Other options are the same as above. Use this method to publish a message with headers.
-### js consume *stream consumer ?args?*
+### js fetch *stream consumer ?args?*
 Consumes a number of messages from a [pull consumer](https://docs.nats.io/jetstream/concepts/consumers) defined on a [stream](https://docs.nats.io/jetstream/concepts/streams). This is the analogue of `PullSubscribe` + `fetch` in official NATS clients.
 
 You can provide the following options:
@@ -136,7 +141,7 @@ You can provide the following options:
 
 The underlying JetStream API is rather intricate, so I recommend reading [ARD-13](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-13.md) for better understanding.
 
-Pulled messages are always returned as Tcl dicts irrespectively of the `-dictmsg` option.
+Pulled messages are always returned as Tcl dicts irrespectively of the `-dictmsg` option. They contain metadata that can be accessed using [nats::metadata](CoreAPI.md#natsmetadata-message).
 
 If `-timeout` is omitted, the client sends a `no_wait` request, asking NATS to deliver only currently pending messages. If there are no pending messages, the method returns an empty list.
 
@@ -158,6 +163,8 @@ The client handles status messages 404, 408 and 409 transparently. You can see t
 
 Depending on the consumer's [AckPolicy](https://docs.nats.io/nats-concepts/jetstream/consumers#ackpolicy), you might need to acknowledge the received messages with one of the methods below. [This](https://docs.nats.io/using-nats/developer/develop_jetstream/consumers#delivery-reliability) official doc explains all different kinds of ACKs.
 
+**NB!** This method used to be called `consume`. However, [JetStream Client API V2](https://nats.io/blog/preview-release-new-jetstream-client-api/) has introduced a new way for continuously fetching messages using a self-refilling buffer, called "consume". This method is not supported yet by this library. So, to avoid confusion for new users of the library, `consume` is now deprecated, and new Tcl code should use `fetch`.
+
 ### js ack *message*
 Sends a positive ACK to NATS. This method is implemented using [publish](CoreAPI.md#objectname-publish-subject-message--reply-replyto) and returns immediately. Using `ack_sync` is more reliable.
 ### js ack_sync *message*
@@ -168,17 +175,6 @@ Negatively acknowledges a message. This tells the server to redeliver the messag
 Sends "work in progress" ACK to NATS and resets the redelivery timer on the server
 ### js term *message*
 Sends "terminate" ACK to NATS. The message will not be redelivered.
-### js metadata *message*
-Returns a dict with metadata of the message that is extracted from the reply-to field. The dict has these fields:
-- stream
-- consumer
-- num_delivered
-- stream_seq
-- consumer_seq
-- timestamp (ms)
-- num_pending
-
-Note that when a message is received using `stream_msg_get`, this metadata is not available. Instead, you can get the stream sequence number and the timestamp using the `nats::msg` ensemble.
 ### js cancel_pull_request *reqID*
 Cancels the asynchronous pull request with the given `reqID`.
 ### js add_stream *stream* ?-option *value*?..
@@ -260,7 +256,7 @@ Returns consumer information as a dict.
 ### js consumer_names *stream*
 Returns a list of all consumers defined on this stream.
 ### js ordered_consumer *stream ?args?*
-Creates an [ordered](https://docs.nats.io/using-nats/developer/develop_jetstream/consumers#python) ephemeral push consumer on a `stream` and returns a new object `nats::ordered_consumer`.
+Creates an [ordered](https://docs.nats.io/using-nats/developer/develop_jetstream/consumers#python) ephemeral push consumer on a `stream` and returns a new object [nats::ordered_consumer](#natsordered_consumer).
 You can provide the following options that have the same meaning as in `add_consumer`:
 - `-description`
 - `-headers_only bool` default false
@@ -272,21 +268,6 @@ You can provide the following options that have the same meaning as in `add_cons
 Whenever a message arrives, the command prefix `cmdPrefix` will be invoked from the event loop. It must have the following signature:<br/>
 **cmdPrefix** *message*<br/>
 `message` is delivered as a dict to be used with the `nats::msg` ensemble. Since ordered consumers always have `-ack_policy none`, you don't need to `ack` the message.
-
-The returned object has the following methods:
-- `info` - returns the cached consumer info, same as `$js consumer_info`.
-- `name` - returns the auto-generated consumer name, like `QWGBg8xp`. It is a shortcut for `dict get [$consumer info] name`.
-- `destroy` - unsubscribes from messages and destroys the object. NATS server will delete the push consumer after InactiveThreshold=2s.
-
-The ordered consumer handles idle heartbeats and flow control, and guarantees to deliver messages in the order of `consumer_seq` with no gaps. If any problem happens e.g.:
-- the push consumer is deleted or lost due to NATS restart
-- the connection to NATS is lost and the client reconnects to another server in the cluster
-- a message is lost
-- no idle heartbeats arrive for longer than 3*idle_heartbeat ms
-
-the consumer object will reset and recreate the push consumer requesting messages starting from the last known message using the `-opt_start_seq` option. Such events are logged as warnings to the connection's logger and also signalled using the "public" variable `last_error` (see **Async Errors** below).
-
-Ordered consumers are explained in detail in [ADR-17](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-17.md).
 
 ### js stream_msg_get *stream* ?-last_by_subj *subj*? ?-next_by_subj *subj*? ?-seq *int*?
 'Direct Get' a message from stream `stream` by given `subject` or `sequence`. See also [ADR-31](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-31.md).
@@ -319,8 +300,39 @@ Returns a list of all Key-Value buckets.
 Deletes all entries and history from the bucket without destroying the bucket itself. Note that it does **not** reset the bucket's revision counter.
 ### js destroy
 TclOO destructor. Remember to call it before destroying the parent `nats::connection`.
+## `nats::ordered_consumer`
+Implements Ordered Consumer. Do not create it directly - instead, call the [ordered_consumer](JsAPI.md#js-ordered_consumer-stream-args) method of your `nats::jet_stream`.
 
-## Error handling
+The ordered consumer handles idle heartbeats and flow control, and guarantees to deliver messages in the order of `consumer_seq` with no gaps. If any problem happens e.g.:
+- the push consumer is deleted or lost due to NATS restart
+- the connection to NATS is lost and the client reconnects to another server in the cluster
+- a message is lost
+- no idle heartbeats arrive for longer than 3*idle_heartbeat ms
+
+the consumer object will reset and recreate the push consumer requesting messages starting from the last known message using the `-opt_start_seq` option. Such events are logged as warnings to the connection's logger and also signalled using the "public" variable `last_error`.
+
+Ordered consumers are explained in detail in [ADR-17](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-17.md).
+
+### Error handling
+`nats::ordered_consumer` reports asynchronous errors via `last_error` member variable, just like `nats::connection`:
+
+| Async Errors | Reason | Retry |
+| ------------- |--------|------|
+| ErrConsumerNotActive | Consumer received no heartbeats|yes|
+| ErrConsumerSequenceMismatch | Consumer received a message with unexpected `consumer_seq`|yes|
+|ErrTimeout| Request to recreate the push consumer timed out|yes|
+| ErrStreamNotFound | The stream was deleted |no|
+| ErrConnectionClosed| Connection to NATS was closed or lost |no|
+
+Most errors are considered transient and lead to the consumer reset, starting from the last known message. It happens automatically in background. However, it is not possible to recover from `ErrStreamNotFound` and `ErrConnectionClosed`, so in case of these errors the consumer will stop.
+### consumer info
+Returns the cached consumer info, same as `$js consumer_info`.
+### consumer name
+Returns the auto-generated consumer name, like `QWGBg8xp`. It is a shortcut for `dict get [$consumer info] name`. While consumer reset is in progress, `name` is an empty string.
+### consumer destroy
+Unsubscribes from messages and destroys the object. NATS server will delete the push consumer after InactiveThreshold=2s.
+
+# Error handling in JetStream and Key/Value Store
 In addition to all [core NATS errors](CoreAPI.md#error-handling), the `jet_stream` and `key_value` classes may throw these errors:
 
 | Error     | JS Error Code | Reason   | 
@@ -335,9 +347,3 @@ In addition to all [core NATS errors](CoreAPI.md#error-handling), the `jet_strea
 | ErrJSResponse | | Other JetStream error. `code` and `err_code` is passed in the Tcl error code and `description` is used for the error message. |
  
  See also "Error Response" in [ADR-1](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-1.md#error-response).
-
-| Async Errors | Signalled via | Reason  | 
-| ------------- |------|--------|
-| ErrConsumerNotActive | `$last_error` | Ordered consumer received no heartbeats, and it will be restarted |
-| ErrConsumerSequenceMismatch | `$last_error` | Ordered consumer received a message with unexpected `consumer_seq`, and it will be restarted |
-

@@ -79,7 +79,7 @@ oo::class create ::nats::key_value {
         } trap {NATS ErrStreamNotFound} err {
             throw {NATS ErrBucketNotFound} "Bucket $bucket not found"
         }
-        
+        # TODO delta
         set entry [dict create \
             bucket $bucket \
             key $key \
@@ -173,21 +173,33 @@ oo::class create ::nats::key_value {
                   ignore_deletes  bool false
                   updates_only    bool false
                   values_array    str  ""
-                  idle_heartbeat  str  ""}
+                  idle_heartbeat  str  null}
         
         nats::_parse_args $args $spec
+        if {$include_history && $updates_only} {
+            throw {NATS ErrInvalidArg} "-include_history conflicts with -updates_only"
+        }
         set deliver_policy [expr {$include_history ? "all" : "last_per_subject"}]
+        if {$updates_only} {
+            set deliver_policy "new"
+        }
+        
         # TODO why use $kv_write_prefix here? filter_subject = "$kv_write_prefix.$key_pattern" ??
         set filter_subject "\$KV.$bucket.$key_pattern"
         if {$mirrored_bucket ne ""} {
             set filter_subject "\$KV.$mirrored_bucket.$key_pattern"
         }
-        return [nats::kv_watcher new [self] $filter_subject $deliver_policy $meta_only $callback $ignore_deletes $updates_only $values_array $idle_heartbeat]
+        set consumerOpts [list -description "KV watcher" -headers_only $meta_only -deliver_policy $deliver_policy -filter_subject $filter_subject]
+        if [info exists idle_heartbeat] {
+            lappend consumerOpts -idle_heartbeat $idle_heartbeat
+        }
+        return [nats::kv_watcher new [self] $consumerOpts $callback $ignore_deletes $values_array]
     }
 
     method keys {} {
         set w [my watch > -ignore_deletes 1 -meta_only 1]
-        set result [${w}::my Gather keys]
+        set ns [info object namespace $w]
+        set result [${ns}::my Gather keys]
         $w destroy
         if {[llength $result] == 0} {
             throw {NATS ErrKeyNotFound} "No keys found in bucket $bucket"  ;# nats.go raises ErrNoKeysFound instead
@@ -197,7 +209,8 @@ oo::class create ::nats::key_value {
     
     method history {key} {
         set w [my watch $key -include_history 1]
-        set result [${w}::my Gather history]
+        set ns [info object namespace $w]
+        set result [${ns}::my Gather history]
         $w destroy
         if {[llength $result] == 0} {
             throw {NATS ErrKeyNotFound} "Key $key not found in bucket $bucket"
@@ -242,11 +255,11 @@ oo::class create ::nats::key_value {
 
 oo::class create ::nats::kv_watcher {
     # watcher options/vars
-    variable SubID UserCb InitDone IgnoreDeletes UpdatesOnly Gathering ResultList ValuesArray Consumer
+    variable SubID UserCb InitDone IgnoreDeletes Gathering ResultList ValuesArray Consumer
     # copied from the parent KV bucket, so that the user can destroy it while the watcher is living
     variable Conn Bucket kv_write_prefix
     
-    constructor {kv filter_subject deliver_policy meta_only cb ignore_del upd_only arr idle_hb} {
+    constructor {kv consumer_opts cb ignore_del arr} {
         set InitDone false  ;# becomes true after the current/historical data has been received
         set Gathering ""
         set kvNS [info object namespace $kv]
@@ -257,16 +270,10 @@ oo::class create ::nats::kv_watcher {
         set kv_write_prefix [set ${kvNS}::kv_write_prefix]
         set UserCb $cb
         set IgnoreDeletes $ignore_del
-        set UpdatesOnly $upd_only  ;# TODO
         if {$arr ne ""} {
             upvar 2 $arr [self namespace]::ValuesArray
         }
-
-        set consumerOpts [list -description "KV watcher" -headers_only $meta_only -deliver_policy $deliver_policy -filter_subject $filter_subject]
-        if {$idle_hb ne ""} {
-            lappend consumerOpts -idle_heartbeat $idle_hb
-        }
-        set Consumer [$js ordered_consumer $stream -callback [mymethod OnMsg] -post false {*}$consumerOpts]
+        set Consumer [$js ordered_consumer $stream -callback [mymethod OnMsg] -post false {*}$consumer_opts]
         if {[dict get [$Consumer info] num_pending] == 0} {
             after 0 [mymethod InitStageDone] ;# NB do not call it directly, because the user should be able to call e.g. "history" right after "watch"
         }
@@ -284,10 +291,7 @@ oo::class create ::nats::kv_watcher {
     }
     
     method OnMsg {msg} {
-        if {[nats::msg idle_heartbeat $msg]} {
-            return  ;# not sure yet what to do with idle HBs
-        }
-        set meta [::nats::_metadata $msg]
+        set meta [::nats::metadata $msg]
         set delta [dict get $meta num_pending]
         set op [nats::header lookup $msg KV-Operation PUT] ;# note that normal PUT entries are delivered using MSG, so they can't have headers
         if {$IgnoreDeletes} {
@@ -302,7 +306,8 @@ oo::class create ::nats::kv_watcher {
         set b [lindex [split $kv_write_prefix .] end]
         regexp ".*$b\.(.*)" [nats::msg subject $msg] -> key ;# TODO simplify
         #set key [string range $subj [string length $kv_write_prefix]+1 end]
-        #puts "SUBJ: $subj kv_write_prefix: $kv_write_prefix KEY: $key" 
+        #puts "SUBJ: $subj kv_write_prefix: $kv_write_prefix KEY: $key"
+        # TODO delta
         set entry [dict create \
             bucket $Bucket \
             key $key \
@@ -341,7 +346,7 @@ oo::class create ::nats::kv_watcher {
     method Gather {what} {
         set Gathering $what ;# keys or history
         set ResultList [list]
-        nats::_coroVwait [self]::InitDone
+        nats::_coroVwait [self]::InitDone ;# TODO handle if the ordered consumer stops
         return $ResultList
     }
     method consumer {} {

@@ -95,12 +95,17 @@ test key_value_watchers-keys-2 "Get all keys" -setup {
     lsort [$kv keys]
 } -result {key2 key3}
 
-set watcherCallback [lambda {entry} {
+proc watcherCallback {entry} {
     lappend ::allEntries $entry
-}]
+}
+
+proc watcherCleanup {} {
+    $::watcher destroy
+    set ::allEntries [list]
+}
 
 test key_value_watchers-watch-1 "Watch one key" -body {
-    set watcher [$kv watch key2 -callback $watcherCallback]
+    set watcher [$kv watch key2 -callback watcherCallback]
     # make sure we flush the SUB before calling [$kv put]
     # otherwise the test sometimes fails on Linux, because the 2nd and 3rd callbacks swap places
     wait_flush $conn
@@ -125,13 +130,10 @@ test key_value_watchers-watch-1 "Watch one key" -body {
                       key key2 \
                       value {} \
                       operation DEL] [lindex $allEntries 3]]}
-} -cleanup {
-    $watcher destroy
-    set allEntries [list]
-}
+} -cleanup watcherCleanup
 
 test key_value_watchers-watch-2 "Watch a wildcard" -body {
-    set watcher [$kv watch keys.* -callback $watcherCallback -ignore_deletes true]
+    set watcher [$kv watch keys.* -callback watcherCallback -ignore_deletes true]
     $kv put keys.1 value1
     $kv delete keys.1
     $kv put keys.2 value2
@@ -149,26 +151,48 @@ test key_value_watchers-watch-2 "Watch a wildcard" -body {
                       key keys.2 \
                       value value2 \
                       operation PUT] [lindex $allEntries 2]]}
-} -cleanup {
-    $watcher destroy
-    set allEntries [list]
-}
+} -cleanup watcherCleanup
 
 test key_value_watchers-watch-3 "Watch with an array" -body {
     array set vals {}
     set watcher [$kv watch params.* -values_array vals]
+    sleep 100
+    assert {[array size vals] == 0}
+
     $kv put params.P1 VAL1
     $kv put params.P2 VAL2
     $kv put params.P3 VAL3
     $kv delete params.P1
     sleep 100
-    
     assert {[array size vals] == 2}
     assert {$vals(params.P2) eq "VAL2"}
     assert {$vals(params.P3) eq "VAL3"}
-} -cleanup {
-    $watcher destroy
-}
+} -cleanup watcherCleanup
+
+test key_value_watchers-watch-4 "Watch with -updates_only" -body {
+    set watcher [$kv watch params.* -updates_only true -callback watcherCallback]
+    $kv put params.P4 VAL4
+    $kv put params.P5 VAL5
+    $kv delete params.P4
+    while {[llength $allEntries] < 4} {
+        wait_for ::allEntries
+    }
+    assert {[lindex $allEntries 0] eq ""}
+    assert {[dict_in [dict create \
+                      bucket $bucket \
+                      key params.P4 \
+                      value VAL4 \
+                      operation PUT] [lindex $allEntries 1]]}
+    assert {[dict_in [dict create \
+                      bucket $bucket \
+                      key params.P5 \
+                      value VAL5 \
+                      operation PUT] [lindex $allEntries 2]]}
+    assert {[dict_in [dict create \
+                      bucket $bucket \
+                      key params.P4 \
+                      operation DEL] [lindex $allEntries 3]]}
+} -cleanup watcherCleanup
 
 $kv destroy
 $js delete_kv_bucket $bucket

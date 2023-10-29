@@ -4,6 +4,9 @@
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
+# JetStream wire API Reference https://docs.nats.io/reference/reference-protocols/nats_api_reference
+# JetStream JSON API Design https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-1.md
+
 oo::class create ::nats::SyncPullRequest {
     variable conn inMsgs reqStatus reqID
     
@@ -129,19 +132,49 @@ oo::class create ::nats::jet_stream {
         }
         set doTrace $do_trace
     }
-
-    # JetStream wire API Reference https://docs.nats.io/reference/reference-protocols/nats_api_reference
-    # JetStream JSON API Design https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-1.md
-
+    
     # JetStream Direct Get https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-31.md
+    method stream_direct_get {stream args} {
+        set spec {last_by_subj valid_str null
+                  next_by_subj valid_str null
+                  seq          int null}
+        nats::_parse_args $args $spec
+        
+        # don't use ApiRequest to avoid spamming debug traces
+        if [info exists last_by_subj] {
+            set msg [$conn request "$api_prefix.DIRECT.GET.$stream.$last_by_subj" "" -timeout $_timeout -dictmsg 1]
+        } else {
+            set msg [$conn request "$api_prefix.DIRECT.GET.$stream" [nats::_local2json $spec $args] -timeout $_timeout -dictmsg 1]
+        }
+        set status [nats::header lookup $msg Status 0]
+        switch -- $status {
+            404 {
+                throw {NATS ErrMsgNotFound} "no message found"
+            }
+            408 {
+                throw {NATS ErrInvalidArg} "Invalid request"
+            }
+        }
+        dict set msg seq [nats::header get $msg Nats-Sequence]
+        dict set msg time [nats::header get $msg Nats-Time-Stamp]
+        dict set msg subject [nats::header get $msg Nats-Subject]
+        foreach h {Nats-Sequence Nats-Time-Stamp Nats-Subject} {
+            nats::header delete msg $h
+        }
+        nats::header delete msg Nats-Stream
+        return $msg
+    }
+    
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_msg_get_request
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_msg_get_response
+    # https://docs.nats.io/reference/reference-protocols/nats_api_reference#fetching-from-a-stream-by-sequence
     method stream_msg_get {stream args} {
         set spec {last_by_subj valid_str null
                   next_by_subj valid_str null
                   seq          int null}
-
-        set response [my ApiRequest "STREAM.MSG.GET.$stream" [nats::_dict2json $spec $args]]
+        
+        set response [json::json2dict [$conn request "$api_prefix.STREAM.MSG.GET.$stream" [nats::_dict2json $spec $args] -timeout $_timeout -dictmsg false]]
+        nats::_checkJsError $response
         set encoded_msg [dict get $response message] ;# it is encoded in base64
         set data [binary decode base64 [dict lookup $encoded_msg data]]
         if {[$conn cget -utf8_convert]} {
@@ -149,7 +182,6 @@ oo::class create ::nats::jet_stream {
             set data [encoding convertfrom utf-8 $data]
         }
         set msg [nats::msg create [dict get $encoded_msg subject] -data $data]
-        
         dict set msg seq [dict get $encoded_msg seq]
         dict set msg time [dict get $encoded_msg time]
         set header [binary decode base64 [dict lookup $encoded_msg hdrs]]
@@ -437,6 +469,7 @@ oo::class create ::nats::jet_stream {
             deny_purge              bool null
             allow_rollup_hdrs       bool null
             allow_direct            bool null
+            mirror_direct           bool null
             mirror                  json null
         }
 

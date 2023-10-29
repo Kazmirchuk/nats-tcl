@@ -1393,7 +1393,8 @@ proc ::nats::_coroVwait {var} {
     }
 }
 # returns a dict, where each key points to a list of values
-# NB! unlike HTTP headers, in NATS headers keys are case-sensitive
+# NB! unlike HTTP headers, in NATS header keys are case-sensitive
+# NATS Message Headers https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-4.md
 proc ::nats::_parse_header {header} {
     set result [dict create]
     # textutil::split::splitx is slower than [string map]+split and RFC 5322 doesn't allow LF in a field body
@@ -1401,9 +1402,9 @@ proc ::nats::_parse_header {header} {
     # the first line is always NATS status like NATS/1.0 404 No Messages
     set split_headers [lassign $split_headers first_line]
     # the code and description are optional
-    set descr [lassign $first_line protocol status_code]
-    if {![string match "NATS/*" $protocol]} {
-        throw {NATS ErrBadHeaderMsg} "Unknown protocol $protocol"
+    set descr [lassign $first_line headerVersion status_code]
+    if {![string match "NATS/1.0" $headerVersion]} {
+        throw {NATS ErrBadHeaderMsg} "Unknown header version $headerVersion"
     }
     if {[string is integer -strict $status_code]} {
         dict set result Status $status_code ;# non-int status is allowed but ignored
@@ -1413,13 +1414,12 @@ proc ::nats::_parse_header {header} {
     }
     # process remaining fields
     foreach line $split_headers {
-        lassign [split $line :] k v
+        if {![regexp -nocase {^([^:]+):(.+)$} $line -> k v]} {
+            continue
+        }
         set k [string trim $k]
         set v [string trim $v]
-        if {$k ne ""} {
-            # empty keys are ignored, but empty values are allowed, see func readMIMEHeader in nats.go
-            dict lappend result $k $v
-        }
+        dict lappend result $k $v
     }
     return $result
 }

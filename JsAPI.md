@@ -31,6 +31,7 @@ JetStream functionality of NATS can be accessed by creating the `nats::jet_strea
 [*js* ordered_consumer *stream ?args?*](#js-ordered_consumer-stream-args)<br/>
 
 [*js* stream_msg_get *stream* ?-last_by_subj *subj*? ?-next_by_subj *subj*? ?-seq *int*?](#js-stream_msg_get-stream--last_by_subj-subj--next_by_subj-subj--seq-int)<br/>
+[*js* stream_direct_get *stream* ?-last_by_subj *subj*? ?-next_by_subj *subj*? ?-seq *int*?](#js-stream_direct_get-stream--last_by_subj-subj--next_by_subj-subj--seq-int)<br/>
 [*js* stream_msg_delete *stream* -seq *int* ?-no_erase *bool*?](#js-stream_msg_delete-stream--seq-int--no_erase-bool)<br/>
 
 [*js* bind_kv_bucket *bucket*](#js-bind_kv_bucket-bucket)<br/>
@@ -270,7 +271,18 @@ Whenever a message arrives, the command prefix `cmdPrefix` will be invoked from 
 `message` is delivered as a dict to be used with the `nats::msg` ensemble. Since ordered consumers always have `-ack_policy none`, you don't need to `ack` the message.
 
 ### js stream_msg_get *stream* ?-last_by_subj *subj*? ?-next_by_subj *subj*? ?-seq *int*?
-'Direct Get' a message from stream `stream` by given `subject` or `sequence`. See also [ADR-31](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-31.md).
+Returns a message from `stream` using the [STREAM.MSG.GET](https://docs.nats.io/reference/reference-protocols/nats_api_reference#fetching-from-a-stream-by-sequence) NATS API. 
+
+The following combinations of options are possible:
+- sequence number
+- last by subject
+- next by subject (assumes sequence = 0)
+- next by subject + sequence
+
+This API guarantees read-after-write coherency but may be slower than "Direct Get" in a clustered setup.
+### js stream_direct_get *stream* ?-last_by_subj *subj*? ?-next_by_subj *subj*? ?-seq *int*?
+Returns a message from `stream` using the [DIRECT.GET](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-31.md) NATS API. All options have the same meaning as for [stream_msg_get](#js-stream_msg_get-stream--last_by_subj-subj--next_by_subj-subj--seq-int). This method performs better than `stream_msg_get` if the stream has replicas or mirrors, but does not guarantee read-after-write coherency. The stream must be configured with `-allow_direct true` and/or `-mirror_direct true` respectively.
+
 ### js stream_msg_delete *stream* -seq *int* ?-no_erase *bool*?
 Deletes a message from `stream` with the given `sequence` number. `-no_erase` is true by default. Set it to false if NATS should overwrite the message with random data, like `SecureDeleteMsg` in nats.go.
 ### js bind_kv_bucket *bucket*

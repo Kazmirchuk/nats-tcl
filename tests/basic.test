@@ -189,7 +189,7 @@ test basic-8 "Asynchronous request" -body {
     duration {
         wait_for ::inMsg
     } elapsed
-    assert {[approx $elapsed 140 ]}
+    assert {[approx $elapsed 140]}
     
     set inMsg
 } -result "async_req"

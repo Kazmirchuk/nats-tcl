@@ -60,7 +60,7 @@ The client relies on a running event loop to send and deliver messages and uses 
 Calls to blocking API (synchronous versions of `connect`, `request`, `ping`) involve `vwait` under the hood, so that other event processing can continue. If the API is called from a coroutine, `coroutine::util vwait` is used instead of a plain `vwait` to avoid nested event loops.
 
 ## Message headers
-When using NATS server version 2.2 and later, you can publish and receive messages with [headers](https://pkg.go.dev/github.com/nats-io/nats.go?utm_source=godoc#Header). Please, keep in mind that:
+When using NATS server version 2.2 and later, you can publish and receive messages with [headers](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-4.md). Please, keep in mind that:
 - keys are case-sensitive (unlike standard HTTP headers)
 - duplicate keys are allowed (just like standard HTTP headers). In Tcl this is represented as a key pointing to a *list* of values, mimicking the same API as in nats.go and nats.java.
 - `Status` and `Description` keys are reserved by the NATS protocol, in particular for implementation of the [no-responders](https://docs.nats.io/whats_new_22#react-quicker-with-no-responder-notifications) feature.

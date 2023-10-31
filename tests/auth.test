@@ -129,4 +129,4 @@ test auth-2.4 "Try connecting to a pool with no credentials - OK" -body {
 conn destroy
 stopNats NATS_open
 stopNats NATS_token
-tcltest::cleanupTests
+cleanupTests

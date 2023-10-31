@@ -558,4 +558,4 @@ test jet_stream-14 "Ordered consumer - reset - stream deleted" -body {
 $jet_stream destroy
 $conn destroy
 stopNats NATS
-tcltest::cleanupTests
+cleanupTests

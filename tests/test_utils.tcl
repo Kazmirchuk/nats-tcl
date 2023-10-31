@@ -6,6 +6,11 @@
 
 # all *.test files source this file first
 
+if [namespace exists test_utils] {
+    # avoid sourcing this file multiple times when using -singleproc 1
+    return
+}
+
 package require nats  ;# if not found, add it to TCLLIBPATH
 package require tcltest 2.5
 package require tcl::transform::observe
@@ -183,7 +188,7 @@ namespace eval test_utils {
             set natsPid($id) [exec nats-server {*}$args 2> /dev/null &]
         }
         sleep 500
-        log::info "Started $id"
+        log::info "Started $id $args"
     }
     
     proc stopNats {id} {
@@ -342,6 +347,14 @@ namespace eval test_utils {
         method read {c data} {
             return [string map $read_map $data]
         }
+    }
+    # can't use tcltest::cleanupTestsHook because it behaves differently depending on -singleproc:
+    # with -singleproc 1, cleanupTestsHook is called by tcltest::cleanupTests every time, so at the end of every *.test file, which is what you'd expect
+    # with -singleproc 0, cleanupTestsHook is called only after *all* tests are done, which is not useful for me
+    proc cleanupTests {} {
+        # ensure each test starts with an empty JetStream
+        file delete -force [tcltest::temporaryDirectory]
+        tcltest::cleanupTests
     }
     
     namespace export {[a-z]*}

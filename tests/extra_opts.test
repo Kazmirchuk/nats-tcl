@@ -194,4 +194,4 @@ test extra_opts-7.2 "connect -async allows to PUB/SUB" -body {
 
 $conn destroy
 stopNats NATS
-tcltest::cleanupTests
+cleanupTests

@@ -153,5 +153,4 @@ $conn_hub destroy
 
 stopNats NATS_LEAF
 stopNats NATS_HUB
-
-tcltest::cleanupTests
+cleanupTests

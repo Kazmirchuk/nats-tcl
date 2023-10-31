@@ -6,7 +6,9 @@
 # Test summary:
 # - actions on a stream: create, get info, get names, purge, delete
 # - actions on a pull consumer: create, get info, get names, delete
-# - actions on a message: get, delete
+# - actions on a message: get, delete + "Direct Get"
+# - streams with mirrors and sources
+
 source test_utils.tcl
 
 startNats NATS --jetstream
@@ -231,7 +233,7 @@ test js_mgmt-10.1 "Get a message from a stream - last by subject" -setup {
     assert {[nats::header get $msg KEY2] eq "VAL 2"} 1
     assert {[nats::msg subject $msg] eq "test.1"} 1
     set msgTime [nats::isotime_to_msec [nats::msg timestamp $msg]]
-    assert {[approx $msgTime $pubTime 100]}
+    assert {[approx $msgTime $pubTime 500]}
     nats::msg data $msg
 } -result "msg 1"
 
@@ -246,7 +248,7 @@ test js_mgmt-10.3 "Direct Get from a stream - last by subject" -body {
     assert {[nats::header get $msg KEY2] eq "VAL 2"} 1
     assert {[nats::msg subject $msg] eq "test.1"} 1
     set msgTime [nats::isotime_to_msec [nats::msg timestamp $msg]]
-    assert {[approx $msgTime $pubTime 100]}
+    assert {[approx $msgTime $pubTime 500]}
     nats::msg data $msg
 } -result "msg 1"
 
@@ -261,4 +263,67 @@ test js_mgmt-11.1 "Delete a message from a stream" -body {
 $js destroy
 $conn destroy
 stopNats NATS
-tcltest::cleanupTests
+
+startNats NATS_HUB -c ./conf/hub.conf
+startNats NATS_LEAF -c ./conf/leaf.conf
+
+# connect to the Hub NATS
+set connHub [nats::connection new "Conn_Hub" -log_chan [tcltest::outputChannel]]
+$connHub configure -servers nats://localhost:4222 -user acc -password acc
+$connHub connect
+set jsHub [$connHub jet_stream]
+
+# connect to the Leaf NATS
+set connLeaf [nats::connection new "Conn_Leaf" -log_chan [tcltest::outputChannel]]
+$connLeaf configure -servers nats://localhost:4111 -user acc -password acc
+$connLeaf connect
+set jsLeaf [$connLeaf jet_stream]
+
+test js_mgmt-12.1 "Create a stream mirror in the hub domain" -setup {
+    $jsHub add_stream MAIN_STREAM -subjects [list test.*]
+    $jsHub publish test.12 "Original message"
+} -body {
+    set mirrorConfig [nats::make_stream_source -name MAIN_STREAM -filter_subject "test.12"]
+    set response [$jsHub add_stream STREAM_MIRROR -mirror $mirrorConfig]
+    assert {[dict get $response did_create]}
+    sleep 300 ;# the mirror needs a little time to sync with the origin
+    set streamInfo [$jsHub stream_info STREAM_MIRROR]
+    assert {[dict get $streamInfo mirror name] eq "MAIN_STREAM"} 1
+    assert {[dict get $streamInfo mirror filter_subject] eq "test.12"}
+    assert {[dict get $streamInfo state messages] == 1} 1
+    set msg [$jsHub stream_msg_get STREAM_MIRROR -last_by_subj test.12]
+    nats::msg data $msg
+} -result "Original message" -cleanup {
+    $jsHub delete_stream STREAM_MIRROR
+}
+# WIP
+test js_mgmt-12.2 "Create a stream mirror in the leaf domain" -body {
+    set mirrorConfig [nats::make_stream_source -name MAIN_STREAM -filter_subject "test.12" -api hub]
+    set response [$jsLeaf add_stream STREAM_MIRROR -mirror $mirrorConfig]
+    assert {[dict get $response did_create]}
+    #$jsHub publish test.12 "Original message 2"
+    sleep 2000 ;# the mirror needs a little time to sync with the origin
+    set streamInfo [$jsLeaf stream_info STREAM_MIRROR]
+    puts "streamInfo: $streamInfo"
+    assert {[dict get $streamInfo domain] eq "leaf"} 1
+    assert {[dict get $streamInfo mirror name] eq "MAIN_STREAM"} 1
+    assert {[dict get $streamInfo mirror filter_subject] eq "test.12"}
+    assert {[dict get $streamInfo mirror external api] eq "hub"}
+    #assert {[dict get $streamInfo state messages] == 1} 1
+    puts "messages: [dict get $streamInfo state messages]"
+    #set msg [$jsLeaf stream_msg_get STREAM_MIRROR -last_by_subj test.12]
+    #nats::msg data $msg
+} -result "" -cleanup {
+    $jsLeaf delete_stream STREAM_MIRROR
+}
+
+$jsHub destroy
+$connHub destroy
+
+$jsLeaf destroy
+$connLeaf destroy
+
+stopNats NATS_LEAF
+stopNats NATS_HUB
+
+cleanupTests

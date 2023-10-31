@@ -331,4 +331,4 @@ test basic-18 "Disconnection cancels pending async requests" -body {
 
 $conn destroy
 stopNats NATS
-tcltest::cleanupTests
+cleanupTests

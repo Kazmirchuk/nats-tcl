@@ -92,4 +92,4 @@ test regex-5 "Check queue groups" -body {
     assert {![${conn}::my CheckSubject *foo -queue]}
 }
 
-tcltest::cleanupTests
+cleanupTests

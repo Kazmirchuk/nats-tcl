@@ -5,12 +5,6 @@
 
 package require tcltest 2.5  ;# -errorCode option is relatively recent - make sure it's available
 
-# called automatically by tcltest::cleanupTests
-proc tcltest::cleanupTestsHook {} {
-    # ensure each test starts with an empty JetStream
-    file delete -force [tcltest::temporaryDirectory]
-}
-
 set thisDir [file dirname [file normalize [info script]]]
 # doing a simple [cd] and -testdir is enough for the tests to work
 # but [workingDirectory] and -tmpdir are needed for an accurate output header

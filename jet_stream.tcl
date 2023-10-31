@@ -471,7 +471,7 @@ oo::class create ::nats::jet_stream {
             allow_direct            bool null
             mirror_direct           bool null
             mirror                  json null
-        }
+            sources                 json_list null}
 
         if {![my CheckFilenameSafe $stream]} {
             throw {NATS ErrInvalidArg} "Invalid stream name $stream"
@@ -895,6 +895,12 @@ proc ::nats::_format_json {name val type} {
         json {
             return $val
         }
+        json_list {
+            if {[llength $val] == 0} {
+                throw {NATS ErrInvalidArg} $errMsg
+            }
+            return [json::write array {*}$val]
+        }
         default {
             throw {NATS ErrInvalidArg} "Wrong type $type"  ;# should not happen
         }
@@ -1017,4 +1023,23 @@ proc ::nats::metadata {msg} {
             num_pending [lindex $mlist 8]]
     nats::_ns2ms mdict timestamp
     return $mdict
+}
+proc ::nats::make_stream_source {args} {
+    # the top-level JSON object StreamSource may have a nested ExternalStream object, so the easiest way is to break down the spec into 2
+    set streamSourceSpec {
+        name           valid_str NATS_TCL_REQUIRED
+        opt_start_seq  pos_int   null
+        opt_start_time valid_str null
+        filter_subject valid_str null
+        external       json      null}
+        
+    set externalStreamSpec {
+        api            valid_str null
+        deliver        valid_str null}
+        
+    nats::_parse_args $args [list {*}$streamSourceSpec {*}$externalStreamSpec]
+    if [info exists api] {
+        set external [nats::_local2json $externalStreamSpec]
+    }
+    return [nats::_local2json $streamSourceSpec]
 }

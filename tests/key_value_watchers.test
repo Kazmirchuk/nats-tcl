@@ -200,5 +200,4 @@ $js destroy
 $conn destroy
 stopNats NATS_JS
 
-tcltest::cleanupTests
-return
+cleanupTests

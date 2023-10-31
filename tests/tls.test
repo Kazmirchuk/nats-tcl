@@ -77,4 +77,4 @@ test tls-3.1 "Connect to NATS without TLS" -constraints tls -setup {
     cd ..
     $conn destroy
 }
-tcltest::cleanupTests
+cleanupTests

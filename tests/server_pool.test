@@ -156,4 +156,4 @@ test server_pool-14.2 "Remove servers from the pool when they reach max_reconnec
 }
     
 $conn destroy
-tcltest::cleanupTests
+cleanupTests

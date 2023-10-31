@@ -203,4 +203,4 @@ test cluster-4 "Requests can transfer from one server to another within a cluste
     $conn destroy
     stopNats NATS2
 }
-tcltest::cleanupTests
+cleanupTests

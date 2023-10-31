@@ -266,4 +266,4 @@ test pubsub-9 "Send 2 sync requests in coroutines" -setup {
 
 $conn destroy
 stopNats NATS
-tcltest::cleanupTests
+cleanupTests

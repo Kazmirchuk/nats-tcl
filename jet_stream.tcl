@@ -601,15 +601,14 @@ oo::class create ::nats::jet_stream {
         }
 
         if {[info exists mirror_name]} {
-            set mirror_info [dict create name [json::write string "KV_$mirror_name"]]
+            set srcArgs [list -name "KV_$mirror_name"]
             if {[info exists mirror_domain]} {
-                dict set mirror_info external [json::write object api [json::write string "\$JS.$mirror_domain.API"]]
+                lappend srcArgs -api "\$JS.$mirror_domain.API"
             }
-            dict set stream_config mirror [json::write object {*}$mirror_info]
+            dict set stream_config mirror [nats::make_stream_source {*}$srcArgs]
         } else {
             dict set stream_config subjects "\$KV.$bucket.>"
         }
-
         set stream_info [my add_stream "KV_$bucket" {*}$stream_config]
         return [::nats::key_value new $conn [self] $domain $bucket [dict get $stream_info config]]
     }

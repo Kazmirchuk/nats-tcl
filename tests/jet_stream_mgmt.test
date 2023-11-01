@@ -296,25 +296,41 @@ test js_mgmt-12.1 "Create a stream mirror in the hub domain" -setup {
 } -result "Original message" -cleanup {
     $jsHub delete_stream STREAM_MIRROR
 }
-# WIP
+
+#TODO test message consumption
 test js_mgmt-12.2 "Create a stream mirror in the leaf domain" -body {
     set mirrorConfig [nats::make_stream_source -name MAIN_STREAM -filter_subject "test.12" -api hub]
     set response [$jsLeaf add_stream STREAM_MIRROR -mirror $mirrorConfig]
     assert {[dict get $response did_create]}
-    #$jsHub publish test.12 "Original message 2"
-    sleep 2000 ;# the mirror needs a little time to sync with the origin
+    sleep 300
     set streamInfo [$jsLeaf stream_info STREAM_MIRROR]
-    puts "streamInfo: $streamInfo"
     assert {[dict get $streamInfo domain] eq "leaf"} 1
     assert {[dict get $streamInfo mirror name] eq "MAIN_STREAM"} 1
     assert {[dict get $streamInfo mirror filter_subject] eq "test.12"}
     assert {[dict get $streamInfo mirror external api] eq "hub"}
-    #assert {[dict get $streamInfo state messages] == 1} 1
-    puts "messages: [dict get $streamInfo state messages]"
-    #set msg [$jsLeaf stream_msg_get STREAM_MIRROR -last_by_subj test.12]
-    #nats::msg data $msg
 } -result "" -cleanup {
     $jsLeaf delete_stream STREAM_MIRROR
+}
+
+test js_mgmt-12.3 "Create a stream in the leaf domain with 2 sources in the hub domain" -setup {
+    $jsHub add_stream SOURCE_STREAM_1 -subjects [list params1.*]
+    $jsHub add_stream SOURCE_STREAM_2 -subjects [list params2.*]
+} -body {
+    set source1 [nats::make_stream_source -name SOURCE_STREAM_1 -api hub]
+    set source2 [nats::make_stream_source -name SOURCE_STREAM_2 -api hub]
+    set response [$jsLeaf add_stream AGGREGATE_STREAM -sources [list $source1 $source2]] ;# may have its own subjects to listen to
+    assert {[dict get $response did_create]}
+    sleep 300
+    set streamInfo [$jsLeaf stream_info AGGREGATE_STREAM]
+    set sources [dict get $streamInfo sources]
+    assert {[llength $sources] == 2} 1
+    assert {[dict get [lindex $sources 0] name] eq "SOURCE_STREAM_1"} 1
+    assert {[dict get [lindex $sources 1] name] eq "SOURCE_STREAM_2"} 1
+    assert {[dict get $streamInfo domain] eq "leaf"} 1
+} -result "" -cleanup {
+    $jsLeaf delete_stream AGGREGATE_STREAM
+    $jsHub delete_stream SOURCE_STREAM_1
+    $jsHub delete_stream SOURCE_STREAM_2
 }
 
 $jsHub destroy

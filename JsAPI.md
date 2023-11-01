@@ -47,6 +47,10 @@ JetStream functionality of NATS can be accessed by creating the `nats::jet_strea
 [*consumer* name](#consumer-name)<br/>
 [*consumer* destroy](#consumer-destroy)<br/>
 
+## Namespace Commands
+[nats::metadata *message*](#natsmetadata-message)<br/>
+[nats::make_stream_source ?-option *value*?..](#natsmake_stream_source--option-value)
+
 # Description
 The [Core NATS](CoreAPI.md) pub/sub functionality offers the at-most-once delivery guarantee based on TCP. This is sufficient for many applications, where an individual message doesn't have much value. In case of a transient network disconnection, a subscriber simply waits until the connection is restored and a new message is delivered. 
 
@@ -202,7 +206,10 @@ Creates or updates a `stream` with configuration specified as option-value pairs
 | -allow_rollup_hdrs  | boolean |         |
 | -allow_direct  | boolean |         |
 | -mirror_direct  | boolean |         |
+| -mirror | JSON | |
+| -sources | list of JSON | |
 
+For `-mirror` and `-sources` options, use the [nats::make_stream_source](#natsmake_stream_source--option-value) command to create a stream source configuration. <br/>
 Returns a JetStream response as a dict.
 ### js add_stream_from_json *json_config*
 Creates or updates a stream with configuration specified as JSON. The stream name is taken from the JSON.
@@ -343,6 +350,37 @@ Returns the cached consumer info, same as `$js consumer_info`.
 Returns the auto-generated consumer name, like `QWGBg8xp`. It is a shortcut for `dict get [$consumer info] name`. While consumer reset is in progress, `name` is an empty string.
 ### consumer destroy
 Unsubscribes from messages and destroys the object. NATS server will delete the push consumer after InactiveThreshold=2s.
+
+## Namespace Commands
+### nats::metadata *message*
+Returns a dict with metadata of the message that is extracted from the reply-to field. The dict has these fields:
+- stream
+- consumer
+- num_delivered
+- stream_seq
+- consumer_seq
+- timestamp (ms)
+- num_pending
+
+Note that when a message is received using `stream_msg_get`, this metadata is not available. Instead, you can get the stream sequence number and the timestamp using the `nats::msg` ensemble.
+### nats::make_stream_source ?-option *value*?..
+Returns a stream source configuration formatted as JSON to be used with `-mirror` and `-sources` arguments to [add_stream](#js-add_stream-stream--option-value). You can provide the following options:
+- `-name originStreamName` (required)
+- `-opt_start_seq int`
+- `-opt_start_time string` formatted as ISO time
+- `-filter_subject subject`
+
+If the source stream is in another JetStream domain, you will need two more options:
+- `-api domain` (required)
+- `-deliver deliverySubject`
+
+Example of creating a stream sourcing messages from 2 other streams SOURCE_STREAM_1 and SOURCE_STREAM_1 that are located in the "hub" domain:
+```Tcl
+set source1 [nats::make_stream_source -name SOURCE_STREAM_1 -api hub]
+set source2 [nats::make_stream_source -name SOURCE_STREAM_2 -api hub]
+$js add_stream AGGREGATE_STREAM -sources [list $source1 $source2]
+```
+More details can be found in the official docs about [NATS replication](https://docs.nats.io/running-a-nats-service/nats_admin/jetstream_admin/replication).
 
 # Error handling in JetStream and Key/Value Store
 In addition to all [core NATS errors](CoreAPI.md#error-handling), the `jet_stream` and `key_value` classes may throw these errors:

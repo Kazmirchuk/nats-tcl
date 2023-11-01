@@ -26,7 +26,7 @@ All commands are defined in and exported from the `::nats` namespace.
 [*objectName* destroy](#objectName-destroy) <br/>
 
 ## Ensembles
-[nats::msg](#natsmsg) <br/>
+[nats::msg](#ensemble-natsmsg) <br/>
 [msg create *subject* ?-data *payload*? ?-reply *replyTo*?](#msg-create-subject--data-payload--reply-replysubj)<br/>
 [msg set *msgVariable option value*](#msg-set-msgvariable-option-value)<br/>
 [msg subject *msgValue*](#msg-subject-msgvalue)<br/>
@@ -38,7 +38,7 @@ All commands are defined in and exported from the `::nats` namespace.
 [msg seq *msgValue*](#msg-seq-msgvalue)<br/>
 [msg timestamp *msgValue*](#msg-timestamp-msgvalue)<br/>
 
-[nats::header](#natsheader)<br/>
+[nats::header](#ensemble-natsheader)<br/>
 [header add *msgVariable key value*](#header-add-msgvariable-key-value)<br/>
 [header set *msgVariable key value ?key value?..*](#header-set-msgvariable-key-value-key-value)<br/>
 [header delete *msgVariable key*](#header-delete-msgvariable-key)<br/>
@@ -51,7 +51,6 @@ All commands are defined in and exported from the `::nats` namespace.
 [nats::timestamp](#natstimestamp)<br/>
 [nats::isotime_to_msec *isotime*](#natsisotime_to_msec-isotime)<br/>
 [nats::msec_to_isotime *msec ?tz?*](#natsmsec_to_isotime-msec-tz)<br/>
-[nats::metadata *message*](#natsmetadata-message)
 
 # Description
 ## Event processing
@@ -257,17 +256,7 @@ Returns current local time in the ISO 8601 format, including milliseconds. Usefu
 Converts an ISO timestamp (as used by the NATS wire format, e.g. 2022-11-22T13:31:35.4514983Z) to integer milliseconds since the epoch (note possible rounding of fractional seconds).
 ### nats::msec_to_isotime *msec ?tz?*
 Converts integer milliseconds to an ISO timestamp in the given timezone (default UTC). The local time zone can be specified as `:localtime` (see the [Tcl reference](https://www.tcl.tk/man/tcl8.6/TclCmd/clock.html#M78)). Note that the time zone designator is not included in the returned string.
-### nats::metadata *message*
-Specific to [JetStream](#JsApi.md). Returns a dict with metadata of the message that is extracted from the reply-to field. The dict has these fields:
-- stream
-- consumer
-- num_delivered
-- stream_seq
-- consumer_seq
-- timestamp (ms)
-- num_pending
 
-Note that when a message is received using `stream_msg_get`, this metadata is not available. Instead, you can get the stream sequence number and the timestamp using the `nats::msg` ensemble.
 # Error handling
 Error codes are similar to those from the nats.go client as much as possible. A few additional error codes provide more information about failed connection attempts to the NATS server: ErrBrokenSocket, ErrTLS, ErrConnectionRefused.
 

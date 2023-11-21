@@ -21,6 +21,5 @@ tcltest::configure -testdir $thisDir -tmpdir [file join $thisDir temp] -verbose 
 # - some Tcl errors become hidden, while they are visible with -singleproc 1
 if {![tcltest::singleProcess]} {
     encoding system utf-8  ;# in test key_value-utf8 printing Unicode to the console produces corrupted output unless I call this
-    # but it has an opposite effect on extra_opts-6
 }
 exit [tcltest::runAllTests]

@@ -125,7 +125,7 @@ test server_pool-14.1 "Reconnecting timings and counters" -body {
     } elapsed
     assert {[approx $elapsed 3000 1000]} ;# should be equal to reconnect_time_wait
     # on Windows I get ErrConnectionTimeout, and on Linux I get ErrConnectionRefused
-    assert {$allErrors eq {ErrBrokenSocket ErrConnectionTimeout ErrConnectionTimeout} || $all_errors eq {ErrBrokenSocket ErrConnectionRefused ErrConnectionRefused}}
+    assert {$allErrors eq {ErrBrokenSocket ErrConnectionTimeout ErrConnectionTimeout} || $allErrors eq {ErrBrokenSocket ErrConnectionRefused ErrConnectionRefused}}
     foreach s [$conn all_servers] {
         if {[dict get $s port] == 4222} {
             assert {[dict get $s reconnects] == 0}

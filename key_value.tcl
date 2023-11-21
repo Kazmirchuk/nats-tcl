@@ -6,14 +6,14 @@
 
 # based on https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-8.md
 oo::class create ::nats::key_value {
-    variable conn js bucket stream kv_read_prefix kv_write_prefix mirrored_bucket
+    variable Conn Js Bucket Stream kv_read_prefix kv_write_prefix mirrored_bucket
 
     constructor {connection jet_stream domain bucket_name stream_config} {
-        set conn $connection
-        set js $jet_stream
-        set bucket $bucket_name
-        set stream "KV_$bucket_name"
-        set kv_read_prefix [expr {$domain eq "" ? "\$KV.$bucket" : "\$JS.$domain.API.\$KV.$bucket"}]
+        set Conn $connection
+        set Js $jet_stream
+        set Bucket $bucket_name
+        set Stream "KV_$bucket_name"
+        set kv_read_prefix [expr {$domain eq "" ? "\$KV.$Bucket" : "\$JS.$domain.API.\$KV.$Bucket"}]
         set kv_write_prefix $kv_read_prefix
         set mirrored_bucket ""
         if {[dict exists $stream_config mirror name]} {
@@ -30,9 +30,9 @@ oo::class create ::nats::key_value {
     
     method PublishStream {msg} {
         try {
-            return [$js publish_msg $msg]
+            return [$Js publish_msg $msg]
         } trap {NATS ErrNoResponders} err {
-            throw {NATS ErrBucketNotFound} "Bucket $bucket not found"
+            throw {NATS ErrBucketNotFound} "Bucket $Bucket not found"
         }
     }
     
@@ -60,28 +60,28 @@ oo::class create ::nats::key_value {
         # Subject $KV.MY_HUB_BUCKET.key1
         #set subject "\$KV.*.$key"
         
-        set subject "\$KV.$bucket.$key"
+        set subject "\$KV.$Bucket.$key"
         if {$mirrored_bucket ne ""} {
             set subject "\$KV.$mirrored_bucket.$key"
         }
         try {
             if {$revision ne ""} {
-                set msg [$js stream_msg_get $stream -seq $revision]
+                set msg [$Js stream_msg_get $Stream -seq $revision]
                 # not sure under what conditions this may happen, but nats.go does this check
                 if {$subject ne [nats::msg subject $msg]} {
                     throw {NATS ErrKeyNotFound} "Expected $subject, got [nats::msg subject $msg]"
                 }
             } else {
-                set msg [$js stream_msg_get $stream -last_by_subj $subject]
+                set msg [$Js stream_msg_get $Stream -last_by_subj $subject]
             }
         } trap {NATS ErrMsgNotFound} err {
-            throw {NATS ErrKeyNotFound} "Key $key not found in bucket $bucket"
+            throw {NATS ErrKeyNotFound} "Key $key not found in bucket $Bucket"
         } trap {NATS ErrStreamNotFound} err {
-            throw {NATS ErrBucketNotFound} "Bucket $bucket not found"
+            throw {NATS ErrBucketNotFound} "Bucket $Bucket not found"
         }
         # TODO delta
         set entry [dict create \
-            bucket $bucket \
+            bucket $Bucket \
             key $key \
             value [nats::msg data $msg] \
             revision [nats::msg seq $msg] \
@@ -101,7 +101,7 @@ oo::class create ::nats::key_value {
             set resp [my PublishStream [nats::msg create "$kv_write_prefix.$key" -data $value]]
             return [dict get $resp seq]
         } trap {NATS ErrNoResponders} err {
-            throw {NATS ErrBucketNotFound} "Bucket $bucket not found"
+            throw {NATS ErrBucketNotFound} "Bucket $Bucket not found"
         }
     }
 
@@ -158,9 +158,9 @@ oo::class create ::nats::key_value {
 
     method status {} {
         try {
-            set stream_info [$js stream_info $stream]
+            set stream_info [$Js stream_info $Stream]
         } trap {NATS ErrStreamNotFound} err {
-            throw {NATS BucketNotFound} "Bucket $bucket not found"
+            throw {NATS BucketNotFound} "Bucket $Bucket not found"
         }
         return [my StreamInfoToKvInfo $stream_info]
     }
@@ -185,7 +185,7 @@ oo::class create ::nats::key_value {
         }
         
         # TODO why use $kv_write_prefix here? filter_subject = "$kv_write_prefix.$key_pattern" ??
-        set filter_subject "\$KV.$bucket.$key_pattern"
+        set filter_subject "\$KV.$Bucket.$key_pattern"
         if {$mirrored_bucket ne ""} {
             set filter_subject "\$KV.$mirrored_bucket.$key_pattern"
         }
@@ -202,7 +202,7 @@ oo::class create ::nats::key_value {
         set result [${ns}::my Gather keys]
         $w destroy
         if {[llength $result] == 0} {
-            throw {NATS ErrKeyNotFound} "No keys found in bucket $bucket"  ;# nats.go raises ErrNoKeysFound instead
+            throw {NATS ErrKeyNotFound} "No keys found in bucket $Bucket"  ;# nats.go raises ErrNoKeysFound instead
         }
         return $result
     }
@@ -213,7 +213,7 @@ oo::class create ::nats::key_value {
         set result [${ns}::my Gather history]
         $w destroy
         if {[llength $result] == 0} {
-            throw {NATS ErrKeyNotFound} "Key $key not found in bucket $bucket"
+            throw {NATS ErrKeyNotFound} "Key $key not found in bucket $Bucket"
         }
         return $result
     }
@@ -222,7 +222,7 @@ oo::class create ::nats::key_value {
         set config [dict get $stream_info config]
         
         set kv_info [dict create \
-            bucket $bucket \
+            bucket $Bucket \
             bytes [dict get $stream_info state bytes] \
             history [dict get $config max_msgs_per_subject] \
             ttl [dict get $config max_age] \
@@ -263,10 +263,10 @@ oo::class create ::nats::kv_watcher {
         set InitDone false  ;# becomes true after the current/historical data has been received
         set Gathering ""
         set kvNS [info object namespace $kv]
-        set Conn [set ${kvNS}::conn]
-        set Bucket [set ${kvNS}::bucket]
-        set stream [set ${kvNS}::stream]
-        set js [set ${kvNS}::js]
+        set Conn [set ${kvNS}::Conn]
+        set Bucket [set ${kvNS}::Bucket]
+        set stream [set ${kvNS}::Stream]
+        set js [set ${kvNS}::Js]
         set kv_write_prefix [set ${kvNS}::kv_write_prefix]
         set UserCb $cb
         set IgnoreDeletes $ignore_del

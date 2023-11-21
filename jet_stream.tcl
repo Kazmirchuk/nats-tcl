@@ -8,20 +8,20 @@
 # JetStream JSON API Design https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-1.md
 
 oo::class create ::nats::SyncPullRequest {
-    variable conn inMsgs reqStatus reqID
+    variable Conn MsgList Status ID
     
     constructor {} {
-        set inMsgs [list]
-        set reqStatus running ;# one of: running, done, timeout
+        set MsgList [list]
+        set Status running ;# one of: running, done, timeout
     }
-    method run {c subject msg timeout batch } {
-        set conn $c
-        set reqID [$conn request $subject $msg -dictmsg true -timeout $timeout -max_msgs $batch -callback [mymethod OnMsg]]
+    method run {conn subject msg timeout batch } {
+        set Conn $conn
+        set ID [$conn request $subject $msg -dictmsg true -timeout $timeout -max_msgs $batch -callback [mymethod OnMsg]]
         try {
             while {1} {
-                nats::_coroVwait [self namespace]::reqStatus ;# wait for 1 message
-                set msgCount [llength $inMsgs]
-                switch -- $reqStatus {
+                nats::_coroVwait [self namespace]::Status ;# wait for 1 message
+                set msgCount [llength $MsgList]
+                switch -- $Status {
                     timeout {
                         if {$msgCount > 0} {
                             break ;# we've received at least some messages - return them
@@ -33,7 +33,7 @@ oo::class create ::nats::SyncPullRequest {
                         # we've received a status message, which means that the pull request is done
                         if {$batch - $msgCount > 1} {
                             # no need to cancel the request if this was the last expected message
-                            $conn cancel_request $reqID
+                            $Conn cancel_request $ID
                         }
                         break
                     }
@@ -44,7 +44,7 @@ oo::class create ::nats::SyncPullRequest {
                     }
                 }
             }
-            return $inMsgs
+            return $MsgList
         } finally {
             my destroy
         }
@@ -52,85 +52,85 @@ oo::class create ::nats::SyncPullRequest {
     method OnMsg {timedOut msg} {
         if {$timedOut} {
             # client-side timeout or connection lost; we may have received some messages before
-            [info object namespace $conn]::log::debug "Sync pull request $reqID timed out"
-            set reqStatus timeout
+            [info object namespace $Conn]::log::debug "Sync pull request $ID timed out"
+            set Status timeout
             return
         }
         set msgStatus [nats::header lookup $msg Status ""]
         switch -- $msgStatus {
             404 - 408 - 409 {
-                [info object namespace $conn]::log::debug "Sync pull request $reqID got status message $msgStatus"
-                set reqStatus done
+                [info object namespace $Conn]::log::debug "Sync pull request $ID got status message $msgStatus"
+                set Status done
             }
             default {
-                lappend inMsgs $msg
-                set reqStatus running
+                lappend MsgList $msg
+                set Status running
             }
         }
     }
 }
 
 oo::class create ::nats::AsyncPullRequest {
-    variable conn batch_size userCb msgCount reqID
+    variable Conn Batch UserCb MsgCount ID
     
     constructor {cb} {
-        set userCb $cb
-        set msgCount 0  ;# only user's messages
-        set reqID 0
+        set UserCb $cb
+        set MsgCount 0  ;# only user's messages
+        set ID 0
     }
-    method run {c subject msg timeout batch} {
-        set conn $c
-        set batch_size $batch
-        set reqID [$conn request $subject $msg -dictmsg true -timeout $timeout -max_msgs $batch -callback [mymethod OnMsg]]
+    method run {conn subject msg timeout batch} {
+        set Conn $conn
+        set Batch $batch
+        set ID [$conn request $subject $msg -dictmsg true -timeout $timeout -max_msgs $batch -callback [mymethod OnMsg]]
         return [self]
     }
     method OnMsg {timedOut msg} {
         if {$timedOut} {
             # client-side timeout or connection lost; we may have received some messages before
-            [info object namespace $conn]::log::debug "Async pull request $reqID timed out"
-            after 0 [list {*}$userCb 1 ""]
-            set reqID 0 ;# the request has been already cancelled by OldStyleRequest
+            [info object namespace $Conn]::log::debug "Async pull request $ID timed out"
+            after 0 [list {*}$UserCb 1 ""]
+            set ID 0 ;# the request has been already cancelled by OldStyleRequest
             my destroy
             return
         }
         set msgStatus [nats::header lookup $msg Status ""]
         switch -- $msgStatus {
             404 - 408 - 409 {
-                [info object namespace $conn]::log::debug "Async pull request $reqID got status message $msgStatus"
-                after 0 [list {*}$userCb 1 $msg] ;# just like with old-style requests, inform the user that the pull request timed out
+                [info object namespace $Conn]::log::debug "Async pull request $ID got status message $msgStatus"
+                after 0 [list {*}$UserCb 1 $msg] ;# just like with old-style requests, inform the user that the pull request timed out
                 my destroy
             }
             default {
-                incr msgCount
-                after 0 [list {*}$userCb 0 $msg]
-                if {$msgCount == $batch_size} {
+                incr MsgCount
+                after 0 [list {*}$UserCb 0 $msg]
+                if {$MsgCount == $Batch} {
                     my destroy
                 }
             }
         }
     }
     destructor {
-        if {$batch_size - $msgCount <= 1 || $reqID == 0} {
+        if {$Batch - $MsgCount <= 1 || $ID == 0} {
             return
         }
-        $conn cancel_request $reqID
+        $Conn cancel_request $ID
     }
 }
 
 oo::class create ::nats::jet_stream {
-    variable conn _timeout api_prefix domain doTrace
+    # TODO remove Domain?
+    variable Conn Timeout ApiPrefix Domain Trace
 
-    # do NOT call directly! instead use [$connection jet_stream]
-    constructor {c t d do_trace} {
-        set conn $c
-        set _timeout $t ;# avoid clash with -timeout option when using _parse_args
-        set domain $d
+    constructor {c t d trace} {
+        set Conn $c
+        set Timeout $t
+        set Domain $d
         if {$d eq ""} {
-            set api_prefix \$JS.API
+            set ApiPrefix \$JS.API
         } else {
-            set api_prefix \$JS.$d.API
+            set ApiPrefix \$JS.$d.API
         }
-        set doTrace $do_trace
+        set Trace $trace
     }
     
     # JetStream Direct Get https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-31.md
@@ -142,9 +142,9 @@ oo::class create ::nats::jet_stream {
         
         # don't use ApiRequest to avoid spamming debug traces
         if [info exists last_by_subj] {
-            set msg [$conn request "$api_prefix.DIRECT.GET.$stream.$last_by_subj" "" -timeout $_timeout -dictmsg 1]
+            set msg [$Conn request "$ApiPrefix.DIRECT.GET.$stream.$last_by_subj" "" -timeout $Timeout -dictmsg 1]
         } else {
-            set msg [$conn request "$api_prefix.DIRECT.GET.$stream" [nats::_local2json $spec $args] -timeout $_timeout -dictmsg 1]
+            set msg [$Conn request "$ApiPrefix.DIRECT.GET.$stream" [nats::_local2json $spec $args] -timeout $Timeout -dictmsg 1]
         }
         set status [nats::header lookup $msg Status 0]
         switch -- $status {
@@ -173,11 +173,11 @@ oo::class create ::nats::jet_stream {
                   next_by_subj valid_str null
                   seq          int null}
         
-        set response [json::json2dict [$conn request "$api_prefix.STREAM.MSG.GET.$stream" [nats::_dict2json $spec $args] -timeout $_timeout -dictmsg false]]
+        set response [json::json2dict [$Conn request "$ApiPrefix.STREAM.MSG.GET.$stream" [nats::_dict2json $spec $args] -timeout $Timeout -dictmsg false]]
         nats::_checkJsError $response
         set encoded_msg [dict get $response message] ;# it is encoded in base64
         set data [binary decode base64 [dict lookup $encoded_msg data]]
-        if {[$conn cget -utf8_convert]} {
+        if {[$Conn cget -utf8_convert]} {
             # ofc method MSG has "convertfrom" as well, but it has no effect on base64 data, so we need to call "convertfrom" again
             set data [encoding convertfrom utf-8 $data]
         }
@@ -214,7 +214,7 @@ oo::class create ::nats::jet_stream {
             throw {NATS ErrInvalidArg} "Invalid consumer name $consumer"
         }
 
-        set subject "$api_prefix.CONSUMER.MSG.NEXT.$stream.$consumer"
+        set subject "$ApiPrefix.CONSUMER.MSG.NEXT.$stream.$consumer"
         # TODO add idle_heartbeat
         nats::_parse_args $args {
             timeout timeout null
@@ -234,7 +234,7 @@ oo::class create ::nats::jet_stream {
                 throw {NATS ErrInvalidArg} "-expires requires -timeout"
             }
             set no_wait true
-            set timeout $_timeout
+            set timeout $Timeout
         }
         # implementation in official clients is overly complex and is done in 2 steps:
         # 1. a no_wait fetch
@@ -262,7 +262,7 @@ oo::class create ::nats::jet_stream {
         } else {
             set req [nats::AsyncPullRequest new $callback]
         }
-        return [$req run $conn $subject [nats::_local2json $json_spec] $timeout $batch]
+        return [$req run $Conn $subject [nats::_local2json $json_spec] $timeout $batch]
     }
     
     method cancel_pull_request {reqID} {
@@ -271,11 +271,11 @@ oo::class create ::nats::jet_stream {
     
     # different types of ACKs: https://docs.nats.io/using-nats/developer/develop_jetstream/consumers#delivery-reliability
     method ack {message} {
-        $conn publish [nats::msg reply $message] ""
+        $Conn publish [nats::msg reply $message] ""
     }
 
     method ack_sync {message} {
-       $conn request [nats::msg reply $message] "" -timeout $_timeout
+       $Conn request [nats::msg reply $message] "" -timeout $Timeout
     }
     
     method nak {message args} {
@@ -286,15 +286,15 @@ oo::class create ::nats::jet_stream {
         if {[info exists delay]} {
             append nack_msg " [nats::_local2json {delay ns null}]"
         }
-        $conn publish [nats::msg reply $message] $nack_msg
+        $Conn publish [nats::msg reply $message] $nack_msg
     }
 
     method term {message} {
-        $conn publish [nats::msg reply $message] "+TERM"
+        $Conn publish [nats::msg reply $message] "+TERM"
     }
 
     method in_progress {message} {
-        $conn publish [nats::msg reply $message] "+WPI"
+        $Conn publish [nats::msg reply $message] "+WPI"
     }
     
     # nats schema info --yaml io.nats.jetstream.api.v1.pub_ack_response
@@ -309,15 +309,15 @@ oo::class create ::nats::jet_stream {
             stream valid_str ""
         }
         if {![info exists timeout]} {
-            set timeout $_timeout
+            set timeout $Timeout
         }
         if {$stream ne ""} {
             nats::header set msg Nats-Expected-Stream $stream
         }
         if {$callback ne ""} {
-            return [$conn request_msg $msg -callback [mymethod PublishCallback $callback] -timeout $timeout -dictmsg false]
+            return [$Conn request_msg $msg -callback [mymethod PublishCallback $callback] -timeout $timeout -dictmsg false]
         }
-        set response [json::json2dict [$conn request_msg $msg -timeout $timeout -dictmsg false]]
+        set response [json::json2dict [$Conn request_msg $msg -timeout $timeout -dictmsg false]]
         nats::_checkJsError $response
         return $response ;# fields: stream,seq,duplicate
     }
@@ -356,7 +356,7 @@ oo::class create ::nats::jet_stream {
             }
         }
         # see JetStreamManager.add_consumer in nats.py
-        set version_cmp [package vcompare 2.9.0 [dict get [$conn server_info] version]]
+        set version_cmp [package vcompare 2.9.0 [dict get [$Conn server_info] version]]
         set check_subj true
         if {($version_cmp < 1) && [info exists name]} {
             if {[info exists filter_subject] && $filter_subject ne ">"} {
@@ -393,7 +393,7 @@ oo::class create ::nats::jet_stream {
     
     method add_consumer_from_json {stream consumer json_config} {
         set msg [json::write object stream_name [json::write string $stream] config $json_config]
-        set json_response [$conn request "$api_prefix.CONSUMER.DURABLE.CREATE.$stream.$consumer" $msg -timeout $_timeout -dictmsg false]
+        set json_response [$Conn request "$ApiPrefix.CONSUMER.DURABLE.CREATE.$stream.$consumer" $msg -timeout $Timeout -dictmsg false]
         set dict_response [json::json2dict $json_response]
         nats::_checkJsError $dict_response
         return $json_response
@@ -441,7 +441,7 @@ oo::class create ::nats::jet_stream {
         # remove the args that do not belong to a consumer configuration
         dict unset consumerConfig callback
         dict unset consumerConfig post
-        return [nats::ordered_consumer new $conn [self] $stream $consumerConfig $callback $post]
+        return [nats::ordered_consumer new $Conn [self] $stream $consumerConfig $callback $post]
     }
     
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_create_request
@@ -489,7 +489,7 @@ oo::class create ::nats::jet_stream {
     
     method add_stream_from_json {json_config} {
         set stream_name [dict get [json::json2dict $json_config] name]
-        set json_response [$conn request "$api_prefix.STREAM.CREATE.$stream_name" $json_config -timeout $_timeout -dictmsg false]
+        set json_response [$Conn request "$ApiPrefix.STREAM.CREATE.$stream_name" $json_config -timeout $Timeout -dictmsg false]
         set dict_response [json::json2dict $json_response]
         nats::_checkJsError $dict_response
         return $json_response
@@ -552,7 +552,7 @@ oo::class create ::nats::jet_stream {
         if {[dict get $stream_info config max_msgs_per_subject] < 1} {
             throw {NATS ErrBucketNotFound} "Bucket $bucket not found"
         }
-        return [nats::key_value new $conn [self] $domain $bucket [dict get $stream_info config]]
+        return [nats::key_value new $Conn [self] $Domain $bucket [dict get $stream_info config]]
     }
 
     method create_kv_bucket {bucket args} {
@@ -610,7 +610,7 @@ oo::class create ::nats::jet_stream {
             dict set stream_config subjects "\$KV.$bucket.>"
         }
         set stream_info [my add_stream "KV_$bucket" {*}$stream_config]
-        return [::nats::key_value new $conn [self] $domain $bucket [dict get $stream_info config]]
+        return [::nats::key_value new $Conn [self] $Domain $bucket [dict get $stream_info config]]
     }
 
     method delete_kv_bucket {bucket} {
@@ -668,12 +668,12 @@ oo::class create ::nats::jet_stream {
     }
     method ApiRequest {subj msg {checkSubj true}} {
         try {
-            if {$doTrace} {
-                [info object namespace $conn]::log::debug ">>> $api_prefix.$subj $msg"
+            if {$Trace} {
+                [info object namespace $Conn]::log::debug ">>> $ApiPrefix.$subj $msg"
             }
-            set replyJson [$conn request "$api_prefix.$subj" $msg -timeout $_timeout -dictmsg false -check_subj $checkSubj]
-            if {$doTrace} {
-                [info object namespace $conn]::log::debug "<<< $api_prefix.$subj $replyJson"
+            set replyJson [$Conn request "$ApiPrefix.$subj" $msg -timeout $Timeout -dictmsg false -check_subj $checkSubj]
+            if {$Trace} {
+                [info object namespace $Conn]::log::debug "<<< $ApiPrefix.$subj $replyJson"
             }
             set response [json::json2dict $replyJson]
         } trap {NATS ErrNoResponders} err {

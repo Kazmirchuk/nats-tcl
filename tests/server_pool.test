@@ -13,7 +13,7 @@ set conn [nats::connection new "ServerPool" -log_chan [tcltest::outputChannel]]
 set connNs [info object namespace $conn]
 $conn configure -randomize false
 
-set sp [set ${conn}::serverPool] ;# access to a private variable only for test purposes!
+set sp [set ${connNs}::serverPool] ;# access to a private variable only for test purposes!
 
 test server_pool-1 "Parse URL with hostname" -body {
     $sp parse nats-server1.com

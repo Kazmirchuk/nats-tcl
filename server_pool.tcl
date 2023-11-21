@@ -7,31 +7,31 @@ package require uri
 package require struct::list
 
 oo::class create ::nats::server_pool {
-    variable servers conn
+    variable Servers Conn
     
     constructor {c} {
-        set servers [list] ;# list of dicts working as FIFO queue
+        set Servers [list] ;# list of dicts working as FIFO queue
         # each dict contains: host port scheme discovered reconnects last_attempt (ms, mandatory), user password auth_token (optional)
-        set conn $c
+        set Conn $c
     }
     
     # used only for URL discovered from the INFO message
     # remember that it carries only IP:port, so no scheme etc
     method add {url} {
-        set ns [info object namespace $conn]
+        set ns [info object namespace $Conn]
         try {
             set newServer [my parse $url]
         } trap {NATS INVALID_ARG} err {
             ${ns}::log::warn $err ;# very unlikely
             return
         }
-        foreach s $servers {
+        foreach s $Servers {
             if {[dict get $s host] eq [dict get $newServer host] && [dict get $s port] == [dict get $newServer port]} {
                 return ;# we already know this server
             }
         }
         dict set newServer discovered true
-        set servers [linsert $servers 0 $newServer] ;# recall that current server is always at the end of the list
+        set Servers [linsert $Servers 0 $newServer] ;# the current server is always at the end of the list
         ${ns}::log::debug "Added $url to the server pool"
     }
     
@@ -39,17 +39,16 @@ oo::class create ::nats::server_pool {
     method set_servers {urls} {
         set result [list]
         foreach url $urls {
-            lappend result [my parse $url] ;# will throw INVALID_ARG in case of invalid URL - let it propagate
+            lappend result [my parse $url] ;# will throw ErrInvalidArg in case of invalid URL - let it propagate
         }
-        
-        if {[$conn cget randomize]} {
+        if {[$Conn cget randomize]} {
             # ofc lsort will mess up the URL list if randomize=false
             # interestingly, it seems that official NATS clients don't check the server list for duplicates
             set result [lsort -unique $result]
             # IMHO official clients do shuffling too often, at least in 3 places! I do it only once 
             set result [struct::list shuffle $result]
         }
-        set servers $result
+        set Servers $result
     }
     
     method parse {url} {
@@ -93,20 +92,20 @@ oo::class create ::nats::server_pool {
     }
     
     method next_server {} {
-        set ns [info object namespace $conn]
+        set ns [info object namespace $Conn]
         while {1} {
-            if { [llength $servers] == 0 } {
+            if { [llength $Servers] == 0 } {
                 throw {NATS ErrNoServers} "Server pool is empty"
             }
-            set attempts [$conn cget max_reconnect_attempts]
-            set wait [$conn cget reconnect_time_wait]
+            set attempts [$Conn cget max_reconnect_attempts]
+            set wait [$Conn cget reconnect_time_wait]
             #"pop" a server; using struct::queue seems like an overkill for such a small list
-            set s [lindex $servers 0]
+            set s [lindex $Servers 0]
             # during initial connecting process we go through the pool only once
-            if {[$conn cget status] eq $nats::status_connecting && [dict get $s reconnects]}  {
+            if {[$Conn cget status] eq $nats::status_connecting && [dict get $s reconnects]}  {
                 throw {NATS ErrNoServers} "No servers available for connection"
             }
-            set servers [lreplace $servers 0 0]
+            set Servers [lreplace $Servers 0 0]
             # max_reconnect_attempts == -1 means "unlimited". See also selectNextServer in nats.go
             if {$attempts >= 0 && [dict get $s reconnects] >= $attempts} {
                 ${ns}::log::debug "Removed [dict get $s host]:[dict get $s port] from the server pool"
@@ -125,34 +124,34 @@ oo::class create ::nats::server_pool {
                     # user called "disconnect"
                     after cancel $timer
                     dict set s last_attempt [clock milliseconds]
-                    lappend servers $s
+                    lappend Servers $s
                     throw {NATS STOP_CORO} "Stop coroutine" ;# break from the main loop
                 }
             }
-            lappend servers $s
+            lappend Servers $s
             break
         }
         return [my current_server]
     }
     
     method current_server_connected {ok} {
-        [info object namespace $conn]::my CancelConnectTimer
-        set s [lindex $servers end]
+        [info object namespace $Conn]::my CancelConnectTimer
+        set s [lindex $Servers end]
         dict set s last_attempt [clock milliseconds]
         if {$ok} {
             dict set s reconnects 0
         } else {
             dict incr s reconnects
         }
-        lset servers end $s
+        lset Servers end $s
     }
     
     method format_credentials {} {
-        set s [lindex $servers end]
+        set s [lindex $Servers end]
         
-        set def_user [$conn cget user]
-        set def_pass [$conn cget password]
-        set def_token [$conn cget token]
+        set def_user [$Conn cget user]
+        set def_pass [$Conn cget password]
+        set def_token [$Conn cget token]
         
         if {[dict exists $s user] && [dict exists $s password]} {
             return [list user [json::write string [dict get $s user]] pass [json::write string [dict get $s password]]]
@@ -170,25 +169,25 @@ oo::class create ::nats::server_pool {
     }
     
     method current_server {} {
-        set s [lindex $servers end]
+        set s [lindex $Servers end]
         return [list [dict get $s host] [dict get $s port] [dict get $s scheme]]
     }
     
     method all_servers {} {
-        return $servers
+        return $Servers
     }
     
     method clear {} {
-        set servers [list]
+        set Servers [list]
     }
     
     method reset_counters {} {
         set new_list [list]
-        foreach s $servers {
+        foreach s $Servers {
             dict set s last_attempt 0
             dict set s reconnects 0
             lappend new_list $s
         }
-        set servers $new_list
+        set Servers $new_list
     }
 }

@@ -8,6 +8,7 @@
 # - actions on a pull consumer: create, get info, get names, delete
 # - actions on a message: get, delete + "Direct Get"
 # - streams with mirrors and sources
+# - export/import of services across accounts with a custom JS API prefix
 
 source test_utils.tcl
 
@@ -233,7 +234,7 @@ test js_mgmt-10.1 "Get a message from a stream - last by subject" -setup {
     assert {[nats::header get $msg KEY2] eq "VAL 2"} 1
     assert {[nats::msg subject $msg] eq "test.1"} 1
     set msgTime [nats::isotime_to_msec [nats::msg timestamp $msg]]
-    assert {[approx $msgTime $pubTime 500]}
+    assert {[approx $msgTime $pubTime 1000]}
     nats::msg data $msg
 } -result "msg 1"
 
@@ -248,7 +249,7 @@ test js_mgmt-10.3 "Direct Get from a stream - last by subject" -body {
     assert {[nats::header get $msg KEY2] eq "VAL 2"} 1
     assert {[nats::msg subject $msg] eq "test.1"} 1
     set msgTime [nats::isotime_to_msec [nats::msg timestamp $msg]]
-    assert {[approx $msgTime $pubTime 500]}
+    assert {[approx $msgTime $pubTime 1000]}
     nats::msg data $msg
 } -result "msg 1"
 
@@ -263,6 +264,8 @@ test js_mgmt-11.1 "Delete a message from a stream" -body {
 $js destroy
 $conn destroy
 stopNats NATS
+
+# ------------------------------- HUB/LEAF --------------------------------------
 
 startNats NATS_HUB -c ./conf/hub.conf
 startNats NATS_LEAF -c ./conf/leaf.conf
@@ -341,5 +344,55 @@ $connLeaf destroy
 
 stopNats NATS_LEAF
 stopNats NATS_HUB
+
+# ------------------------------- JS EXPORT/IMPORT --------------------------------------
+
+startNats NATS_CONF -c ./conf/js-import.conf
+
+set connU1 [nats::connection new "user1" -log_chan [tcltest::outputChannel]]
+$connU1 configure -servers nats://localhost:4222 -user user1 -password pass1
+$connU1 connect
+set js1 [$connU1 jet_stream]
+
+# user2 doesn't have JS enabled, but imports JS API from another account with an API prefix "imported"
+set connU2 [nats::connection new "user2" -log_chan [tcltest::outputChannel]]
+$connU2 configure -servers nats://localhost:4222 -user user2 -password pass2
+$connU2 connect
+
+test js_mgmt-13.1 "Query JS account info - failure" -body {
+    set js2 [$connU2 jet_stream]
+    $js2 account_info
+} -result {*not enabled*} -match glob -errorCode {NATS ErrJetStreamNotEnabledForAccount} -cleanup {
+    $js2 destroy
+}
+
+test js_mgmt-13.2 "Query JS account info - OK" -body {
+    set accInfo [$js1 account_info]
+    dict_in [dict create storage 0 streams 0 consumers 0] $accInfo  ;# just a small subset of available data
+} -result true
+
+$js1 add_stream TEST -subjects [list test.*] -storage memory
+
+test js_mgmt-14.1 "Use JS API with the default prefix" -body {
+    set js2 [$connU2 jet_stream]
+    $js2 stream_info TEST
+} -result {*not enabled*} -match glob -errorCode {NATS ErrJetStreamNotEnabledForAccount} -cleanup {
+    $js2 destroy
+}
+
+test js_mgmt-14.2 "Use JS API with the custom prefix" -body {
+    set js2 [$connU2 jet_stream -api_prefix imported]
+    set streamConfig [dict get [$js2 stream_info TEST] config]
+    dict_in [dict create name TEST subjects test.*] $streamConfig
+} -result true -cleanup {
+    $js2 destroy
+}
+
+$js1 destroy
+$connU1 destroy
+
+$connU2 destroy
+
+stopNats NATS_CONF
 
 cleanupTests

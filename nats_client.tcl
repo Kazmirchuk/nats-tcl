@@ -564,8 +564,12 @@ oo::class create ::nats::connection {
             timeout timeout 5000
             domain valid_str ""
             trace bool false
+            api_prefix valid_str ""
         }
-        return [nats::jet_stream new [self] $timeout $domain $trace]
+        if {$domain ne "" && $api_prefix ne ""} {
+            throw {NATS ErrInvalidArg} "-domain and -api_prefix are mutually exclusive"
+        }
+        return [nats::jet_stream new [self] $timeout $api_prefix $domain $trace]
     }
     
     method inbox {} {

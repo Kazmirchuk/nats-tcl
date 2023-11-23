@@ -118,19 +118,22 @@ oo::class create ::nats::AsyncPullRequest {
 }
 
 oo::class create ::nats::jet_stream {
-    # TODO remove Domain?
     variable Conn Timeout ApiPrefix Domain Trace
 
-    constructor {c t d trace} {
-        set Conn $c
-        set Timeout $t
-        set Domain $d
-        if {$d eq ""} {
-            set ApiPrefix \$JS.API
-        } else {
-            set ApiPrefix \$JS.$d.API
-        }
+    constructor {conn timeout api_prefix domain trace} {
+        set Conn $conn
+        set Timeout $timeout
         set Trace $trace
+        if {$api_prefix ne ""} {
+            set ApiPrefix $api_prefix
+            return
+        }
+        set Domain $domain
+        if {$domain eq ""} {
+            set ApiPrefix "\$JS.API"
+        } else {
+            set ApiPrefix "\$JS.$domain.API"
+        }
     }
     
     # JetStream Direct Get https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-31.md
@@ -552,6 +555,7 @@ oo::class create ::nats::jet_stream {
         if {[dict get $stream_info config max_msgs_per_subject] < 1} {
             throw {NATS ErrBucketNotFound} "Bucket $bucket not found"
         }
+        # TODO what if custom ApiPrefix ?
         return [nats::key_value new $Conn [self] $Domain $bucket [dict get $stream_info config]]
     }
 
@@ -635,6 +639,10 @@ oo::class create ::nats::jet_stream {
     
     method empty_kv_bucket {bucket} {
         return [my purge_stream "KV_$bucket"]
+    }
+    # nats schema info --yaml io.nats.jetstream.api.v1.account_info_response
+    method account_info {} {
+        return [my ApiRequest "INFO" ""]
     }
 
     method CheckBucketName {bucket} {
@@ -852,6 +860,13 @@ proc ::nats::_checkJsError {msg} {
                 throw {NATS ErrStreamNotFound} $errDescr
             }
             
+        }
+    }
+    if {[dict get $errDict code] == 503} {
+        switch -- [dict get $errDict err_code] {
+            10039 {
+                throw {NATS ErrJetStreamNotEnabledForAccount} $errDescr
+            }
         }
     }
     throw [list NATS ErrJSResponse [dict get $errDict code] [dict get $errDict err_code]] $errDescr

@@ -22,7 +22,7 @@ All commands are defined in and exported from the `::nats` namespace.
 [*objectName* current_server](#objectName-current_server) <br/>
 [*objectName* all_servers](#objectName-all_servers) <br/>
 [*objectName* server_info](#objectName-server_info) <br/>
-[*objectName* jet_stream ?-timeout *ms*? ?-domain *domain*? ?-trace *bool*?](#objectname-jet_stream--timeout-ms--domain-domain--trace-bool) <br/>
+[*objectName* jet_stream *?args?*](#objectname-jet_stream-args) <br/>
 [*objectName* destroy](#objectName-destroy) <br/>
 
 ## Ensembles
@@ -187,7 +187,7 @@ Sends a request with a message created using [nats::msg](#natsmsg). The rest of 
 Cancels the asynchronous request with the given `reqID`.
 
 ### objectName ping ?-timeout *ms*?
-Triggers a ping-pong exchange with the NATS server, enters (coroutine-aware) `vwait` and returns true upon success. If the server does not reply within the specified timeout (ms), it raises `ErrTimeout`. Default timeout is 10s. You can use this method to check if the server is alive or ensure all prior calls to `publish` and `subscribe` are flushed to NATS. Note that in other NATS clients this function is usually called "flush".
+Triggers a ping-pong exchange with the NATS server, enters (coroutine-aware) `vwait` and returns true upon success. If the server does not reply within the specified timeout (ms), it raises `ErrTimeout`. Default timeout is 10s. You can use this method to check if the server is alive or ensure all prior calls to `publish` and `subscribe` have been flushed to NATS. Note that in other NATS clients this function is usually called "flush".
 
 ### objectName inbox 
 Returns a new inbox - random subject starting with _INBOX.
@@ -201,15 +201,18 @@ Returns a list with all servers in the pool.
 ### objectName server_info
 Returns a dict with the INFO message from the current server.
 
-### objectName jet_stream ?-timeout *ms*? ?-domain *domain*? ?-trace *bool*?
-This 'factory' method creates [jetStreamObject](JsAPI.md) to work with JetStream. `-timeout` (default 5s) is applied for all requests to JetStream NATS API. `domain` (empty string by default) specifies the JetStream [domain](https://docs.nats.io/running-a-nats-service/configuration/leafnodes/jetstream_leafnodes).
-
-The `-trace` option enables debug logging of every request by `jetStreamObject` to the NATS JS API similar to the `--trace` option in NATS CLI. Remember to set the logging level in `connection` to `debug` as well.
+### objectName jet_stream *?args?*
+This 'factory' method creates [jetStreamObject](JsAPI.md) to work with JetStream.
+You can provide the following options:
+- `-timeout ms` - timeout for all requests to JetStream API. Default is 5s.
+- `-domain str` - specifies the JetStream [domain](https://docs.nats.io/running-a-nats-service/configuration/leafnodes/jetstream_leafnodes).
+- `-api_prefix str` - specifies the JetStream API prefix. This prefix is needed when JS API is [imported](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-19.md) from another account. You can specify either `-domain` or `-api_prefix`, but not both.
+- `-trace bool` - enables debug logging of every request to the JS API similar to the `--trace` option in NATS CLI. Remember to set the logging level in `connection` to `debug` as well.
 
 Remember to destroy this object when it is no longer needed - there's no built-in garbage collection in `connection`.
 
 ### objectName destroy
-TclOO destructor. It calls `disconnect` and then destroys the object.
+TclOO destructor. It calls `disconnect` and then destroys the connection.
 
 ## Ensemble `nats::msg`
 This ensemble encapsulates all commands to work with a NATS message. Accessing it as a dict is deprecated. 

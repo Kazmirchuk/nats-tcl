@@ -206,7 +206,7 @@ This 'factory' method creates [jetStreamObject](JsAPI.md) to work with JetStream
 You can provide the following options:
 - `-timeout ms` - timeout for all requests to JetStream API. Default is 5s.
 - `-domain str` - specifies the JetStream [domain](https://docs.nats.io/running-a-nats-service/configuration/leafnodes/jetstream_leafnodes).
-- `-api_prefix str` - specifies the JetStream API prefix. This prefix is needed when JS API is [imported](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-19.md) from another account. You can specify either `-domain` or `-api_prefix`, but not both.
+- `-api_prefix str` - specifies the JetStream API prefix. This prefix is needed when JS API is [imported](https://docs.nats.io/running-a-nats-service/configuration/securing_nats/accounts#import-export-example) from another account. You can specify either `-domain` or `-api_prefix`, but not both.
 - `-trace bool` - enables debug logging of every request to the JS API similar to the `--trace` option in NATS CLI. Remember to set the logging level in `connection` to `debug` as well.
 
 Remember to destroy this object when it is no longer needed - there's no built-in garbage collection in `connection`.

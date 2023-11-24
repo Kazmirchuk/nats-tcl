@@ -147,7 +147,7 @@ oo::class create ::nats::jet_stream {
         if [info exists last_by_subj] {
             set msg [$Conn request "$ApiPrefix.DIRECT.GET.$stream.$last_by_subj" "" -timeout $Timeout -dictmsg 1]
         } else {
-            set msg [$Conn request "$ApiPrefix.DIRECT.GET.$stream" [nats::_local2json $spec $args] -timeout $Timeout -dictmsg 1]
+            set msg [$Conn request "$ApiPrefix.DIRECT.GET.$stream" [nats::_local2json $spec] -timeout $Timeout -dictmsg 1]
         }
         set status [nats::header lookup $msg Status 0]
         switch -- $status {
@@ -265,7 +265,11 @@ oo::class create ::nats::jet_stream {
         } else {
             set req [nats::AsyncPullRequest new $callback]
         }
-        return [$req run $Conn $subject [nats::_local2json $json_spec] $timeout $batch]
+        set msg [nats::_local2json $json_spec]
+        if {$Trace} {
+            [info object namespace $Conn]::log::debug ">>> $subject $msg"
+        }
+        return [$req run $Conn $subject $msg $timeout $batch]
     }
     
     method cancel_pull_request {reqID} {

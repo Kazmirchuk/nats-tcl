@@ -72,17 +72,34 @@ Unfortunately, I don't have enough capacity to cover the whole JetStream functio
 - fetching messages from pull consumers
 - support for all kinds of message acknowledgement
 - JetStream asset management (streams and pull/push consumers)
+- [Key/Value store](KvAPI.md)
 
 The implementation can tolerate minor changes in JetStream API. E.g. a publish acknowledgment is returned just as a dict parsed from JSON. So, if in future the JSON schema gets a new field, it will be automatically available in this dict.
 
 If you need other JetStream functions, e.g. Object Store, you can easily implement them yourself using core NATS requests. No need to interact directly with the TCP socket. Of course, PRs are always welcome.
 
-## Notable differences from official NATS clients
-Note that API of official NATS clients (`JetStreamContext`) is designed in a way that allows to create a consumer implicitly with a subscription (e.g. `JetStreamContext.pull_subscribe` in nats.py). I find such design somewhat confusing, so the Tcl API clearly distinguishes between creating a consumer and a subscription.
+## Notes on the JetStream Client API v2
+In June 2023 Synadia has [announced](https://nats.io/blog/preview-release-new-jetstream-client-api/) some major changes to the JetStream Client API. You can find more details in [ADR-37](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-37.md) and in the [nats.go](https://pkg.go.dev/github.com/nats-io/nats.go/jetstream) docs. Note that these changes are purely client-side, and there are no new server-side concepts.
 
-Also, official NATS clients often provide an auto-acknowledgment option (and sometimes even default to it!) - I find it potentially harmful, so it's missing from this client. Always remember to acknoledge JetStream messages according to your policy.
+Of course, this announcement affects development of the Tcl client as well. A lot of effort has been invested in the design following JetStream API v1. I need to balance my workload vs keeping in line (more or less) with other client libraries. So, in this library there is no clear distinction between v1 and v2, but rather a pragmatic middle ground. Here is a list of most important design changes by Synadia together with my responses:
 
-The Tcl client does not provide a dedicated method to subscribe to push consumers. The core NATS subscription is perfectly adequate for the task. If your push consumer is configured with idle heartbeats, you will need to filter them out by checking `nats::msg idle_heartbeat`. You can find an example of such subscription in [js_msg.tcl](examples/js_msg.tcl).
+1. Streams and Consumers have their own classes now. So, e.g. to query the `CONSUMER.INFO` NATS API using JetStream v1 you call:
+```go
+info, err := js.ConsumerInfo(streamName, consumerName)
+```
+While with JetStream v2 you call:
+```go
+stream, err := js.Stream(ctx, streamName)
+consumer, err := stream.Consumer(ctx, consumerName)
+info, err := consumer.Info(ctx)
+```
+The benefit is clear for all programming languages having proper autocompletion support, because you get a comprehensible list of all functions related to a stream or consumer, instead of one huge list of functions in `JetStreamContext`. Unfortunately, Tcl doesn't have such autocompletion, so introduction of new TclOO classes for streams and consumers would only complicate the library. However, there is `nats::ordered_consumer` that is similar to [OrderedConsumer](https://pkg.go.dev/github.com/nats-io/nats.go/jetstream#readme-ordered-consumers) in JetStream v2. 
+
+2. Removal of the overly complex `JetStream.Subscribe` function. This is achieved by breaking it down to smaller specialized functions and by deprecating push consumers. <br/>
+This change does not affect the Tcl client. Pull and push consumers are always created explicitly by calling `add_consumer`. There is no dedicated method to subscribe to push consumers. The core NATS subscription is perfectly adequate for the task. If your push consumer is configured with idle heartbeats, you will need to filter them out by checking `nats::msg idle_heartbeat`. You can find an example of such subscription in [js_msg.tcl](examples/js_msg.tcl).
+
+3. Introduction of the new way to pull messages from a consumer using continuous polling. This API is designed to combine the best of pull and push consumers, thus helping users to move away from push consumers. The new function is called `Consume`, while the old method is called `Fetch`. <br/>
+Unfortunately, the Tcl client already has `$js consume` method that actually performs fetching and should have been called `fetch` from the beginning. So, to avoid future confusion, I've added a new method [fetch](#js-fetch-stream-consumer-args) that works exactly like `consume`. The old `consume` stays in place for backwards compatibility. If in future I decide to implement the real `consume` (continuous polling), it will be done in another TclOO class.
 
 ## JetStream wire format
 The JetStream wire format uses nanoseconds for timestamps and durations in all requests and replies. To be consistent with the rest of the Tcl API, the client converts them to milliseconds before returning to a user. And vice versa: all function arguments are accepted as ms and converted to ns before sending.
@@ -148,7 +165,7 @@ You can provide the following options:
 
 The underlying JetStream API is rather intricate, so I recommend reading [ARD-13](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-13.md) for better understanding.
 
-Pulled messages are always returned as Tcl dicts irrespectively of the `-dictmsg` option. They contain metadata that can be accessed using [nats::metadata](CoreAPI.md#natsmetadata-message).
+Pulled messages are always returned as Tcl dicts irrespectively of the `-dictmsg` option. They contain metadata that can be accessed using [nats::metadata](#natsmetadata-message).
 
 If `-timeout` is omitted, the client sends a `no_wait` request, asking NATS to deliver only currently pending messages. If there are no pending messages, the method returns an empty list.
 

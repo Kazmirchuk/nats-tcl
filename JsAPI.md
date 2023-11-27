@@ -374,14 +374,14 @@ Returns a stream source configuration formatted as JSON to be used with `-mirror
 - `-opt_start_time string` formatted as ISO time
 - `-filter_subject subject`
 
-If the source stream is in another JetStream domain, you will need two more options:
-- `-api domain` (required)
-- `-deliver deliverySubject`
+If the source stream is in another JetStream domain or account, you will need two more options:
+- `-api APIPrefix` (required) - the subject prefix that imports the other account/domain
+- `-deliver deliverySubject` - the delivery subject to use for the push consumer
 
-Example of creating a stream sourcing messages from 2 other streams SOURCE_STREAM_1 and SOURCE_STREAM_1 that are located in the "hub" domain:
+Example of creating a stream sourcing messages from 2 other streams `SOURCE_STREAM_1` and `SOURCE_STREAM_1` that are located in the `hub` domain:
 ```Tcl
-set source1 [nats::make_stream_source -name SOURCE_STREAM_1 -api hub]
-set source2 [nats::make_stream_source -name SOURCE_STREAM_2 -api hub]
+set source1 [nats::make_stream_source -name SOURCE_STREAM_1 -api "\$JS.hub.API"]
+set source2 [nats::make_stream_source -name SOURCE_STREAM_2 -api "\$JS.hub.API"]
 $js add_stream AGGREGATE_STREAM -sources [list $source1 $source2]
 ```
 More details can be found in the official docs about [NATS replication](https://docs.nats.io/running-a-nats-service/nats_admin/jetstream_admin/replication).

@@ -84,7 +84,7 @@ test jet_stream-1.4 "Publish message to JetStream async - wrong stream" -body {
 test jet_stream-2.1 "Pull a message but no ack" -body {
     $jet_stream publish test.1 "msg 1"
     duration {
-        set msgList [$jet_stream consume $stream_name $consumer_name]
+        set msgList [$jet_stream fetch $stream_name $consumer_name]
     } elapsed
     assert {$elapsed < 100}
     assert {[llength $msgList] == 1} 1
@@ -97,7 +97,7 @@ test jet_stream-2.2 "Pull a message and ack" -body {
     sleep 1100 ;# >ack_wait
     # message has not been ACK'ed, so it should be redelivered
     duration {
-        set msgList [$jet_stream consume $stream_name $consumer_name]
+        set msgList [$jet_stream fetch $stream_name $consumer_name]
     } elapsed
     assert {$elapsed < 100}
     assert {[llength $msgList] == 1} 1
@@ -113,7 +113,7 @@ test jet_stream-2.2 "Pull a message and ack" -body {
 test jet_stream-2.3 "No message left after ACK - timeout" -body {
     duration {
         # force a client-side timeout that will raise ErrTimeout
-        catch {$jet_stream consume $stream_name $consumer_name -timeout 500 -expires 1000} err errOpts
+        catch {$jet_stream fetch $stream_name $consumer_name -timeout 500 -expires 1000} err errOpts
     } elapsed
     assert {[approx $elapsed 500]}
     dict get $errOpts -errorcode
@@ -121,18 +121,18 @@ test jet_stream-2.3 "No message left after ACK - timeout" -body {
 
 test jet_stream-2.4 "Pull a message and send in-progress" -body {
     $jet_stream publish test.2 "msg 2"
-    set msg [lindex [$jet_stream consume $stream_name $consumer_name] 0]
+    set msg [lindex [$jet_stream fetch $stream_name $consumer_name] 0]
     assert {[nats::msg data $msg] eq "msg 2"} 1
     sleep 500
     $jet_stream in_progress $msg ;# reset the server's timer
     sleep 600
-    llength [$jet_stream consume $stream_name $consumer_name]
+    llength [$jet_stream fetch $stream_name $consumer_name]
 } -result 0 ;# NATS doesn't redeliver yet
 
 test jet_stream-2.5 "Send nack with delay" -body {
     $jet_stream nak $msg -delay 2000
     duration {
-        set msg [lindex [$jet_stream consume $stream_name $consumer_name -batch_size 1 -expires 2100 -timeout 3000] 0]
+        set msg [lindex [$jet_stream fetch $stream_name $consumer_name -batch_size 1 -expires 2100 -timeout 3000] 0]
     } elapsed
     assert {[approx $elapsed 2000]}
     assert {[nats::msg data $msg] eq "msg 2"} 1
@@ -151,7 +151,7 @@ test jet_stream-3.1 "Fetch with no_wait - no messages" -setup {
     ${natsLogger}::setlevel debug
 } -body {
     duration {
-        set msgList [$jet_stream consume $stream_name $consumer_name -batch_size 10]
+        set msgList [$jet_stream fetch $stream_name $consumer_name -batch_size 10]
     } elapsed
     assert {$elapsed < 100}
     llength $msgList
@@ -163,7 +163,7 @@ test jet_stream-3.2 "Fetch with no_wait - get some messages" -setup {
     }
 } -body {
     duration {
-        set msgList [$jet_stream consume $stream_name $consumer_name -batch_size 10]
+        set msgList [$jet_stream fetch $stream_name $consumer_name -batch_size 10]
     } elapsed
     foreach msg $msgList {
         $jet_stream ack_sync $msg
@@ -178,7 +178,7 @@ test jet_stream-3.3 "Fetch with no_wait - get all messages" -setup {
     }
 } -body {
     duration {
-        set msgList [$jet_stream consume $stream_name $consumer_name -batch_size 10]
+        set msgList [$jet_stream fetch $stream_name $consumer_name -batch_size 10]
     } elapsed
     foreach msg $msgList {
         $jet_stream ack_sync $msg
@@ -193,7 +193,7 @@ test jet_stream-4.1 "Fetch with expires - no messages" -setup {
     ${natsLogger}::setlevel debug
 } -body {
     duration {
-        set msgList [$jet_stream consume $stream_name $consumer_name -batch_size 10 -timeout 1000 -expires 500]
+        set msgList [$jet_stream fetch $stream_name $consumer_name -batch_size 10 -timeout 1000 -expires 500]
     } elapsed
     assert {[approx $elapsed 500]}
     llength $msgList
@@ -201,7 +201,7 @@ test jet_stream-4.1 "Fetch with expires - no messages" -setup {
 
 test jet_stream-4.2 "Fetch with expires - no messages - client-side timeout" -body {
     duration {
-        catch {$jet_stream consume $stream_name $consumer_name -batch_size 10 -timeout 500 -expires 1000} err errOpts
+        catch {$jet_stream fetch $stream_name $consumer_name -batch_size 10 -timeout 500 -expires 1000} err errOpts
     } elapsed
     assert {[approx $elapsed 500]}
     dict get $errOpts -errorcode
@@ -213,7 +213,7 @@ test jet_stream-4.3 "Fetch with expires - get some messages" -setup {
     }
 } -body {
     duration {
-        set msgList [$jet_stream consume $stream_name $consumer_name -batch_size 10 -timeout 1000 -expires 500]
+        set msgList [$jet_stream fetch $stream_name $consumer_name -batch_size 10 -timeout 1000 -expires 500]
     } elapsed
     foreach msg $msgList {
         $jet_stream ack_sync $msg
@@ -229,7 +229,7 @@ test jet_stream-4.4 "Fetch with expires - get all messages" -setup {
     }
 } -body {
     duration {
-        set msgList [$jet_stream consume $stream_name $consumer_name -batch_size 10 -timeout 1000 -expires 500]
+        set msgList [$jet_stream fetch $stream_name $consumer_name -batch_size 10 -timeout 1000 -expires 500]
     } elapsed
     foreach msg $msgList {
         $jet_stream ack_sync $msg
@@ -246,7 +246,7 @@ test jet_stream-5.1 "Async fetch - no messages - expire" -setup {
     ${natsLogger}::setlevel debug
 } -body {
     duration {
-        $jet_stream consume $stream_name $consumer_name -batch_size 10 -timeout 1000 -expires 500 -callback asyncReqCallback
+        $jet_stream fetch $stream_name $consumer_name -batch_size 10 -timeout 1000 -expires 500 -callback asyncReqCallback
         wait_for ::inMsg 1000
     } elapsed
     assert {[approx $elapsed 500]}
@@ -255,7 +255,7 @@ test jet_stream-5.1 "Async fetch - no messages - expire" -setup {
 
 test jet_stream-5.2 "Async fetch - no messages - client-side timeout" -body {
     duration {
-        $jet_stream consume $stream_name $consumer_name -batch_size 10 -timeout 500 -expires 1000 -callback asyncReqCallback
+        $jet_stream fetch $stream_name $consumer_name -batch_size 10 -timeout 500 -expires 1000 -callback asyncReqCallback
         wait_for ::inMsg 1000
     } elapsed
     assert {[approx $elapsed 500]}
@@ -277,7 +277,7 @@ test jet_stream-5.3 "Async fetch - get some messages then expire" -setup {
 } -body {
     duration {
         # the callback will be invoked 3 times with a message and the 4th time with timedOut=1 and a status message 408
-        $jet_stream consume $stream_name $consumer_name -batch_size 10 -timeout 1000 -expires 500 -callback $autoAckCallback
+        $jet_stream fetch $stream_name $consumer_name -batch_size 10 -timeout 1000 -expires 500 -callback $autoAckCallback
         # note that while+wait_for each individual message is unreliable,
         # because the callback may be invoked many times before wait_for returns, so we would miss some messages
         while {[llength $gotMsgs] < 4} {
@@ -304,7 +304,7 @@ test jet_stream-5.4 "Async fetch - get some messages then timeout" -setup {
 } -body {
     duration {
         # the callback will be invoked 3 times with a message and the 4th time with timedOut=1
-        $jet_stream consume $stream_name $consumer_name -batch_size 10 -timeout 500 -expires 1000 -callback $autoAckCallback
+        $jet_stream fetch $stream_name $consumer_name -batch_size 10 -timeout 500 -expires 1000 -callback $autoAckCallback
         while {[llength $gotMsgs] < 4} {
             wait_for ::gotMsgs 1000
         }
@@ -328,7 +328,7 @@ test jet_stream-5.5 "Async fetch - get all messages" -setup {
     }
 } -body {
     duration {
-        $jet_stream consume $stream_name $consumer_name -batch_size 10 -timeout 1000 -expires 500 -callback $autoAckCallback
+        $jet_stream fetch $stream_name $consumer_name -batch_size 10 -timeout 1000 -expires 500 -callback $autoAckCallback
         while {[llength $gotMsgs] < 10} {
             wait_for ::gotMsgs 1000
         }
@@ -349,7 +349,7 @@ test jet_stream-6 "Async fetch with no_wait - no messages" -setup {
     set gotMsgs [list]
 } -body {
     duration {
-        $jet_stream consume $stream_name $consumer_name -batch_size 10 -callback $autoAckCallback
+        $jet_stream fetch $stream_name $consumer_name -batch_size 10 -callback $autoAckCallback
         wait_for ::gotMsgs
     } elapsed
     assert {$elapsed < 100}
@@ -363,7 +363,7 @@ test jet_stream-6 "Async fetch with no_wait - no messages" -setup {
 test jet_stream-7 "Cancel a pull request" -setup {
     set gotMsgs [list]
 } -body {
-    set reqID [$jet_stream consume $stream_name $consumer_name -batch_size 10 -callback $autoAckCallback -timeout 1000]
+    set reqID [$jet_stream fetch $stream_name $consumer_name -batch_size 10 -callback $autoAckCallback -timeout 1000]
     sleep 500
     $jet_stream cancel_pull_request $reqID
     sleep 1000

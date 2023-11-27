@@ -276,12 +276,6 @@ $connHub configure -servers nats://localhost:4222 -user acc -password acc
 $connHub connect
 set jsHub [$connHub jet_stream]
 
-# connect to the Leaf NATS
-set connLeaf [nats::connection new "Conn_Leaf" -log_chan [tcltest::outputChannel]]
-$connLeaf configure -servers nats://localhost:4111 -user acc -password acc
-$connLeaf connect
-set jsLeaf [$connLeaf jet_stream]
-
 test js_mgmt-12.1 "Create a stream mirror in the hub domain" -setup {
     $jsHub add_stream MAIN_STREAM -subjects [list test.*]
     $jsHub publish test.12 "Original message"
@@ -300,9 +294,14 @@ test js_mgmt-12.1 "Create a stream mirror in the hub domain" -setup {
     $jsHub delete_stream STREAM_MIRROR
 }
 
-#TODO test message consumption
+# connect to the Leaf NATS
+set connLeaf [nats::connection new "Conn_Leaf" -log_chan [tcltest::outputChannel]]
+$connLeaf configure -servers nats://localhost:4111 -user acc -password acc
+$connLeaf connect
+set jsLeaf [$connLeaf jet_stream]
+
 test js_mgmt-12.2 "Create a stream mirror in the leaf domain" -body {
-    set mirrorConfig [nats::make_stream_source -name MAIN_STREAM -filter_subject "test.12" -api hub]
+    set mirrorConfig [nats::make_stream_source -name MAIN_STREAM -filter_subject "test.12" -api "\$JS.hub.API"]
     set response [$jsLeaf add_stream STREAM_MIRROR -mirror $mirrorConfig]
     assert {[dict get $response did_create]}
     sleep 300
@@ -310,17 +309,22 @@ test js_mgmt-12.2 "Create a stream mirror in the leaf domain" -body {
     assert {[dict get $streamInfo domain] eq "leaf"} 1
     assert {[dict get $streamInfo mirror name] eq "MAIN_STREAM"} 1
     assert {[dict get $streamInfo mirror filter_subject] eq "test.12"}
-    assert {[dict get $streamInfo mirror external api] eq "hub"}
-} -result "" -cleanup {
+    assert {[dict get $streamInfo domain] eq "leaf"} 1
+    assert {[dict get $streamInfo state messages] == 1} 1
+    set msg [$jsLeaf stream_msg_get STREAM_MIRROR -last_by_subj test.12]
+    nats::msg data $msg
+} -result "Original message" -cleanup {
     $jsLeaf delete_stream STREAM_MIRROR
 }
 
 test js_mgmt-12.3 "Create a stream in the leaf domain with 2 sources in the hub domain" -setup {
     $jsHub add_stream SOURCE_STREAM_1 -subjects [list params1.*]
     $jsHub add_stream SOURCE_STREAM_2 -subjects [list params2.*]
+    $jsHub publish params1.1 "PARAM1"
+    $jsHub publish params2.0 "PARAM2"
 } -body {
-    set source1 [nats::make_stream_source -name SOURCE_STREAM_1 -api hub]
-    set source2 [nats::make_stream_source -name SOURCE_STREAM_2 -api hub]
+    set source1 [nats::make_stream_source -name SOURCE_STREAM_1 -api "\$JS.hub.API"]
+    set source2 [nats::make_stream_source -name SOURCE_STREAM_2 -api "\$JS.hub.API"]
     set response [$jsLeaf add_stream AGGREGATE_STREAM -sources [list $source1 $source2]] ;# may have its own subjects to listen to
     assert {[dict get $response did_create]}
     sleep 300
@@ -330,7 +334,13 @@ test js_mgmt-12.3 "Create a stream in the leaf domain with 2 sources in the hub 
     assert {[dict get [lindex $sources 0] name] eq "SOURCE_STREAM_1"} 1
     assert {[dict get [lindex $sources 1] name] eq "SOURCE_STREAM_2"} 1
     assert {[dict get $streamInfo domain] eq "leaf"} 1
-} -result "" -cleanup {
+        
+    set reply [$jsLeaf add_pull_consumer AGGREGATE_STREAM PULL_CONSUMER -ack_policy none]
+    assert {[dict get $reply name] eq "PULL_CONSUMER"}
+    set msgList [$jsLeaf fetch AGGREGATE_STREAM PULL_CONSUMER -batch_size 2 -timeout 500 ]
+    assert {[llength $msgList] == 2} 1
+    lsort [lmap msg $msgList {nats::msg data $msg}] ;# messages from different sources can be consumed in any order, so need lsort
+} -result {PARAM1 PARAM2} -cleanup {
     $jsLeaf delete_stream AGGREGATE_STREAM
     $jsHub delete_stream SOURCE_STREAM_1
     $jsHub delete_stream SOURCE_STREAM_2

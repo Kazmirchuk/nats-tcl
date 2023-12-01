@@ -72,41 +72,35 @@ $js_hub empty_kv_bucket $hub_bucket
 
 ########### MIRROR IN THE SAME DOMAIN ###########
 
-test key_value-mirror-same-domain-1 "Create a KV mirror in the same domain and get a value" -body {
+# NB! see the clarification about KV mirrors https://github.com/nats-io/natscli/issues/928
+# basically, if you bind to a KV mirror in the same domain, you can't get values from it; you can only put
+# see also func TestKeyValueMirrorDirectGet in nats.go
+test key_value-mirror-direct-get-1 "Create a KV mirror in the same domain and get many values" -body {
     # note that we need to repeat -history 64 here - default history would be 1 irrespectively of the origin bucket
     set kv_mirror [$js_hub create_kv_bucket $mirror_bucket -mirror_name $hub_bucket -history 64]
-    $kv_hub put key1 value3
-    sleep 100 ;# allow NATS to propagate values
-    $kv_mirror get key1
-    # TODO check if bucket must be the original name or mirror name here:
-} -match glob -result [dict create bucket $mirror_bucket key key1 value value3 revision * created * delta {} operation PUT]
-
-test key_value-mirror-same-domain-2 "Put a value into the mirror and check the source KV" -body {
-    $kv_mirror put key1 value4
-    sleep 100
-    $kv_hub get key1
-} -match glob -result [dict create bucket $hub_bucket key key1 value value4 revision * created * delta {} operation PUT]
-
-test key_value-mirror-same-domain-3 "Get history from the mirror" -body {
-    set entries [$kv_mirror history key1]
-    assert {[llength $entries] == 2} 1
-    assert {[dict_in [dict create \
-                      bucket $mirror_bucket \
-                      key key1 \
-                      value value3 \
-                      operation PUT] [lindex $entries 0]]}
-    assert {[dict_in [dict create \
-                      bucket $mirror_bucket \
-                      key key1 \
-                      value value4 \
-                      operation PUT] [lindex $entries 1]]}
+    set streamConfig [dict get [$kv_mirror status] stream_config]
+    assert {[dict get $streamConfig allow_direct]}
+    assert {[dict get $streamConfig mirror_direct]} 
+    for {set i 0} {$i < 50} {incr i} {
+        $kv_hub put "key.$i" "value $i"
+    }
+    sleep 300 ;# allow NATS to propagate values
+    $js_hub delete_kv_bucket $hub_bucket
+    for {set i 0} {$i < 50} {incr i} {
+        # the mirror replies to DIRECT.GET sent to the hub bucket
+        set v [$kv_hub get_value "key.$i"]
+        assert {$v eq "value $i"}
+    }
+} -result "" -cleanup {
+    $kv_hub destroy
+    $kv_mirror destroy
+    $js_hub delete_kv_bucket $mirror_bucket
 }
-
-$kv_mirror destroy
-$js_hub empty_kv_bucket $hub_bucket
 
 # ########### MIRROR FROM ANOTHER DOMAIN ###########
 
+# NB! cross-domain mirrors are deprecated, see the updated ADR-8
+set kv_hub [$js_hub create_kv_bucket $hub_bucket -history 64]
 set kv_leaf [$js_leaf create_kv_bucket $leaf_mirror_bucket -mirror_name $hub_bucket -mirror_domain hub -history 64]
 set rev [$kv_hub put key2 value1]
 sleep 100

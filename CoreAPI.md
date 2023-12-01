@@ -233,9 +233,9 @@ Returns true if this is an idle heartbeat.
 ### msg flow_control *msgValue*
 Returns true if this is a flow control message.
 ### msg seq *msgValue*
-Returns the message sequence number (only for messages returned by `stream_msg_get`).
+Returns the message sequence number (only for messages returned by `stream_msg_get` & `stream_direct_get`).
 ### msg timestamp *msgValue*
-Returns the message timestamp in the ISO format, e.g. 2022-11-22T13:31:35.4514983Z (only for messages returned by `stream_msg_get`).
+Returns the message timestamp in the ISO format, e.g. 2022-11-22T13:31:35.4514983Z (only for messages returned by `stream_msg_get` & `stream_direct_get`).
 ## Ensemble `nats::header`
 This ensemble encapsulates all commands to work with message headers. Accessing them as a dict is deprecated. 
 ### header add *msgVariable key value*

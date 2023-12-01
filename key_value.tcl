@@ -6,29 +6,49 @@
 
 # based on https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-8.md
 oo::class create ::nats::key_value {
-    variable Conn Js Bucket Stream kv_read_prefix kv_write_prefix mirrored_bucket
+    variable Conn Js Bucket Stream ReadPrefix WritePrefix UseJsPrefix UseDirect ;# mirrored_bucket
 
     constructor {connection jet_stream domain bucket_name stream_config} {
         set Conn $connection
         set Js $jet_stream
         set Bucket $bucket_name
-        set Stream "KV_$bucket_name"
-        set kv_read_prefix [expr {$domain eq "" ? "\$KV.$Bucket" : "\$JS.$domain.API.\$KV.$Bucket"}]
-        set kv_write_prefix $kv_read_prefix
-        set mirrored_bucket ""
-        if {[dict exists $stream_config mirror name]} {
-            set mirrored_stream_name [dict get $stream_config mirror name]
-            set mirrored_bucket [string range $mirrored_stream_name 3 end] ;# remove "KV_" from "KV_bucket_name"
-            set kv_write_prefix "\$KV.${mirrored_bucket}"
+        set Stream "KV_$Bucket"
+        # since keys work on top of subjects, using mirrors, JS domains or API import prefixes affects ReadPrefix and WritePrefix
+        # see also nats.go, func mapStreamToKVS
+        # ADR-19 https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-19.md
+        
+        set ReadPrefix "\$KV.$Bucket"
+        set WritePrefix $ReadPrefix
+        set UseJsPrefix false
+        
+        if { [$Js api_prefix] ne "\$JS.API"} {
+            set UseJsPrefix true
+        }
+        set UseDirect [dict get $stream_config allow_direct]
 
+        if {[dict exists $stream_config mirror name]} {
+            set originStream [dict get $stream_config mirror name]
+            set originBucket [string range $originStream 3 end] ;# remove "KV_" from "KV_bucket_name"
+            set WritePrefix "\$KV.$originBucket"
             if {[dict exists $stream_config mirror external api]} {
-                set external_api [dict get $stream_config mirror external api]
-                set kv_write_prefix "${external_api}.\$KV.${mirrored_bucket}"
+                set UseJsPrefix false
+                set ReadPrefix "\$KV.$originBucket"
+                set externalApi [dict get $stream_config mirror external api]
+                set WritePrefix "$externalApi.\$KV.$originBucket"
             }
         }
     }
     
-    method PublishStream {msg} {
+    method PublishToStream {key {value ""} {hdrs ""}} {
+        my CheckKeyName $key
+        if {$UseJsPrefix} {
+            append subject "[$Js api_prefix]."
+        }
+        append subject "$WritePrefix.$key"
+        set msg [nats::msg create $subject -data $value]
+        if {$hdrs ne ""} {
+            dict set msg header $hdrs
+        }
         try {
             return [$Js publish_msg $msg]
         } trap {NATS ErrNoResponders} err {
@@ -54,32 +74,30 @@ oo::class create ::nats::key_value {
     }
     
     method Get {key {revision ""}} {
-        #set subject "$kv_read_prefix.$key"
-        # TODO test key_value-domain-1
-        # nats --trace --js-domain=hub --user acc --password acc --server localhost:4111 stream get KV_MY_HUB_BUCKET -S $KV.MY_HUB_BUCKET.key1
-        # Subject $KV.MY_HUB_BUCKET.key1
-        #set subject "\$KV.*.$key"
-        
-        set subject "\$KV.$Bucket.$key"
-        if {$mirrored_bucket ne ""} {
-            set subject "\$KV.$mirrored_bucket.$key"
+        set subject "$ReadPrefix.$key"
+        if {$UseDirect} {
+            set methodName stream_direct_get
+        } else {
+            set methodName stream_msg_get
         }
         try {
             if {$revision ne ""} {
-                set msg [$Js stream_msg_get $Stream -seq $revision]
+                set msg [$Js $methodName $Stream -seq $revision]
                 # not sure under what conditions this may happen, but nats.go does this check
                 if {$subject ne [nats::msg subject $msg]} {
                     throw {NATS ErrKeyNotFound} "Expected $subject, got [nats::msg subject $msg]"
                 }
             } else {
-                set msg [$Js stream_msg_get $Stream -last_by_subj $subject]
+                set msg [$Js $methodName $Stream -last_by_subj $subject]
             }
         } trap {NATS ErrMsgNotFound} err {
             throw {NATS ErrKeyNotFound} "Key $key not found in bucket $Bucket"
         } trap {NATS ErrStreamNotFound} err {
+            # looks like a bug or design flaw in nats-server that only STREAM.MSG.GET can reply with ErrStreamNotFound; requests to DIRECT.GET simply time out
+            # which is not a real problem because we get here only if somebody else deletes the bucket *after* we've bound to it
             throw {NATS ErrBucketNotFound} "Bucket $Bucket not found"
         }
-        # TODO delta
+        # we know the delta only when using the KV watcher; same in nats.go
         set entry [dict create \
             bucket $Bucket \
             key $key \
@@ -96,10 +114,8 @@ oo::class create ::nats::key_value {
     }
 
     method put {key value} {
-        my CheckKeyName $key
         try {
-            set resp [my PublishStream [nats::msg create "$kv_write_prefix.$key" -data $value]]
-            return [dict get $resp seq]
+            return [dict get [my PublishToStream $key $value] seq]
         } trap {NATS ErrNoResponders} err {
             throw {NATS ErrBucketNotFound} "Bucket $Bucket not found"
         }
@@ -125,29 +141,23 @@ oo::class create ::nats::key_value {
     }
 
     method update {key value revision} {
-        my CheckKeyName $key
-        set msg [nats::msg create "$kv_write_prefix.$key" -data $value]
-        nats::header set msg Nats-Expected-Last-Subject-Sequence $revision
-        set resp [my PublishStream $msg]  ;# throws ErrWrongLastSequence in case of mismatch
+        # nats.go Update doesn't use WritePrefix - seems like their bug
+        set header [dict create Nats-Expected-Last-Subject-Sequence $revision]
+        set resp [my PublishToStream $key $value $header] ;# throws ErrWrongLastSequence in case of mismatch
         return [dict get $resp seq]
     }
 
     method delete {key {revision ""}} {
-        my CheckKeyName $key
-        set msg [nats::msg create "$kv_write_prefix.$key"]
-        nats::header set msg KV-Operation DEL
+        set header [dict create KV-Operation DEL]
         if {$revision ne "" && $revision > 0} {
-            nats::header set msg Nats-Expected-Last-Subject-Sequence $revision
+            dict set header Nats-Expected-Last-Subject-Sequence $revision
         }
-        my PublishStream $msg
+        my PublishToStream $key "" $header
         return
     }
     # TODO add revision
     method purge {key} {
-        my CheckKeyName $key
-        set msg [nats::msg create "$kv_write_prefix.$key"]
-        nats::header set msg KV-Operation PURGE Nats-Rollup sub
-        my PublishStream $msg
+        my PublishToStream $key "" [dict create KV-Operation PURGE Nats-Rollup sub]
         return
     }
 
@@ -183,12 +193,8 @@ oo::class create ::nats::key_value {
         if {$updates_only} {
             set deliver_policy "new"
         }
-        
-        # TODO why use $kv_write_prefix here? filter_subject = "$kv_write_prefix.$key_pattern" ??
-        set filter_subject "\$KV.$Bucket.$key_pattern"
-        if {$mirrored_bucket ne ""} {
-            set filter_subject "\$KV.$mirrored_bucket.$key_pattern"
-        }
+
+        set filter_subject "$ReadPrefix.$key_pattern"
         set consumerOpts [list -description "KV watcher" -headers_only $meta_only -deliver_policy $deliver_policy -filter_subject $filter_subject]
         if [info exists idle_heartbeat] {
             lappend consumerOpts -idle_heartbeat $idle_heartbeat
@@ -229,12 +235,14 @@ oo::class create ::nats::key_value {
             values [dict get $stream_info state messages]]
 
         if {[dict exists $config mirror name]} {
-            # in format "KV_some-name"
+            # strip the leading "KV_"
             dict set kv_info mirror_name [string range [dict get $config mirror name] 3 end]
             if {[dict exists $config mirror external api]} {
-                # in format "$JS.some-domain.API"
-                set external_api [dict get $config mirror external api]
-                dict set kv_info mirror_domain [lindex [split $external_api "."] 1]
+                # in format "$JS.some-domain.API" unless it is imported from another account
+                set externalApi [split [dict get $config mirror external api] .]
+                if {[llength $externalApi] == 3 && [lindex $externalApi 2] eq "API"} {
+                    dict set kv_info mirror_domain [lindex $externalApi 1]
+                }
             }
         }
         # do it here so that underlying stream config will be at the end
@@ -257,7 +265,7 @@ oo::class create ::nats::kv_watcher {
     # watcher options/vars
     variable SubID UserCb InitDone IgnoreDeletes Gathering ResultList ValuesArray Consumer
     # copied from the parent KV bucket, so that the user can destroy it while the watcher is living
-    variable Conn Bucket kv_write_prefix
+    variable Conn Bucket PrefixLen
     
     constructor {kv consumer_opts cb ignore_del arr} {
         set InitDone false  ;# becomes true after the current/historical data has been received
@@ -267,7 +275,7 @@ oo::class create ::nats::kv_watcher {
         set Bucket [set ${kvNS}::Bucket]
         set stream [set ${kvNS}::Stream]
         set js [set ${kvNS}::Js]
-        set kv_write_prefix [set ${kvNS}::kv_write_prefix]
+        set PrefixLen [string length [set ${kvNS}::ReadPrefix]]
         set UserCb $cb
         set IgnoreDeletes $ignore_del
         if {$arr ne ""} {
@@ -302,12 +310,7 @@ oo::class create ::nats::kv_watcher {
                 return
             }
         }
-        #set key [lindex [split $subj .] end] - this would be simple, but keys can have dots!
-        set b [lindex [split $kv_write_prefix .] end]
-        regexp ".*$b\.(.*)" [nats::msg subject $msg] -> key ;# TODO simplify
-        #set key [string range $subj [string length $kv_write_prefix]+1 end]
-        #puts "SUBJ: $subj kv_write_prefix: $kv_write_prefix KEY: $key"
-        # TODO delta
+        set key [string range [nats::msg subject $msg] $PrefixLen+1 end]
         set entry [dict create \
             bucket $Bucket \
             key $key \

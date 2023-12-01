@@ -41,6 +41,7 @@ JetStream functionality of NATS can be accessed by creating the `nats::jet_strea
 [*js* empty_kv_bucket *bucket*](#js-empty_kv_bucket-bucket)<br/>
 
 [*js* account_info](#js-account_info)<br/>
+[*js* api_prefix](#js-api_prefix)<br/>
 
 [*js* destroy](#js-destroy)<br/>
 
@@ -79,7 +80,7 @@ The implementation can tolerate minor changes in JetStream API. E.g. a publish a
 If you need other JetStream functions, e.g. Object Store, you can easily implement them yourself using core NATS requests. No need to interact directly with the TCP socket. Of course, PRs are always welcome.
 
 ## Notes on the JetStream Client API v2
-In June 2023 Synadia has [announced](https://nats.io/blog/preview-release-new-jetstream-client-api/) some major changes to the JetStream Client API. You can find more details in [ADR-37](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-37.md) and in the [nats.go](https://pkg.go.dev/github.com/nats-io/nats.go/jetstream) docs. Note that these changes are purely client-side, and there are no new server-side concepts.
+In June 2023 Synadia has [announced](https://nats.io/blog/preview-release-new-jetstream-client-api/) some major changes to the JetStream Client API. You can find more details in [ADR-37](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-37.md), [nats.go](https://pkg.go.dev/github.com/nats-io/nats.go/jetstream) docs and the [migration guide](https://natsbyexample.com/examples/jetstream/api-migration/go). Note that these changes are purely client-side, and there are no new server-side concepts.
 
 Of course, this announcement affects development of the Tcl client as well. A lot of effort has been invested in the design following JetStream API v1. I need to balance my workload vs keeping in line (more or less) with other client libraries. So, in this library there is no clear distinction between v1 and v2, but rather a pragmatic middle ground. Here is a list of most important design changes by Synadia together with my responses:
 
@@ -100,6 +101,8 @@ This change does not affect the Tcl client. Pull and push consumers are always c
 
 3. Introduction of the new way to pull messages from a consumer using continuous polling. This API is designed to combine the best of pull and push consumers, thus helping users to move away from push consumers. The new function is called `Consume`, while the old method is called `Fetch`. <br/>
 Unfortunately, the Tcl client already has `$js consume` method that actually performs fetching and should have been called `fetch` from the beginning. So, to avoid future confusion, I've added a new method [fetch](#js-fetch-stream-consumer-args) that works exactly like `consume`. The old `consume` stays in place for backwards compatibility. If in future I decide to implement the real `consume` (continuous polling), it will be done in another TclOO class.
+
+4. Having a dedicated Stream class allows the implementation to choose between `STREAM.MSG.GET` and `DIRECT.GET` API depending on the stream configuration, i.e. if it has AllowDirect=true. This is done transparently for the user - compare e.g. `Stream.GetMsg` in JetStream v2 with `JetStreamManager.GetMsg` in JetStream v1 that has an option `DirectGet`.<br/>The Tcl client provides separate methods for these APIs: `stream_msg_get` and `stream_direct_get` respectively. However, [key_value](KvAPI.md) class knows the stream configuration and chooses between these 2 methods automatically.
 
 ## JetStream wire format
 The JetStream wire format uses nanoseconds for timestamps and durations in all requests and replies. To be consistent with the rest of the Tcl API, the client converts them to milliseconds before returning to a user. And vice versa: all function arguments are accepted as ms and converted to ns before sending.
@@ -338,6 +341,8 @@ Returns a list of all Key-Value buckets.
 Deletes all entries and history from the bucket without destroying the bucket itself. Note that it does **not** reset the bucket's revision counter.
 ### js account_info
 Returns a dict with information about the current account, e.g. used storage, number of streams, consumers, various limits etc.
+### js api_prefix
+Returns the API prefix used for requests to JetStream API. It is based on the `-domain` and `-api_prefix` options passed to [$connection jet_stream](CoreAPI.md#objectname-jet_stream-args). Default is "$JS.API".
 ### js destroy
 TclOO destructor. Remember to call it before destroying the parent `nats::connection`.
 ## `nats::ordered_consumer`

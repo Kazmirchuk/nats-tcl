@@ -136,18 +136,31 @@ oo::class create ::nats::jet_stream {
         }
     }
     
+    method api_prefix {} {
+        return $ApiPrefix
+    }
+    
     # JetStream Direct Get https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-31.md
     method stream_direct_get {stream args} {
         set spec {last_by_subj valid_str null
                   next_by_subj valid_str null
                   seq          int null}
         nats::_parse_args $args $spec
-        
-        # don't use ApiRequest to avoid spamming debug traces
+
         if [info exists last_by_subj] {
-            set msg [$Conn request "$ApiPrefix.DIRECT.GET.$stream.$last_by_subj" "" -timeout $Timeout -dictmsg 1]
+            set reqSubj "$ApiPrefix.DIRECT.GET.$stream.$last_by_subj"
+            set reqMsg ""
         } else {
-            set msg [$Conn request "$ApiPrefix.DIRECT.GET.$stream" [nats::_local2json $spec] -timeout $Timeout -dictmsg 1]
+            set reqSubj "$ApiPrefix.DIRECT.GET.$stream"
+            set reqMsg [nats::_local2json $spec]
+        }
+        # ApiRequest assumes that the reply is always JSON which is not the case for DIRECT.GET
+        if {$Trace} {
+            [info object namespace $Conn]::log::debug ">>> $reqSubj $reqMsg"
+        }
+        set msg [$Conn request $reqSubj $reqMsg -timeout $Timeout -dictmsg 1]
+        if {$Trace} {
+            [info object namespace $Conn]::log::debug "<<< $reqSubj $msg"
         }
         set status [nats::header lookup $msg Status 0]
         switch -- $status {
@@ -161,10 +174,9 @@ oo::class create ::nats::jet_stream {
         dict set msg seq [nats::header get $msg Nats-Sequence]
         dict set msg time [nats::header get $msg Nats-Time-Stamp]
         dict set msg subject [nats::header get $msg Nats-Subject]
-        foreach h {Nats-Sequence Nats-Time-Stamp Nats-Subject} {
+        foreach h {Nats-Sequence Nats-Time-Stamp Nats-Subject Nats-Stream} {
             nats::header delete msg $h
         }
-        nats::header delete msg Nats-Stream
         return $msg
     }
     
@@ -176,9 +188,8 @@ oo::class create ::nats::jet_stream {
                   next_by_subj valid_str null
                   seq          int null}
         
-        set response [json::json2dict [$Conn request "$ApiPrefix.STREAM.MSG.GET.$stream" [nats::_dict2json $spec $args] -timeout $Timeout -dictmsg false]]
-        nats::_checkJsError $response
-        set encoded_msg [dict get $response message] ;# it is encoded in base64
+        set response [my ApiRequest "STREAM.MSG.GET.$stream" [nats::_dict2json $spec $args]]
+        set encoded_msg [dict get $response message]
         set data [binary decode base64 [dict lookup $encoded_msg data]]
         if {[$Conn cget -utf8_convert]} {
             # ofc method MSG has "convertfrom" as well, but it has no effect on base64 data, so we need to call "convertfrom" again
@@ -584,7 +595,6 @@ oo::class create ::nats::jet_stream {
         if {$history < 1 || $history > 64} {
             throw {NATS ErrInvalidArg} "History must be between 1 and 64"
         }
-        # TODO allow_direct=true
         set stream_config [dict create \
             allow_rollup_hdrs true \
             deny_delete true \
@@ -593,7 +603,8 @@ oo::class create ::nats::jet_stream {
             deny_purge false \
             max_msgs_per_subject $history \
             num_replicas $num_replicas \
-            storage $storage]
+            storage $storage \
+            allow_direct true]
         
         if {[info exists description]} {
             dict set stream_config description $description
@@ -614,6 +625,7 @@ oo::class create ::nats::jet_stream {
                 lappend srcArgs -api "\$JS.$mirror_domain.API"
             }
             dict set stream_config mirror [nats::make_stream_source {*}$srcArgs]
+            dict set stream_config mirror_direct true
         } else {
             dict set stream_config subjects "\$KV.$bucket.>"
         }

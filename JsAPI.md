@@ -174,9 +174,7 @@ If `-timeout` is omitted, the client sends a `no_wait` request, asking NATS to d
 
 If `-timeout` is given, it defines both the client-side and server-side timeouts for the pull request:
 - the client-side timeout is the timeout for the underlying `request`
-- the server-side timeout is 10ms shorter than `timeout`, and it is sent in the `expires` JSON field. This behaviour is consistent with `nats.go`.
-
-*Note:* you can specify the `-expires` option explicitly (ms), but this is an advanced use case and normally should not be needed.
+- the server-side timeout is 10ms shorter than `timeout`, and it is sent in the `expires` JSON field[^1]. This behaviour is consistent with `nats.go`.
 
 If a callback is not given, the request is synchronous and blocks in a (coroutine-aware) `vwait` until all expected messages are received or the pull request expires. If the client-side timeout fires before the server-side timeout, and no messages have been received, the method raises `ErrTimeout`. In all other cases the method returns a list with as many messages as currently avaiable, but not more than `batch_size`.
 
@@ -247,7 +245,7 @@ Returns a list of all streams or the streams matching the filter.
 Creates or updates a pull or push consumer defined on `stream`. See the [official docs](https://docs.nats.io/nats-concepts/jetstream/consumers#configuration) for explanation of these options.
 | Option        | Type   | Default |
 | ------------- |--------|---------|
-| -name | string | |
+| -name[^2] | string | |
 | -durable_name | string | |
 | -description | string | |
 | -deliver_policy | one of: all, last, new, by_start_sequence<br/> by_start_time last_per_subject | all|
@@ -271,7 +269,6 @@ Creates or updates a pull or push consumer defined on `stream`. See the [officia
 | -num_replicas | int | |
 | -mem_storage | boolean | |
 
-Note that starting from NATS 2.9.0, there is a new option `-name` that is not the same as `-durable_name`. If you provide `-durable_name`, the consumer's default `InactiveThreshold` is unlimited. But if you provide `-name`, the default `InactiveThreshold` is only 5s.<br/>
 Returns a JetStream response as a dict.
 ### js add_pull_consumer *stream consumer ?args?*
 A shortcut for `add_consumer` to create a durable pull consumer. Rest of `args` are the same as above.
@@ -424,3 +421,7 @@ In addition to all [core NATS errors](CoreAPI.md#error-handling), the `jet_strea
 | ErrJSResponse | | Other JetStream error. `code` and `err_code` is passed in the Tcl error code and `description` is used for the error message. |
  
  See also "Error Response" in [ADR-1](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-1.md#error-response).
+
+[^1]: You can specify the `-expires` option explicitly (ms), but this is an advanced use case and normally should not be needed.
+
+[^2]: Starting from NATS 2.9.0, there is a new option `-name` that is not the same as `-durable_name`. If you provide `-durable_name`, the consumer's default `InactiveThreshold` is unlimited. But if you provide `-name`, the default `InactiveThreshold` is only 5s.

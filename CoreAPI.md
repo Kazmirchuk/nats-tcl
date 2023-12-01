@@ -347,7 +347,7 @@ You can configure the client to require a TLS connection in two ways:
 - use `-secure` option (applies to all servers in the pool)
 - use `tls://` schema in a NATS URL (applies only to this server)
 
-Make sure that the TclTLS package is available in your system. E.g. on OpenSUSE it is called `tls` in zypper. 
+Make sure that the TclTLS package is available in your system[^1]. E.g. on OpenSUSE it is called `tls` in zypper. 
 
 Most likely you will need to provide additional options via `-tls_opts`: at least one of `-cadir` or `-cafile`, otherwise the client can not recognize the server's certificate. E.g. if you have installed your CA certificate on OpenSUSE system-wide, you can use
 
@@ -359,4 +359,4 @@ The client supplies default options `-require 1` and `-command ::nats::tls_callb
 
 If NATS server requires clients to authenticate using TLS certificates, you need to use `-certfile` and `-keyfile` options.
 
-Note: due to a [bug](https://core.tcl-lang.org/tcltls/tktview/3c42b2ba11) in TclTLS, the client does **not** verify that the certificate from NATS matches the hostname (X509v3 Subject Alternative Name).
+[^1]: Due to a [bug](https://core.tcl-lang.org/tcltls/tktview/3c42b2ba11) in TclTLS, the client does **not** verify that the certificate from NATS matches the hostname (X509v3 Subject Alternative Name).

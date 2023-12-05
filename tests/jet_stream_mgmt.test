@@ -68,6 +68,14 @@ test js_mgmt-1.5 "Try creating a stream with an overlapping subject" -body {
     $js add_stream MY_STREAM2 {*}$invalid_config
 } -result {*subjects overlap*} -match glob -errorCode {NATS ErrJSResponse 400*}
 
+test js_mgmt-1.6 "Update stream configuration" -body {
+    dict set stream_config duplicate_window 60000
+    dict set stream_config max_msgs_per_subject 500
+    set updated_config [dict get [$js update_stream MY_STREAM {*}$stream_config] config]
+    assert {[dict get $updated_config duplicate_window] == 60000}
+    assert {[dict get $updated_config max_msgs_per_subject] == 500}
+}
+
 test js_mgmt-2 "Get stream information" -setup {
     # send some messages to both streams
     $js publish test.1 "test msg 1"

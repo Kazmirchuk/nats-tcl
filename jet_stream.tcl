@@ -117,6 +117,34 @@ oo::class create ::nats::AsyncPullRequest {
     }
 }
 
+namespace eval ::nats {
+# follow the same order of fields as in https://github.com/nats-io/nats.py/blob/main/nats/js/api.py
+variable StreamConfigSpec {
+    name                    valid_str NATS_TCL_REQUIRED
+    description             valid_str null
+    subjects                list null
+    retention               {enum limits interest workqueue} limits
+    max_consumers           int null
+    max_msgs                int null
+    max_bytes               int null
+    discard                 {enum new old} old
+    max_age                 ns null
+    max_msgs_per_subject    int null
+    max_msg_size            int null
+    storage                 {enum memory file} file
+    num_replicas            int null
+    no_ack                  bool null
+    duplicate_window        ns null
+    sealed                  bool null
+    deny_delete             bool null
+    deny_purge              bool null
+    allow_rollup_hdrs       bool null
+    allow_direct            bool null
+    mirror_direct           bool null
+    mirror                  json null
+    sources                 json_list null}
+}
+
 oo::class create ::nats::jet_stream {
     variable Conn Timeout ApiPrefix Domain Trace
 
@@ -465,40 +493,23 @@ oo::class create ::nats::jet_stream {
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_create_request
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_create_response
     method add_stream {stream args} {
-        # follow the same order of fields as in https://github.com/nats-io/nats.py/blob/main/nats/js/api.py
-        set spec {
-            name                    valid_str NATS_TCL_REQUIRED
-            description             valid_str null
-            subjects                list null
-            retention               {enum limits interest workqueue} limits
-            max_consumers           int null
-            max_msgs                int null
-            max_bytes               int null
-            discard                 {enum new old} old
-            max_age                 ns null
-            max_msgs_per_subject    int null
-            max_msg_size            int null
-            storage                 {enum memory file} file
-            num_replicas            int null
-            no_ack                  bool null
-            duplicate_window        ns null
-            sealed                  bool null
-            deny_delete             bool null
-            deny_purge              bool null
-            allow_rollup_hdrs       bool null
-            allow_direct            bool null
-            mirror_direct           bool null
-            mirror                  json null
-            sources                 json_list null}
-
         if {![my CheckFilenameSafe $stream]} {
             throw {NATS ErrInvalidArg} "Invalid stream name $stream"
         }
         dict set args name $stream
         # -subjects is normally also required unless we have -mirror or -sources
         # rely on NATS server to check it
-        set response [my ApiRequest "STREAM.CREATE.$stream" [nats::_dict2json $spec $args]]
+        set response [my ApiRequest "STREAM.CREATE.$stream" [nats::_dict2json $nats::StreamConfigSpec $args]]
         # response fields: config, created (timestamp), state, did_create
+        set result_config [dict get $response config]
+        nats::_ns2ms result_config duplicate_window max_age
+        dict set response config $result_config
+        return $response
+    }
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_update_response
+    method update_stream {stream args} {
+        dict set args name $stream
+        set response [my ApiRequest "STREAM.UPDATE.$stream" [nats::_dict2json $nats::StreamConfigSpec $args]]
         set result_config [dict get $response config]
         nats::_ns2ms result_config duplicate_window max_age
         dict set response config $result_config
@@ -553,7 +564,6 @@ oo::class create ::nats::jet_stream {
         nats::_parse_args $args $spec
         set response [my ApiRequest "STREAM.NAMES" [nats::_local2json $spec]]
         if {[dict get $response total] == 0} {
-            # in this case "streams" contains JSON null instead of an empty list; this is a bug in NATS server
             return [list]
         }
         return [dict get $response streams]

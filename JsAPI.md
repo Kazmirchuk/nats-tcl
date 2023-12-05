@@ -15,6 +15,7 @@ JetStream functionality of NATS can be accessed by creating the `nats::jet_strea
 [*js* cancel_pull_request *reqID*](#js-cancel_pull_request-reqID)<br/>
 
 [*js* add_stream *stream* ?-option *value*?..](#js-add_stream-stream--option-value)<br/>
+[*js* update_stream *stream* ?-option *value*?..](#js-update_stream-stream--option-value)<br/>
 [*js* add_stream_from_json *json_config*](#js-add_stream_from_json-json_config)<br/>
 [*js* delete_stream *stream*](#js-delete_stream-stream)<br/>
 [*js* purge_stream *stream* ?-filter *subject*? ?-keep *int*? ?-seq *int*?](#js-purge_stream-stream--filter-subject--keep-int--seq-int)<br/>
@@ -203,7 +204,7 @@ Sends "terminate" ACK to NATS. The message will not be redelivered.
 ### js cancel_pull_request *reqID*
 Cancels the asynchronous pull request with the given `reqID`.
 ### js add_stream *stream* ?-option *value*?..
-Creates or updates a `stream` with configuration specified as option-value pairs. See the [official docs](https://docs.nats.io/nats-concepts/jetstream/streams#configuration) for explanation of these options.
+Creates a new `stream` with configuration specified as option-value pairs. See the [official docs](https://docs.nats.io/nats-concepts/jetstream/streams#configuration) for explanation of these options.
 | Option        | Type   | Default |
 | ------------- |--------|---------|
 | -description  | string |         |
@@ -230,9 +231,11 @@ Creates or updates a `stream` with configuration specified as option-value pairs
 | -sources | list of JSON | |
 
 For `-mirror` and `-sources` options, use the [nats::make_stream_source](#natsmake_stream_source--option-value) command to create a stream source configuration. <br/>
-Returns a JetStream response as a dict.
+Returns a JetStream reply (same as `stream_info`).
+### js update_stream *stream* ?-option *value*?..
+Updates the `stream` configuration with new options. Arguments and the return value are the same as in `add_stream`.
 ### js add_stream_from_json *json_config*
-Creates or updates a stream with configuration specified as JSON. The stream name is taken from the JSON.
+Creates a stream with configuration specified as JSON. The stream name is taken from the JSON.
 ### js delete_stream *stream*
 Deletes the stream.
 ### js purge_stream *stream* ?-filter *subject*? ?-keep *int*? ?-seq *int*?

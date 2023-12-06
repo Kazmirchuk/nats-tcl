@@ -23,6 +23,7 @@ JetStream functionality of NATS can be accessed by creating the `nats::jet_strea
 [*js* stream_names ?-subject *subject*?](#js-stream_names--subject-subject)<br/>
 
 [*js* add_consumer *stream* ?-option *value*?..](#js-add_consumer-stream--option-value)<br/>
+[*js* update_consumer *stream* ?-option *value*?..](#js-update_consumer-stream--option-value)<br/>
 [*js* add_pull_consumer *stream consumer ?args?*](#js-add_pull_consumer-stream-consumer-args)<br/>
 [*js* add_push_consumer *stream consumer deliver_subject ?args?*](#js-add_push_consumer-stream-consumer-deliver_subject-args)<br/>
 [*js* add_consumer_from_json *stream consumer json_config*](#js-add_consumer_from_json-stream-consumer-json_config)<br/>
@@ -213,7 +214,7 @@ Creates a new `stream` with configuration specified as option-value pairs. See t
 | -max_consumers  | int |         |
 | -max_msgs  | int |         |
 | -max_bytes  | int |         |
-| -discard  | one of: new, old | old |
+| -discard  | one of: new, old | |
 | -max_age  | ms |         |
 | -max_msgs_per_subject  | int |         |
 | -max_msg_size  | int |         |
@@ -221,19 +222,22 @@ Creates a new `stream` with configuration specified as option-value pairs. See t
 | -num_replicas  | int |         |
 | -no_ack  | boolean |         |
 | -duplicate_window  | ms |         |
+| -mirror | JSON | |
+| -sources | list of JSON | |
 | -sealed  | boolean |         |
 | -deny_delete  | boolean |         |
 | -deny_purge  | boolean |         |
 | -allow_rollup_hdrs  | boolean |         |
+| -compression  | one of: none, s2 | none |
+| -first_seq | int | |
 | -allow_direct  | boolean |         |
 | -mirror_direct  | boolean |         |
-| -mirror | JSON | |
-| -sources | list of JSON | |
+| -metadata  | dict | |
 
 For `-mirror` and `-sources` options, use the [nats::make_stream_source](#natsmake_stream_source--option-value) command to create a stream source configuration. <br/>
 Returns a JetStream reply (same as `stream_info`).
 ### js update_stream *stream* ?-option *value*?..
-Updates the `stream` configuration with new options. Arguments and the return value are the same as in `add_stream`.
+Updates the `stream` configuration with new options. Arguments and the return value are the same as in `add_stream`.[^2]
 ### js add_stream_from_json *json_config*
 Creates a stream with configuration specified as JSON. The stream name is taken from the JSON.
 ### js delete_stream *stream*
@@ -248,7 +252,7 @@ Returns a list of all streams or the streams matching the filter.
 Creates or updates a pull or push consumer defined on `stream`. See the [official docs](https://docs.nats.io/nats-concepts/jetstream/consumers#configuration) for explanation of these options.
 | Option        | Type   | Default |
 | ------------- |--------|---------|
-| -name[^2] | string | |
+| -name[^3] | string | |
 | -durable_name | string | |
 | -description | string | |
 | -deliver_policy | one of: all, last, new, by_start_sequence<br/> by_start_time last_per_subject | all|
@@ -271,8 +275,11 @@ Creates or updates a pull or push consumer defined on `stream`. See the [officia
 | -inactive_threshold | ms | |
 | -num_replicas | int | |
 | -mem_storage | boolean | |
+| -metadata  | dict |         |
 
-Returns a JetStream response as a dict.
+Returns a JetStream reply (same as `consumer_info`).
+### js update_consumer *stream* ?-option *value*?..
+Updates the consumer configuration with new options[^4]. Arguments and the return value are the same as in `add_consumer`.
 ### js add_pull_consumer *stream consumer ?args?*
 A shortcut for `add_consumer` to create a durable pull consumer. Rest of `args` are the same as above.
 ### js add_push_consumer *stream consumer deliver_subject ?args?*
@@ -329,6 +336,7 @@ Creates or updates a Key-Value `bucket` with configuration specified as option-v
 | -num_replicas | int | 1 |
 | -mirror_name | string | |
 | -mirror_domain | string| |
+| -metadata  | dict |  |
 
 To create a mirror of a different bucket, use `-mirror_name`. If this bucket is in another domain, use `-mirror_domain` as well.
 
@@ -427,4 +435,8 @@ In addition to all [core NATS errors](CoreAPI.md#error-handling), the `jet_strea
 
 [^1]: You can specify the `-expires` option explicitly (ms), but this is an advanced use case and normally should not be needed.
 
-[^2]: Starting from NATS 2.9.0, there is a new option `-name` that is not the same as `-durable_name`. If you provide `-durable_name`, the consumer's default `InactiveThreshold` is unlimited. But if you provide `-name`, the default `InactiveThreshold` is only 5s.
+[^2]: In principle, it is enough to pass only the new option-values, and the rest of configuration is left untouched. However, if your stream is configured with an option which is non-editable and not default (e.g. storage=memory), calling `update_stream` will result in a NATS error "stream configuration update can not change ... ". In such cases you need to get the current configuration first using [stream_info](#js-stream_info-stream), update the options and pass it to `update_stream`.
+
+[^3]: `-name` and `-durable_name` are mutually exclusive. Depending on this choice, the library will invoke either `$JS.API.CONSUMER.CREATE` (default `InactiveThreshold` is 5s) or `$JS.API.CONSUMER.DURABLE.CREATE` (default `InactiveThreshold` is unlimited). `-name` is supported only by NATS>=2.9. `CONSUMER.DURABLE.CREATE` is considered [legacy API](https://github.com/nats-io/nats.go/blob/main/js.go).
+
+[^4]: Prior to NATS 2.10, the same request could create a new consumer or update its configuration. This behaviour leads to potential race conditions and has been [fixed](https://github.com/nats-io/nats.go/pull/1379) in NATS 2.10 by adding a new field "action" to the JSON request. The Tcl library detects the server version and includes this field automatically.

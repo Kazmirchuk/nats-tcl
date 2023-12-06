@@ -32,7 +32,12 @@ set stream_config [dict create \
                      max_msgs_per_subject 1000 \
                      retention workqueue \
                      allow_direct true]
-    
+
+set stream_config2 [dict create \
+                     subjects [list foo.*] \
+                     deny_purge true \
+                     compression s2 ] ;# requires NATS 2.10
+
 test js_mgmt-1.1 "Create a stream" -body {
     set response [$js add_stream MY_STREAM {*}$stream_config]
     assert {[dict get $response did_create]}
@@ -44,36 +49,53 @@ test js_mgmt-1.1 "Create a stream" -body {
 }
 
 test js_mgmt-1.2 "Create another stream" -body {
-    set foo_config $stream_config
-    dict set foo_config subjects [list foo.*]
-    dict set foo_config deny_purge true
-    set response [$js add_stream FOO_STREAM {*}$foo_config]
+    set response [$js add_stream MY_STREAM_2 {*}$stream_config2]
     assert {[dict get $response did_create]}
-}
+    dict get $response config compression
+} -result s2
 
 test js_mgmt-1.3 "Try creating a stream with the same name" -body {
-    $js add_stream MY_STREAM {*}$foo_config
+    $js add_stream MY_STREAM {*}$stream_config2
 } -result {*stream name already in use*} -match glob -errorCode {NATS ErrJSResponse 400*}
 
 test js_mgmt-1.4 "Try creating a stream with a wrong configuration" -body {
     set invalid_config $stream_config
     dict set invalid_config subjects [list bla.*]
     dict set invalid_config storage invalid
-    $js add_stream MY_STREAM2 {*}$invalid_config
+    $js add_stream INVALID_STREAM {*}$invalid_config
 } -result {*enum storage*} -match glob -errorCode {NATS ErrInvalidArg}
 
 test js_mgmt-1.5 "Try creating a stream with an overlapping subject" -body {
     set invalid_config $stream_config
     dict set invalid_config subjects [list test.1 bla.*]
-    $js add_stream MY_STREAM2 {*}$invalid_config
+    $js add_stream INVALID_STREAM {*}$invalid_config
 } -result {*subjects overlap*} -match glob -errorCode {NATS ErrJSResponse 400*}
 
 test js_mgmt-1.6 "Update stream configuration" -body {
-    dict set stream_config duplicate_window 60000
-    dict set stream_config max_msgs_per_subject 500
-    set updated_config [dict get [$js update_stream MY_STREAM {*}$stream_config] config]
+    # MY_STREAM has storage=memory which is non-editable and not default
+    # so if I try to update the stream with only new properties, NATS will interpret it as trying to change storage to the default "file"
+    # so need to get the current config first
+    set new_config [dict get [$js stream_info MY_STREAM] config]
+    dict set new_config duplicate_window 60000
+    dict set new_config max_msgs_per_subject 500
+    set updated_config [dict get [$js update_stream MY_STREAM {*}$new_config] config]
     assert {[dict get $updated_config duplicate_window] == 60000}
     assert {[dict get $updated_config max_msgs_per_subject] == 500}
+}
+
+test js_mgmt-1.7 "Try updating a non-editable property" -body {
+    set new_config [dict get [$js stream_info MY_STREAM] config]
+    dict set new_config max_consumers 50
+    $js update_stream MY_STREAM {*}$new_config
+} -result {*stream configuration update can not change*} -match glob -errorCode {NATS ErrJSResponse 500*}
+
+# -------------- new features in NATS 2.10 --------------------------
+
+test js_mgmt-1.8 "Update stream configuration with metadata and subject transform" -body {
+    dict set stream_config2 metadata [dict create NATS-version 2.10 artist Eivor]
+    set updated_config [dict get [$js update_stream MY_STREAM_2 {*}$stream_config2] config]
+    assert {[dict_in {NATS-version 2.10 artist Eivor} [dict get $updated_config metadata]]}
+    # TBC ...
 }
 
 test js_mgmt-2 "Get stream information" -setup {
@@ -102,11 +124,11 @@ test js_mgmt-2 "Get stream information" -setup {
 
 test js_mgmt-3.1 "List all streams" -body {
     lsort [$js stream_names]
-} -result {FOO_STREAM MY_STREAM}
+} -result {MY_STREAM MY_STREAM_2}
 
 test js_mgmt-3.2 "Search for a stream by subject" -body {
     $js stream_names -subject foo.1
-} -result FOO_STREAM
+} -result MY_STREAM_2
 
 test js_mgmt-3.3 "Search for a stream by subject - nothing found" -body {
     $js stream_names -subject bla
@@ -121,11 +143,11 @@ test js_mgmt-4.2 "Purge a stream entirely" -body {
 } -result 1
 
 test js_mgmt-4.3 "Try purging a stream with deny_purge=true" -body {
-    $js purge_stream FOO_STREAM
+    $js purge_stream MY_STREAM_2
 } -result {*purge not permitted*} -match glob -errorCode {NATS ErrJSResponse 500*}
 
 test js_mgmt-5.1 "Delete a stream" -body {
-    $js delete_stream FOO_STREAM
+    $js delete_stream MY_STREAM_2
 } -result true
 
 test js_mgmt-5.2 "Delete a stream that doesn't exist" -body {
@@ -133,7 +155,6 @@ test js_mgmt-5.2 "Delete a stream that doesn't exist" -body {
 } -result {*stream not found*} -match glob -errorCode {NATS ErrStreamNotFound}
 
 # filter_subjects of different consumers must not overlap!
-# NB! I'm using "name" here instead of "durable_name"
 set pull_consumer_config [dict create \
                          description "dummy pull consumer" \
                          filter_subject test.1 \
@@ -145,7 +166,6 @@ set pull_consumer_config [dict create \
                          max_waiting 100 \
                          max_ack_pending 1000 \
                          durable_name PULL_CONSUMER]
-
 
 set push_consumer_config [dict create \
                          description "dummy push consumer" \
@@ -160,9 +180,10 @@ test js_mgmt-6.1 "Add a pull consumer with durable_name" -body {
 } -result PULL_CONSUMER
 
 test js_mgmt-6.2 "Add a pull consumer using add_pull_consumer" -body {
-    dict unset pull_consumer_config durable_name 
-    dict set pull_consumer_config filter_subject test.3
-    set response [$js add_pull_consumer MY_STREAM PULL_CONSUMER_2 {*}$pull_consumer_config]
+    set pull_consumer_config2 $pull_consumer_config
+    dict unset pull_consumer_config2 durable_name 
+    dict set pull_consumer_config2 filter_subject test.3
+    set response [$js add_pull_consumer MY_STREAM PULL_CONSUMER_2 {*}$pull_consumer_config2]
     dict get $response name
 } -result PULL_CONSUMER_2
 
@@ -172,29 +193,32 @@ test js_mgmt-6.3 "Add a push consumer" -body {
     assert {[dict_in $push_consumer_config $actual_config]}
     dict get $response name
 } -result PUSH_CONSUMER
-# NB! calling add_consumer with a name of existing consumer will update its config instead of creating a new consumer
 
 test js_mgmt-6.4 "Try creating a consumer with a wrong configuration - error when parsing args" -body {
     set invalid_config $pull_consumer_config
-    dict set invalid_config durable_name INVALID_CONSUMER
     dict set invalid_config deliver_policy invalid
-    $js add_consumer MY_STREAM1 {*}$invalid_config
-} -result {*enum deliver_policy*} -match glob -errorCode {NATS ErrInvalidArg} -cleanup {
-    dict unset invalid_config deliver_policy
-}
+    $js add_consumer MY_STREAM {*}$invalid_config
+} -result {*enum deliver_policy*} -match glob -errorCode {NATS ErrInvalidArg}
 
-test js_mgmt-6.5 "Try creating a pull consumer with flow control" -body {
-    dict set invalid_config filter_subject test.4
-    dict set invalid_config flow_control true
-    $js add_pull_consumer MY_STREAM INVALID_CONSUMER {*}$invalid_config
-    # consumer flow control requires a push based consumer
-} -result {*flow control*} -match glob -errorCode {NATS ErrJSResponse 400*}
-
-test js_mgmt-6.6 "Try creating a pull consumer with idle heartbeat" -body {
+test js_mgmt-6.5 "Try creating a pull consumer with idle heartbeat" -body {
+    set invalid_config $pull_consumer_config
     dict set invalid_config idle_heartbeat 6000
     $js add_pull_consumer MY_STREAM INVALID_CONSUMER {*}$invalid_config
     # consumer idle heartbeat requires a push based consumer
 } -result {*idle heartbeat*} -match glob -errorCode {NATS ErrJSResponse 400*}
+
+# -------------- new features in NATS 2.10 --------------------------
+
+test js_mgmt-6.6 "Try creating a pull consumer again" -body {
+    set config $pull_consumer_config
+    dict set config description "some description"
+    $js add_consumer MY_STREAM {*}$config
+} -result {*consumer already exists*} -match glob -errorCode {NATS ErrJSResponse 400*}
+
+test js_mgmt-6.7 "Update consumer description" -body {
+    set newConfig [dict get [$js update_consumer MY_STREAM {*}$config] config]
+    dict get $newConfig description
+} -result "some description"
 
 test js_mgmt-7.1 "Get consumer info" -setup {
     $js publish test.1 "test msg 1"

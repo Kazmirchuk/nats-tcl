@@ -58,6 +58,9 @@ oo::class create ::nats::SyncPullRequest {
         }
         set msgStatus [nats::header lookup $msg Status ""]
         switch -- $msgStatus {
+            100 {
+                return ;# TODO support HB/FC per ADR-9.md ?
+            }
             404 - 408 - 409 {
                 [info object namespace $Conn]::log::debug "Sync pull request $ID got status message $msgStatus"
                 set Status done
@@ -95,6 +98,9 @@ oo::class create ::nats::AsyncPullRequest {
         }
         set msgStatus [nats::header lookup $msg Status ""]
         switch -- $msgStatus {
+            100 {
+                return
+            }
             404 - 408 - 409 {
                 [info object namespace $Conn]::log::debug "Async pull request $ID got status message $msgStatus"
                 after 0 [list {*}$UserCb 1 $msg] ;# just like with old-style requests, inform the user that the pull request timed out
@@ -115,34 +121,6 @@ oo::class create ::nats::AsyncPullRequest {
         }
         $Conn cancel_request $ID
     }
-}
-
-namespace eval ::nats {
-# follow the same order of fields as in https://github.com/nats-io/nats.py/blob/main/nats/js/api.py
-variable StreamConfigSpec {
-    name                    valid_str NATS_TCL_REQUIRED
-    description             valid_str null
-    subjects                list null
-    retention               {enum limits interest workqueue} limits
-    max_consumers           int null
-    max_msgs                int null
-    max_bytes               int null
-    discard                 {enum new old} old
-    max_age                 ns null
-    max_msgs_per_subject    int null
-    max_msg_size            int null
-    storage                 {enum memory file} file
-    num_replicas            int null
-    no_ack                  bool null
-    duplicate_window        ns null
-    sealed                  bool null
-    deny_delete             bool null
-    deny_purge              bool null
-    allow_rollup_hdrs       bool null
-    allow_direct            bool null
-    mirror_direct           bool null
-    mirror                  json null
-    sources                 json_list null}
 }
 
 oo::class create ::nats::jet_stream {
@@ -368,9 +346,15 @@ oo::class create ::nats::jet_stream {
         return $response ;# fields: stream,seq,duplicate
     }
 
+    method add_consumer {stream args} {
+        my AddUpdateConsumer $stream create {*}$args
+    }
+    method update_consumer {stream args} {
+        my AddUpdateConsumer $stream update {*}$args
+    }
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_create_request
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_create_response
-    method add_consumer {stream args} {
+    method AddUpdateConsumer {stream action args} {
         set spec {name             valid_str null
                   durable_name     valid_str null
                   description      valid_str null
@@ -393,16 +377,20 @@ oo::class create ::nats::jet_stream {
                   deliver_group    valid_str null
                 inactive_threshold ns null
                   num_replicas     int null
-                  mem_storage      bool null}
+                  mem_storage      bool null
+                  metadata         metadata null}
                   
         nats::_parse_args $args $spec
         if {[info exists name]} {
             if {![my CheckFilenameSafe $name]} {
                 throw {NATS ErrInvalidArg} "Invalid consumer name $name"
             }
+            if {[info exists durable_name]} {
+                throw {NATS ErrInvalidArg} "-name conflicts with -durable_name"
+            }
         }
         # see JetStreamManager.add_consumer in nats.py
-        set version_cmp [package vcompare 2.9.0 [dict get [$Conn server_info] version]]
+        set version_cmp [package vcompare 2.9 [dict get [$Conn server_info] version]]
         set check_subj true
         if {($version_cmp < 1) && [info exists name]} {
             if {[info exists filter_subject] && $filter_subject ne ">"} {
@@ -417,8 +405,13 @@ oo::class create ::nats::jet_stream {
             set subject "CONSUMER.CREATE.$stream"
         }
 
-        set msg [json::write object stream_name [json::write string $stream] config [nats::_local2json $spec]]
-        set response [my ApiRequest $subject $msg $check_subj]
+        set jsonDict [dict create stream_name [json::write string $stream] config [nats::_local2json $spec]]
+        set version_cmp [package vcompare 2.10 [dict get [$Conn server_info] version]]
+        if {$version_cmp < 1} {
+            # seems like older NATS servers ignore "action", but let's be safe and send it only if NATS version >= 2.10
+            dict set jsonDict action [json::write string $action]
+        }
+        set response [my ApiRequest $subject [json::write object {*}$jsonDict] $check_subj]
         set result_config [dict get $response config]
         nats::_ns2ms result_config ack_wait idle_heartbeat inactive_threshold
         dict set response config $result_config
@@ -489,27 +482,53 @@ oo::class create ::nats::jet_stream {
         dict unset consumerConfig post
         return [nats::ordered_consumer new $Conn [self] $stream $consumerConfig $callback $post]
     }
-    
+    method add_stream {stream args} {
+        return [my AddUpdateStream $stream CREATE {*}$args]
+    }
+    method update_stream {stream args} {
+        return [my AddUpdateStream $stream UPDATE {*}$args]
+    }
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_create_request
     # nats schema info --yaml io.nats.jetstream.api.v1.stream_create_response
-    method add_stream {stream args} {
+    # nats schema info --yaml io.nats.jetstream.api.v1.stream_update_response
+    method AddUpdateStream {stream action args} {
         if {![my CheckFilenameSafe $stream]} {
             throw {NATS ErrInvalidArg} "Invalid stream name $stream"
         }
-        dict set args name $stream
+        # follow the same order of fields as in nats.go/jetstream/stream_config.go
+        set spec {
+            name                    valid_str null
+            description             valid_str null
+            subjects                list null
+            retention               {enum limits interest workqueue} limits
+            max_consumers           int null
+            max_msgs                int null
+            max_bytes               int null
+            discard                 {enum new old} null
+            max_age                 ns null
+            max_msgs_per_subject    int null
+            max_msg_size            int null
+            storage                 {enum memory file} file
+            num_replicas            int null
+            no_ack                  bool null
+            duplicate_window        ns null
+            mirror                  json null
+            sources                 json_list null
+            sealed                  bool null
+            deny_delete             bool null
+            deny_purge              bool null
+            allow_rollup_hdrs       bool null
+            compression             {enum none s2} null
+            first_seq               int null
+            allow_direct            bool null
+            mirror_direct           bool null
+            metadata                metadata null}
+            
+        dict set args name $stream  ;# required by NATS despite having it already in the subject
         # -subjects is normally also required unless we have -mirror or -sources
         # rely on NATS server to check it
-        set response [my ApiRequest "STREAM.CREATE.$stream" [nats::_dict2json $nats::StreamConfigSpec $args]]
+        set response [my ApiRequest "STREAM.$action.$stream" [nats::_dict2json $spec $args]]
         # response fields: config, created (timestamp), state, did_create
-        set result_config [dict get $response config]
-        nats::_ns2ms result_config duplicate_window max_age
-        dict set response config $result_config
-        return $response
-    }
-    # nats schema info --yaml io.nats.jetstream.api.v1.stream_update_response
-    method update_stream {stream args} {
-        dict set args name $stream
-        set response [my ApiRequest "STREAM.UPDATE.$stream" [nats::_dict2json $nats::StreamConfigSpec $args]]
         set result_config [dict get $response config]
         nats::_ns2ms result_config duplicate_window max_age
         dict set response config $result_config
@@ -588,15 +607,16 @@ oo::class create ::nats::jet_stream {
         my CheckBucketName $bucket
 
         nats::_parse_args $args {
-            description valid_str null
-            max_value_size int null
-            history pos_int 1
-            ttl pos_int null
+            description     valid_str null
+            max_value_size  int null
+            history         pos_int 1
+            ttl             pos_int null
             max_bucket_size pos_int null
-            storage {enum memory file} file
-            num_replicas int 1
-            mirror_name valid_str null
-            mirror_domain valid_str null
+            storage         {enum memory file} file
+            num_replicas    int 1
+            mirror_name     valid_str null
+            mirror_domain   valid_str null
+            metadata        metadata null
         }
         set duplicate_window 120000 ;# 2 min
         if {[info exists ttl] && $ttl < $duplicate_window} {
@@ -638,6 +658,9 @@ oo::class create ::nats::jet_stream {
             dict set stream_config mirror_direct true
         } else {
             dict set stream_config subjects "\$KV.$bucket.>"
+        }
+        if {[info exists metadata]} {
+            dict set stream_config metadata $metadata
         }
         set stream_info [my add_stream "KV_$bucket" {*}$stream_config]
         return [::nats::key_value new $Conn [self] $Domain $bucket [dict get $stream_info config]]
@@ -928,6 +951,19 @@ proc ::nats::_format_json {name val type} {
                         json::write string $element
                     }]]
         }
+        metadata {
+            # see ADR-33
+            if {[dict size $val] == 0} {
+                throw {NATS ErrInvalidArg} $errMsg
+            }
+            set formattedDict [dict map {k v} $val {
+                if [string match "_nats*" $k] {
+                    throw {NATS ErrInvalidArg} "_nats is a reserved prefix"
+                }
+                json::write string $v
+            }]
+            return [json::write object {*}$formattedDict]
+        }
         ns {
             # val must be in milliseconds
             return [expr {entier($val*1000*1000)}]
@@ -1082,4 +1118,10 @@ proc ::nats::make_stream_source {args} {
         set external [nats::_local2json $externalStreamSpec]
     }
     return [nats::_local2json $streamSourceSpec]
+}
+proc ::nats::make_subject_transform {args} {
+    set spec {
+        src   valid_str NATS_TCL_REQUIRED
+        dest  valid_str NATS_TCL_REQUIRED}
+    return [nats::_dict2json $spec $args]
 }

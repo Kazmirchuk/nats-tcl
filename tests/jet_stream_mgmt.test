@@ -93,9 +93,10 @@ test js_mgmt-1.7 "Try updating a non-editable property" -body {
 
 test js_mgmt-1.8 "Update stream configuration with metadata and subject transform" -body {
     dict set stream_config2 metadata [dict create NATS-version 2.10 artist Eivor]
+    dict set stream_config2 subject_transform [nats::make_subject_transform -src foo.* -dest "bar.{{wildcard(1)}}"]
     set updated_config [dict get [$js update_stream MY_STREAM_2 {*}$stream_config2] config]
     assert {[dict_in {NATS-version 2.10 artist Eivor} [dict get $updated_config metadata]]}
-    # TBC ...
+    assert {[dict_in {src foo.* dest bar.{{wildcard(1)}}} [dict get $updated_config subject_transform]]}
 }
 
 test js_mgmt-2 "Get stream information" -setup {

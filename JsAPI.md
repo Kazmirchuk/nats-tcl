@@ -54,7 +54,9 @@ JetStream functionality of NATS can be accessed by creating the `nats::jet_strea
 
 ## Namespace Commands
 [nats::metadata *message*](#natsmetadata-message)<br/>
-[nats::make_stream_source ?-option *value*?..](#natsmake_stream_source--option-value)
+[nats::make_stream_source ?-option *value*?..](#natsmake_stream_source--option-value)<br/>
+[nats::make_subject_transform ?-option *value*?..](#natsmake_subject_transform--option-value)<br/>
+[nats::make_republish ?-option *value*?..](#natsmake_republish--option-value)
 
 # Description
 The [Core NATS](CoreAPI.md) pub/sub functionality offers the at-most-once delivery guarantee based on TCP. This is sufficient for many applications, where an individual message doesn't have much value. In case of a transient network disconnection, a subscriber simply waits until the connection is restored and a new message is delivered. 
@@ -99,7 +101,7 @@ info, err := consumer.Info(ctx)
 The benefit is clear for all programming languages having proper autocompletion support, because you get a comprehensible list of all functions related to a stream or consumer, instead of one huge list of functions in `JetStreamContext`. Unfortunately, Tcl doesn't have such autocompletion, so introduction of new TclOO classes for streams and consumers would only complicate the library. However, there is `nats::ordered_consumer` that is similar to [OrderedConsumer](https://pkg.go.dev/github.com/nats-io/nats.go/jetstream#readme-ordered-consumers) in JetStream v2. 
 
 2. Removal of the overly complex `JetStream.Subscribe` function. This is achieved by breaking it down to smaller specialized functions and by deprecating push consumers. <br/>
-This change does not affect the Tcl client. Pull and push consumers are always created explicitly by calling `add_consumer`. There is no dedicated method to subscribe to push consumers. The core NATS subscription is perfectly adequate for the task. If your push consumer is configured with idle heartbeats, you will need to filter them out by checking `nats::msg idle_heartbeat`. You can find an example of such subscription in [js_msg.tcl](examples/js_msg.tcl).
+This change does not affect the Tcl client. Pull and push consumers are always created explicitly by calling `add_consumer`. There is no dedicated method to subscribe to push consumers. The core NATS subscription is perfectly adequate for durable push consumers. If it is configured with idle heartbeats, you will need to filter them out by checking `nats::msg idle_heartbeat`. And for ephemeral consumers you can use `nats::ordered_consumer`.
 
 3. Introduction of the new way to pull messages from a consumer using continuous polling. This API is designed to combine the best of pull and push consumers, thus helping users to move away from push consumers. The new function is called `Consume`, while the old method is called `Fetch`. <br/>
 Unfortunately, the Tcl client already has `$js consume` method that actually performs fetching and should have been called `fetch` from the beginning. So, to avoid future confusion, I've added a new method [fetch](#js-fetch-stream-consumer-args) that works exactly like `consume`. The old `consume` stays in place for backwards compatibility. If in future I decide to implement the real `consume` (continuous polling), it will be done in another TclOO class.
@@ -206,35 +208,36 @@ Sends "terminate" ACK to NATS. The message will not be redelivered.
 Cancels the asynchronous pull request with the given `reqID`.
 ### js add_stream *stream* ?-option *value*?..
 Creates a new `stream` with configuration specified as option-value pairs. See the [official docs](https://docs.nats.io/nats-concepts/jetstream/streams#configuration) for explanation of these options.
-| Option        | Type   | Default |
-| ------------- |--------|---------|
-| -description  | string |         |
-| -subjects     | list of strings  | (required)|
-| -retention    | one of: limits, interest,<br/> workqueue |limits |
-| -max_consumers  | int |         |
-| -max_msgs  | int |         |
-| -max_bytes  | int |         |
-| -discard  | one of: new, old | |
-| -max_age  | ms |         |
-| -max_msgs_per_subject  | int |         |
-| -max_msg_size  | int |         |
-| -storage  | one of: memory, file | file |
-| -num_replicas  | int |         |
-| -no_ack  | boolean |         |
-| -duplicate_window  | ms |         |
-| -mirror | JSON | |
-| -sources | list of JSON | |
-| -sealed  | boolean |         |
-| -deny_delete  | boolean |         |
-| -deny_purge  | boolean |         |
-| -allow_rollup_hdrs  | boolean |         |
-| -compression  | one of: none, s2 | none |
-| -first_seq | int | |
-| -allow_direct  | boolean |         |
-| -mirror_direct  | boolean |         |
-| -metadata  | dict | |
+| Option        | Type   | Default | Comment |
+| ------------- |--------|---------|---------|
+| -description  | string |         | |
+| -subjects     | list of strings  | (required)| |
+| -retention    | one of: limits, interest,<br/> workqueue |limits | |
+| -max_consumers  | int |         | |
+| -max_msgs  | int |         | |
+| -max_bytes  | int |         | |
+| -discard  | one of: new, old | | |
+| -max_age  | ms |         | |
+| -max_msgs_per_subject  | int |         | |
+| -max_msg_size  | int |         | |
+| -storage  | one of: memory, file | file | |
+| -num_replicas  | int |         | |
+| -no_ack  | boolean |         | |
+| -duplicate_window  | ms |         | |
+| -mirror | JSON | |use [nats::make_stream_source](#natsmake_stream_source--option-value)|
+| -sources | list of JSON | |use [nats::make_stream_source](#natsmake_stream_source--option-value)|
+| -sealed  | boolean |         | |
+| -deny_delete  | boolean |         | |
+| -deny_purge  | boolean |         | |
+| -allow_rollup_hdrs  | boolean |         | |
+| -compression  | one of: none, s2 | none | |
+| -first_seq | int | | |
+| -subject_transform | JSON | |use [nats::make_subject_transform](#natsmake_subject_transform--option-value)|
+| -republish | JSON | |use [nats::make_republish](#natsmake_republish--option-value)|
+| -allow_direct  | boolean |         | |
+| -mirror_direct  | boolean |         | |
+| -metadata  | dict | | |
 
-For `-mirror` and `-sources` options, use the [nats::make_stream_source](#natsmake_stream_source--option-value) command to create a stream source configuration. <br/>
 Returns a JetStream reply (same as `stream_info`).
 ### js update_stream *stream* ?-option *value*?..
 Updates the `stream` configuration with new options. Arguments and the return value are the same as in `add_stream`.[^2]
@@ -324,7 +327,7 @@ Deletes a message from `stream` with the given `sequence` number. `-no_erase` is
 ### js bind_kv_bucket *bucket*
 This 'factory' method creates [KeyValueObject](KvAPI.md) to access the `bucket`.
 ### js create_kv_bucket *bucket* ?-option *value*?..
-Creates or updates a Key-Value `bucket` with configuration specified as option-value pairs. See the [official docs](https://docs.nats.io/nats-concepts/jetstream/key-value-store) and [ADR-8](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-8.md) for explanation of these options.
+Creates a Key-Value `bucket` with configuration specified as option-value pairs. See the [official docs](https://docs.nats.io/nats-concepts/jetstream/key-value-store) and [ADR-8](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-8.md) for explanation of these options.
 | Option        | Type   | Default |
 | ------------- |--------|---------|
 | -description | string | |
@@ -334,6 +337,7 @@ Creates or updates a Key-Value `bucket` with configuration specified as option-v
 | -max_bucket_size | int | |
 | -storage | one of: memory, file | file |
 | -num_replicas | int | 1 |
+| -compression | one of:  none, s2 |  |
 | -mirror_name | string | |
 | -mirror_domain | string| |
 | -metadata  | dict |  |
@@ -403,6 +407,7 @@ Returns a stream source configuration formatted as JSON to be used with `-mirror
 - `-opt_start_seq int`
 - `-opt_start_time string` formatted as ISO time
 - `-filter_subject subject`
+- `-subject_transforms` - list of subject transforms
 
 If the source stream is in another JetStream domain or account, you will need two more options:
 - `-api APIPrefix` (required) - the subject prefix that imports the other account/domain
@@ -415,6 +420,25 @@ set source2 [nats::make_stream_source -name SOURCE_STREAM_2 -api "\$JS.hub.API"]
 $js add_stream AGGREGATE_STREAM -sources [list $source1 $source2]
 ```
 More details can be found in the official docs about [NATS replication](https://docs.nats.io/running-a-nats-service/nats_admin/jetstream_admin/replication).
+
+### nats::make_subject_transform ?-option *value*?..
+Returns a [subject transform](https://docs.nats.io/nats-concepts/subject_mapping) configuration formatted as JSON to be used with `-subject_transform` option in `add_stream` and `nats::make_stream_source`. You *must* provide the following options:
+- `-src string`
+- `-dest string`
+
+Example:
+```Tcl
+set t1 [nats::make_subject_transform -src foo.* -dest "foo2.{{wildcard(1)}}"]
+set t2 [nats::make_subject_transform -src bar.* -dest "bar2.{{wildcard(1)}}"]
+set sourceConfig [nats::make_stream_source -name SOURCE_STREAM -subject_transforms [list $t1 $t2]]
+$js add_stream AGGREGATE -sources [list $sourceConfig]
+```
+Note that for plural options like `-subject_transforms` and `-sources` you *need* to use `[list]` even if it has only one element.
+### nats::make_republish ?-option *value*?..
+Returns a [RePublish](https://docs.nats.io/nats-concepts/jetstream/streams#republish) configuration formatted as JSON to be used with `-republish` option in [add_stream](#js-add_stream-stream--option-value). You can provide the following options:
+- `-src string` (required)
+- `-dest string` (required)
+- `-headers_only bool` default false
 
 # Error handling in JetStream and Key/Value Store
 In addition to all [core NATS errors](CoreAPI.md#error-handling), the `jet_stream` and `key_value` classes may throw these errors:

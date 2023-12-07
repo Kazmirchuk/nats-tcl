@@ -520,6 +520,8 @@ oo::class create ::nats::jet_stream {
             allow_rollup_hdrs       bool null
             compression             {enum none s2} null
             first_seq               int null
+            subject_transform       json null
+            republish               json null
             allow_direct            bool null
             mirror_direct           bool null
             metadata                metadata null}
@@ -614,16 +616,17 @@ oo::class create ::nats::jet_stream {
             max_bucket_size pos_int null
             storage         {enum memory file} file
             num_replicas    int 1
+            compression     {enum none s2} null
             mirror_name     valid_str null
             mirror_domain   valid_str null
             metadata        metadata null
         }
+        if {$history < 1 || $history > 64} {
+            throw {NATS ErrInvalidArg} "History must be between 1 and 64"
+        }
         set duplicate_window 120000 ;# 2 min
         if {[info exists ttl] && $ttl < $duplicate_window} {
             set duplicate_window $ttl
-        }
-        if {$history < 1 || $history > 64} {
-            throw {NATS ErrInvalidArg} "History must be between 1 and 64"
         }
         set stream_config [dict create \
             allow_rollup_hdrs true \
@@ -632,13 +635,8 @@ oo::class create ::nats::jet_stream {
             duplicate_window $duplicate_window \
             deny_purge false \
             max_msgs_per_subject $history \
-            num_replicas $num_replicas \
-            storage $storage \
             allow_direct true]
         
-        if {[info exists description]} {
-            dict set stream_config description $description
-        }
         if {[info exists ttl]} {
             dict set stream_config max_age $ttl
         }
@@ -648,7 +646,11 @@ oo::class create ::nats::jet_stream {
         if {[info exists max_bucket_size]} {
             dict set stream_config max_bytes $max_bucket_size
         }
-
+        foreach opt {description storage num_replicas compression metadata} {
+            if {[info exists $opt]} {
+                dict set stream_config $opt [set $opt]
+            }
+        }
         if {[info exists mirror_name]} {
             set srcArgs [list -name "KV_$mirror_name"]
             if {[info exists mirror_domain]} {
@@ -659,9 +661,7 @@ oo::class create ::nats::jet_stream {
         } else {
             dict set stream_config subjects "\$KV.$bucket.>"
         }
-        if {[info exists metadata]} {
-            dict set stream_config metadata $metadata
-        }
+        
         set stream_info [my add_stream "KV_$bucket" {*}$stream_config]
         return [::nats::key_value new $Conn [self] $Domain $bucket [dict get $stream_info config]]
     }
@@ -1107,7 +1107,8 @@ proc ::nats::make_stream_source {args} {
         opt_start_seq  pos_int   null
         opt_start_time valid_str null
         filter_subject valid_str null
-        external       json      null}
+        external       json      null
+        subject_transforms json_list null}
         
     set externalStreamSpec {
         api            valid_str null
@@ -1123,5 +1124,12 @@ proc ::nats::make_subject_transform {args} {
     set spec {
         src   valid_str NATS_TCL_REQUIRED
         dest  valid_str NATS_TCL_REQUIRED}
+    return [nats::_dict2json $spec $args]
+}
+proc ::nats::make_republish {args} {
+    set spec {
+        src   valid_str NATS_TCL_REQUIRED
+        dest  valid_str NATS_TCL_REQUIRED
+        headers_only bool false}
     return [nats::_dict2json $spec $args]
 }

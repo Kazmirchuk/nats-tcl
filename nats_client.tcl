@@ -1477,7 +1477,7 @@ proc ::nats::_validate {name val type} {
         return true
     }
     switch -- $type {
-        str - ns - int {
+        str - ns - int - json - json_list {
             # some types used only in JetStream JSON generation don't need to be validated here
         }
         valid_str {

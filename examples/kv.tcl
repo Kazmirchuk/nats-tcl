@@ -2,62 +2,77 @@
 # remember to start nats-server with -js to enable JetStream and -sd to set the storage directory
 
 package require nats
-set conn [nats::connection new "MyNats"]
+set conn [nats::connection new "KV"]
 $conn configure -servers nats://localhost:4222
 $conn connect
-set js [$conn jet_stream -timeout 2000]
+set js [$conn jet_stream]
 
-set bucket MY_KEY_VALUE
+set bucket MY_BUCKET
 
-##### BASIC OPERATIONS #####
-
-# create a new key-value store named "MY_KEY_VALUE" with history of 10 messages per key
-puts "Creating new bucket named \"$bucket\"..."
+puts "Creating a new bucket $bucket with history of 10 entries per key..."
 set kv [$js create_kv_bucket $bucket -history 10]
+# or use bind_kv_bucket to connect to a bucket that already exists in NATS
 
-# put (and delete) some values to "key1" key
-puts "Setting some history of updates on \"key1\" key..."
+puts "Add a few values to the bucket..."
 $kv put key1 "hi, it's my FIRST message"
-$kv delete key1 ;# delete last value (only to see it in history) - operation of this entry would be "DEL"
-$kv put key1 "hi, it's my SECOND message"
+$kv put city Warsaw
+$kv delete key1 ;# inserts an entry with operation=DEL
+set revision [$kv put key1 "hi, it's my SECOND message"]
 $kv put key1 "hi, it's my THIRD message"
 
-set current_entry [$kv get_value key1]
-set current_val [$kv get key1]
-puts "\nCurrent value for \"key1\" is: \"$current_entry\""
-puts "Current entry for \"key1\" is: \"$current_val\""
+puts "Current value of 'key1' is: [$kv get_value key1]"
+set entry [$kv get key1]
 
-set history [$kv history key1]
-puts "\nHistory of \"key1\" is: \"$history\""
+puts "A full entry contains:"
+puts "bucket = [dict get $entry bucket]"
+puts "key = [dict get $entry key]"
+puts "value = [dict get $entry value]"
+puts "revision = [dict get $entry revision]"  ;# one counter for the whole bucket
+puts "timestamp = [nats::msec_to_isotime [dict get $entry created] :localtime]"
+puts "operation = [dict get $entry operation]"
 
-try {
-    $kv create key1 "it won't be set"
-} trap {NATS WrongLastSequence} {} {
-    puts "\n\"create\" will only work if given key does not exists (or last operation was DEL/PURGE)"
-}
+set firstEntry [lindex [$kv history key1] 0]
+puts "The first value for 'key1' was: [dict get $firstEntry value]"
 
-try {
-    $kv update key1 "it won't be set" 2
-} trap {NATS WrongLastSequence} {} {
-    puts "\"update\" will only work if last revision is matching revision passed as argument (last revision is \"4\" but we gave \"2\", so it won't update)"
-}
+puts "Entry $revision has value: [$kv get_value key1 -revision $revision]"
 
-##### KV INFO #####
+puts "All KV buckets: [$js kv_buckets]"
 
-set kv_buckets [$js kv_buckets]
-puts "\nAvailable buckets are: $kv_buckets"
-
-set keys [$kv keys]
-puts "\nAvailable bucket \"$bucket\" keys are: $keys"
+puts "All keys in $bucket: [$kv keys]"
 
 set status [$kv status]
-puts "\nBucket \"$bucket\" status like this: $status"
+puts "Bucket status contains:"
+puts "name = [dict get $status bucket]"
+puts "size (bytes) = [dict get $status bytes]"
+puts "history per key = [dict get $status history]"
+puts "total # of entries = [dict get $status values]"
+puts "compression = [dict get $status is_compressed]"
+# .. and some other low-level info too
 
-##### CLEANUP #####
+puts "Start watching key 'city' ..."
+proc onUpdate {entry} {
+    if {$entry eq ""} {
+        puts "end of current data"
+        return
+    }
+    puts "Got an update: [dict get $entry value]"
+}
 
-puts "\nRemoving \"$bucket\" bucket and ending program..."
-$kv destroy
+# by default, the watcher delivers a current value, then a special empty entry and then further updates as they happen
+# but it can be tweaked with options
+set watcher [$kv watch city -callback onUpdate]
+after 100 [list $kv put city Krakow]
+after 200 [list $kv put city Gdansk]
+
+# sleep for 1s
+after 1000 [list set untilDone 1]
+vwait untilDone
+
+$kv destroy ;# disconnects from the bucket, but it stays in NATS
+
+puts "Deleting $bucket ..."
 $js delete_kv_bucket $bucket
 
 $js destroy
 $conn destroy
+puts "Done"

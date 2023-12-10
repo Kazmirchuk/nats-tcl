@@ -3,14 +3,30 @@
 
 package require nats
 package require fileutil
+package require logger::utils
 
-set conn [nats::connection new "MyNats"]
+# the default logger of nats::connection can't change logging level dynamically, so let's use the logger package
+set natsLogger [logger::init nats]
+logger::utils::applyAppender -appender console -service nats -appenderArgs {-conversionPattern {\[[nats::timestamp] %c %p\] %m}}
+${natsLogger}::setlevel warn
+
+set conn [nats::connection new "JS_mgmt" -logger $natsLogger]
 $conn configure -servers nats://localhost:4222
 $conn connect
-set js [$conn jet_stream]
+# NATS CLI has a very useful option --trace that allows to see JSON requests and replies from JetStream API.
+# It is useful for troubleshooting and better understanding of NATS
+# nats-tcl provides it as well; when enabled, it will print to the debug logger
+set js [$conn jet_stream -trace 1]
 
-# create a stream collecting messages sent to the foo.* and bar.* subjects
+puts "Enabling debug logging ..."
+${natsLogger}::setlevel debug
+
+# create a stream collecting messages sent to the foo.* and bar.* subjects - this request will be traced
 $js add_stream MY_STREAM -subjects [list foo.* bar.*] -retention limits -max_msgs 100 -discard old
+
+${natsLogger}::setlevel warn
+puts "Disabled debug logging"
+
 # Create another stream with configuration from a JSON file (compatible with NATS CLI)
 set json_config [fileutil::cat [file join [file dirname [info script]] stream_config.json]]
 set response [$js add_stream_from_json $json_config]

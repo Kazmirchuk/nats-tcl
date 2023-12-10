@@ -8,7 +8,7 @@
 # JetStream JSON API Design https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-1.md
 
 oo::class create ::nats::SyncPullRequest {
-    variable Conn MsgList Status ID
+    variable Conn MsgList Status
     
     constructor {} {
         set MsgList [list]
@@ -16,7 +16,7 @@ oo::class create ::nats::SyncPullRequest {
     }
     method run {conn subject msg timeout batch } {
         set Conn $conn
-        set ID [$conn request $subject $msg -dictmsg true -timeout $timeout -max_msgs $batch -callback [mymethod OnMsg]]
+        set reqID [$conn request $subject $msg -dictmsg true -timeout $timeout -max_msgs $batch -callback [mymethod OnMsg]]
         try {
             while {1} {
                 nats::_coroVwait [self namespace]::Status ;# wait for 1 message
@@ -33,7 +33,7 @@ oo::class create ::nats::SyncPullRequest {
                         # we've received a status message, which means that the pull request is done
                         if {$batch - $msgCount > 1} {
                             # no need to cancel the request if this was the last expected message
-                            $Conn cancel_request $ID
+                            $Conn cancel_request $reqID
                         }
                         break
                     }
@@ -119,6 +119,9 @@ oo::class create ::nats::AsyncPullRequest {
         if {$Batch - $MsgCount <= 1 || $ID == 0} {
             return
         }
+        # there's a small chance of race here:
+        # if the fetch is cancelled after "mymethod OnMsg" has been scheduled in the event loop, it will trigger a background error
+        # because the object doesn't exist anymore. But it doesn't lead to any data loss, because the NATS message won't be ACK'ed
         $Conn cancel_request $ID
     }
 }
@@ -289,8 +292,11 @@ oo::class create ::nats::jet_stream {
         return [$req run $Conn $subject $msg $timeout $batch]
     }
     
-    method cancel_pull_request {reqID} {
-        $reqID destroy
+    method cancel_pull_request {fetchID} {
+        if {![info object isa object $fetchID]} {
+            throw {NATS ErrInvalidArg} "Invalid fetch ID $fetchID"
+        }
+        $fetchID destroy
     }
     
     # different types of ACKs: https://docs.nats.io/using-nats/developer/develop_jetstream/consumers#delivery-reliability

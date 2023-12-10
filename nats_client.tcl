@@ -1414,7 +1414,7 @@ proc ::nats::_parse_header {header} {
         dict set result Status $status_code ;# non-int status is allowed but ignored
     }
     if {$descr ne ""} {
-        dict set result Description $descr
+        dict set result Description [list $descr]
     }
     # process remaining fields
     foreach line $split_headers {

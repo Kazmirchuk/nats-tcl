@@ -344,7 +344,7 @@ test jet_stream-5.5 "Async fetch - get all messages" -setup {
     ${natsLogger}::setlevel warn
 }
 
-test jet_stream-6 "Async fetch with no_wait - no messages" -setup {
+test jet_stream-6.1 "Async fetch with no_wait - no messages" -setup {
     ${natsLogger}::setlevel debug
     set gotMsgs [list]
 } -body {
@@ -363,20 +363,46 @@ test jet_stream-6 "Async fetch with no_wait - no messages" -setup {
 test jet_stream-7 "Cancel a pull request" -setup {
     set gotMsgs [list]
 } -body {
-    set reqID [$jet_stream fetch $stream_name $consumer_name -batch_size 10 -callback $autoAckCallback -timeout 1000]
+    set fetchID [$jet_stream fetch $stream_name $consumer_name -batch_size 10 -callback $autoAckCallback -timeout 1000]
     sleep 500
-    $jet_stream cancel_pull_request $reqID
+    $jet_stream cancel_pull_request $fetchID
     sleep 1000
     llength $gotMsgs
 } -result 0
 
-test jet_stream-8 "Check there are no pending pull requests left" -body {
+# since the pull consumer is deleted here, it must be the last test in the series
+test jet_stream-8.1 "Async fetch - get some messages then delete the consumer" -setup {
+    set gotMsgs [list]
+    foreach msg { 1 2 3 } {
+        $jet_stream publish test.5 $msg -stream $stream_name
+    }
+} -body {
+    after 1000 [list $jet_stream delete_consumer $stream_name $consumer_name]
+    duration {
+        set fetchID [$jet_stream fetch $stream_name $consumer_name -batch_size 10 -timeout 2000 -callback $autoAckCallback]
+        while {[llength $gotMsgs] < 3} {
+            wait_for ::gotMsgs 1000
+        }
+    } elapsed
+    assert {$elapsed < 500}
+    foreach elem $gotMsgs {
+        lassign $elem timedOut msg
+        assert {!$timedOut}
+        assert {[nats::msg subject $msg] eq "test.5"}
+    }
+    wait_for ::gotMsgs 1500 ;# once the consumer is deleted, we get a status message 409 
+    lassign [lindex $gotMsgs end] timedOut msg
+    assert {[nats::header get $msg Status] == 409} 1
+    assert {[nats::header get $msg Description] eq "Consumer Deleted"} 1
+    assert {$timedOut}
+    $jet_stream cancel_pull_request $fetchID  ;# the fetch is done by now
+} -result "Invalid fetch ID*" -match glob -errorCode {NATS ErrInvalidArg}
+
+test jet_stream-8.2 "Check there are no pending pull requests left" -body {
     assert {[llength [info class instances nats::AsyncPullRequest]] == 0} 1
     assert {[llength [info class instances nats::SyncPullRequest]] == 0} 1
     array size ${conn}::requests
 } -result 0
-
-#TODO check consumer deleted status 409
 
 # ------------------------------- ORDERED CONSUMERS --------------------------------------
 proc consumerCallback {msg} {

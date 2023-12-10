@@ -8,5 +8,7 @@ The examples cover only basic use cases, so for more details you can look into t
 4. [msg_headers.tcl](msg_headers.tcl) - sending and receiving messages with headers; using `nats::msg` and `nats::header` ensembles
 5. [js_msg.tcl](js_msg.tcl) - publishing and consuming messages from JetStream
 6. [js_mgmt.tcl](js_mgmt.tcl) - JetStream asset management
+7. [kv.tcl](kv.tcl) - Key-Value Store (basic usage)
+8. [kv_mirror.tcl](kv_mirror.tcl) - advanced use of Key-Value Store connecting hub and leaf NATS nodes
 
 Note that the repository as a whole is licensed under Apache 2.0, but the examples are released into the public domain, so you can just copy-paste them into your work.

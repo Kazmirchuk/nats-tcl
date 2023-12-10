@@ -16,6 +16,8 @@ oo::class create ::nats::key_value {
         # since keys work on top of subjects, using mirrors, JS domains or API import prefixes affects ReadPrefix and WritePrefix
         # see also nats.go, func mapStreamToKVS
         # ADR-19 https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-19.md
+        # https://github.com/nats-io/nats-architecture-and-design/issues/167
+        # however, ADR-8 v1.1 deprecates this approach and uses subject transforms instead
         
         set ReadPrefix "\$KV.$Bucket"
         set WritePrefix $ReadPrefix
@@ -104,7 +106,6 @@ oo::class create ::nats::key_value {
             value [nats::msg data $msg] \
             revision [nats::msg seq $msg] \
             created [nats::isotime_to_msec [nats::msg timestamp $msg]] \
-            delta "" \
             operation [nats::header lookup $msg KV-Operation PUT]]
         
         if {[dict get $entry operation] in {DEL PURGE}} {
@@ -226,13 +227,15 @@ oo::class create ::nats::key_value {
 
     method StreamInfoToKvInfo {stream_info} {
         set config [dict get $stream_info config]
+        set isCompressed [expr {[dict lookup $config compression none] ne "none"}]
         
         set kv_info [dict create \
             bucket $Bucket \
             bytes [dict get $stream_info state bytes] \
             history [dict get $config max_msgs_per_subject] \
             ttl [dict get $config max_age] \
-            values [dict get $stream_info state messages]]
+            values [dict get $stream_info state messages] \
+            is_compressed $isCompressed]
 
         if {[dict exists $config mirror name]} {
             # strip the leading "KV_"

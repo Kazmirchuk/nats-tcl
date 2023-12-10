@@ -6,12 +6,15 @@
 
 # Test summary:
 # - Hub <-> Leaf connection across JS domains
-# - Mirrored KV within one NATS
-# - Mirrored KV between the hub and the leaf NATS
+# - Mirrored KV within one domain
+# - Mirrored KV between hub and leaf domains
+# - KV aggregates and mirrors per ADR-8 API v1.1
 
 source test_utils.tcl
 set hub_bucket MY_HUB_BUCKET
 set mirror_bucket MY_MIRROR_BUCKET
+# the leaf mirror has a different name for the sake of testing; in production it would normally be called the same as the hub KV, i.e. MY_HUB_BUCKET
+# so that the app doesn't care if it connects to a hub or leaf NATS
 set leaf_mirror_bucket MY_LEAF_MIRROR_BUCKET
 
 startNats NATS_HUB -c ./conf/hub.conf
@@ -21,30 +24,30 @@ startNats NATS_LEAF -c ./conf/leaf.conf
 set conn_hub [nats::connection new "MyNatsToHub"]
 $conn_hub configure -servers nats://localhost:4222 -user acc -password acc
 $conn_hub connect
-set js_hub [$conn_hub jet_stream]
+set js_hub [$conn_hub jet_stream -timeout 1000]
 set kv_hub [$js_hub create_kv_bucket $hub_bucket -history 64]
 
 # connect to the leaf server
 set conn_leaf [nats::connection new "MyNatsToLeaf"]
 $conn_leaf configure -servers nats://localhost:4111 -user acc -password acc
 $conn_leaf connect
-set js_leaf [$conn_leaf jet_stream]
+set js_leaf [$conn_leaf jet_stream -timeout 1000]
 
 # connect to the leaf server but use the "hub" domain
 set js_leaf_to_hub [$conn_leaf jet_stream -domain hub]
 
-########### HUB <-> LEAF ###########
+# ------------------------- HUB <-> LEAF ---------------------------
 set kv_leaf_to_hub [$js_leaf_to_hub bind_kv_bucket $hub_bucket]
 
 test key_value-leaf2hub-1 "Get values from the hub bucket using a leaf connection" -body {
     $kv_hub put key1 value1
     $kv_leaf_to_hub get key1
-} -match glob -result [dict create bucket $hub_bucket key key1 value value1 revision 1 created * delta {} operation PUT]
+} -match glob -result [dict create bucket $hub_bucket key key1 value value1 revision 1 created * operation PUT]
 
 test key_value-leaf2hub-2 "Put values to the hub bucket using a leaf connection" -body {
     $kv_leaf_to_hub put key1 value2
     $kv_hub get key1
-} -match glob -result [dict create bucket $hub_bucket key key1 value value2 revision 2 created * delta {} operation PUT]
+} -match glob -result [dict create bucket $hub_bucket key key1 value value2 revision 2 created * operation PUT]
 
 test key_value_leaf2hub-3 "Get history of the hub bucket using a leaf connection" -body {
     set entries [$kv_leaf_to_hub history key1]
@@ -68,9 +71,10 @@ test key_value_leaf2hub-4 "List hub buckets using a leaf connection" -body {
 } -result $hub_bucket
 
 $kv_leaf_to_hub destroy
+$js_leaf_to_hub destroy
 $js_hub empty_kv_bucket $hub_bucket
 
-########### MIRROR IN THE SAME DOMAIN ###########
+# --------------------------- MIRROR IN THE SAME DOMAIN ---------------------------
 
 # NB! see the clarification about KV mirrors https://github.com/nats-io/natscli/issues/928
 # basically, if you bind to a KV mirror in the same domain, you can't get values from it; you can only put
@@ -97,9 +101,10 @@ test key_value-mirror-direct-get-1 "Create a KV mirror in the same domain and ge
     $js_hub delete_kv_bucket $mirror_bucket
 }
 
-# ########### MIRROR FROM ANOTHER DOMAIN ###########
+# --------------------------- MIRROR FROM ANOTHER DOMAIN ---------------------------
 
 # NB! cross-domain mirrors are deprecated, see the updated ADR-8
+# see also func TestKeyValueMirrorCrossDomains in nats.go
 set kv_hub [$js_hub create_kv_bucket $hub_bucket -history 64]
 set kv_leaf [$js_leaf create_kv_bucket $leaf_mirror_bucket -mirror_name $hub_bucket -mirror_domain hub -history 64]
 set rev [$kv_hub put key2 value1]
@@ -107,12 +112,12 @@ sleep 100
 
 test key_value-mirror-different-domain-1 "Create a KV mirror in another domain and get a value" -body {
     $kv_leaf get key2
-} -match glob -result [dict create bucket $leaf_mirror_bucket key key2 value value1 revision $rev created * delta {} operation PUT]
+} -match glob -result [dict create bucket $leaf_mirror_bucket key key2 value value1 revision $rev created * operation PUT]
 
 set rev [$kv_leaf put key2 value2]
 test key_value-mirror-different-domain-2 "Put a value into the mirror and check the source KV in the 'hub' domain" -body {
     $kv_hub get key2
-} -match glob -result [dict create bucket $hub_bucket key key2 value value2 revision $rev created * delta {} operation PUT]
+} -match glob -result [dict create bucket $hub_bucket key key2 value value2 revision $rev created * operation PUT]
 
 test key_value-mirror-different-domain-3 "Get history from the mirror across domains" -body {
     set entries [$kv_leaf history >]
@@ -121,11 +126,15 @@ test key_value-mirror-different-domain-3 "Get history from the mirror across dom
                       bucket $leaf_mirror_bucket \
                       key key2 \
                       value value1 \
+                      revision 1 \
+                      delta 1 \
                       operation PUT] [lindex $entries 0]]}
     assert {[dict_in [dict create \
                       bucket $leaf_mirror_bucket \
                       key key2 \
                       value value2 \
+                      revision 2 \
+                      delta 0 \
                       operation PUT] [lindex $entries 1]]}
 }
 
@@ -136,9 +145,71 @@ test key_value-mirror-different-domain-4 "Bucket status should provide info abou
 } 
 
 $kv_leaf destroy
+$js_leaf delete_kv_bucket $leaf_mirror_bucket
 $js_hub empty_kv_bucket $hub_bucket
 
-$js_leaf_to_hub destroy
+# --------------------------- KV AGGREGATE & MIRROR ---------------------------
+# per ADR-8 API v1.1 and the draft https://github.com/nats-io/jsm.go/compare/main...ripienaar:jsm.go:kv_topologies?expand=1
+# this is the preferred way to connect KV between a hub and a leaf, based on subject transforms
+
+test key_value-aggregate-1 "Test a writable filtered KV aggregate in the leaf" -body {
+    $kv_hub put shipped.1 "order 1"
+    $kv_hub put new.2 "order 2"
+    $kv_hub put new.3 "order 3"
+    set origin [nats::make_kv_origin -bucket $hub_bucket -keys new.> -api "\$JS.hub.API"]
+    set aggrKV [$js_leaf create_kv_aggregate NEW_ORDERS true [list $origin] -description "writable filtered KV aggregate"]
+    sleep 500 ;# let them sync
+    assert {[$aggrKV keys] eq {new.2 new.3}}
+    assert {[$aggrKV get_value new.2] eq "order 2"}
+    assert {[$aggrKV get_value new.3] eq "order 3"}
+    $aggrKV put order.10 "order 10"
+    assert {[$aggrKV get_value order.10] eq "order 10"}
+    set kvStatus [$aggrKV status]
+    assert {[dict get $kvStatus stream_config description] eq "writable filtered KV aggregate"}
+    dict get $kvStatus bucket
+} -result NEW_ORDERS -cleanup {
+    $js_leaf delete_kv_bucket NEW_ORDERS
+}
+
+test key_value-aggregate-2 "Test a read-only KV aggregate in the leaf" -body {
+    set origin [nats::make_kv_origin -bucket $hub_bucket -api "\$JS.hub.API"]
+    set aggrKV [$js_leaf create_kv_aggregate ORDERS_RO false [list $origin]]
+    sleep 500 ;# let them sync
+    assert {[$aggrKV keys] eq {shipped.1 new.2 new.3}}
+    assert {[$aggrKV get_value shipped.1] eq "order 1"}
+    assert {[$aggrKV get_value new.2] eq "order 2"}
+    assert {[$aggrKV get_value new.3] eq "order 3"}
+    dict exists [$aggrKV status] stream_config subjects ;# this is how you can check if a KV is read-only
+} -result 0
+
+test key_value-aggregate-3 "Try putting a value to a read-only KV aggregate" -body {
+    $aggrKV put order.10 "order 10"
+} -result * -match glob -errorCode {NATS ErrBucketNotFound} -cleanup {
+    $js_leaf delete_kv_bucket ORDERS_RO
+}
+
+test key_value-mirror-1 "Create a filtered KV mirror in the leaf" -body {
+    # mirrors can have only one origin, are always read-only and you can't bind to them; they exist only to load-balance reads using DIRECT.GET
+    set origin [nats::make_kv_origin -bucket $hub_bucket -keys new.> -api "\$JS.hub.API"]
+    $js_leaf create_kv_mirror LEAF_MIRROR $origin
+    sleep 500 ;# let them sync
+    $js_leaf bind_kv_bucket LEAF_MIRROR
+} -result * -match glob -errorCode {NATS ErrBucketNotFound}
+
+test key_value-mirror-2 "Read from the KV mirror" -body {
+    # you can still get the mirror's stream info
+    assert {[dict get [$js_leaf stream_info LEAF_MIRROR] state messages] == 2}
+    $js_hub delete_kv_bucket $hub_bucket
+    # the mirror replies to DIRECT.GET sent to the hub bucket
+    assert {[$kv_hub get_value new.2] eq "order 2"}
+    assert {[$kv_hub get_value new.3] eq "order 3"}
+    $kv_hub get_value shipped.1
+} -result * -match glob -errorCode {NATS ErrTimeout}
+
+test key_value-mirror-3 "Delete the KV mirror" -body {
+    $js_leaf delete_stream LEAF_MIRROR ;# you can't use delete_kv_bucket!
+} -result true
+
 $js_leaf destroy
 $conn_leaf destroy
 

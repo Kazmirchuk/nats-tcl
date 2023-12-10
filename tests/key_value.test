@@ -72,7 +72,7 @@ test key_value-put-1 "Put a key" -setup {
 test key_value-get-1 "Bind again and get an entry for the key" -body {
     set kv [$js bind_kv_bucket $bucket]
     $kv get key1
-} -match glob -result [dict create bucket $bucket key key1 value value1 revision 1 created * delta {} operation PUT]
+} -match glob -result [dict create bucket $bucket key key1 value value1 revision 1 created * operation PUT]
 
 test key_value-get-2 "Get an entry for the key with a specific revision" -setup {
     $kv put key1 value2
@@ -80,7 +80,7 @@ test key_value-get-2 "Get an entry for the key with a specific revision" -setup 
     $kv put key1 value4
 } -body {
     $kv get key1 -revision 3
-} -match glob -result [dict create bucket $bucket key key1 value target_value revision 3 created * delta {} operation PUT]
+} -match glob -result [dict create bucket $bucket key key1 value target_value revision 3 created * operation PUT]
 
 test key_value-get-3 "Try to get a key that doesn't exist" -body {
     $kv get key2
@@ -175,7 +175,8 @@ test key_value-utf8 "Get a UTF-8 encoded value from a bucket" -setup {
 
 test key_value-create-status-1 "Create a bucket and check the status" -body {
     # set TTL to 1h and bucket size to 100 MB
-    set large_kv [$js create_kv_bucket "large_bucket" -history 64 -storage memory -ttl [expr {60*60*1000}] -max_value_size 1024 -max_bucket_size [expr {100*1024*1024}]]
+    set large_kv [$js create_kv_bucket "large_bucket" -history 64 -storage memory -ttl [expr {60*60*1000}] -max_value_size 1024 \
+                      -max_bucket_size [expr {100*1024*1024}] -compression s2]
     set status [$large_kv status]
     set streamConfig [dict get $status stream_config]
     assert {[dict get $streamConfig allow_direct]}
@@ -188,7 +189,8 @@ test key_value-create-status-1 "Create a bucket and check the status" -body {
              bytes 0 \
              history 64 \
              ttl 3600000 \
-             values 0] $status
+             values 0 \
+             is_compressed 1] $status
 } -result true
 
 test key_value-empty-bucket-1 "Put some values in the bucket and empty it" -setup {

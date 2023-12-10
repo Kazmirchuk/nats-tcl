@@ -601,13 +601,35 @@ oo::class create ::nats::jet_stream {
         if {[dict get $stream_info config max_msgs_per_subject] < 1} {
             throw {NATS ErrBucketNotFound} "Bucket $bucket not found"
         }
-        # TODO what if custom ApiPrefix ?
         return [nats::key_value new $Conn [self] $Domain $bucket [dict get $stream_info config]]
     }
 
     method create_kv_bucket {bucket args} {
+        return [my CreateBucket $bucket "" "" false {*}$args]
+    }
+    method create_kv_aggregate {bucket writable origins args} {
+        if {[llength $origins] == 0} {
+            throw {NATS ErrInvalidArg} "List of KV origins is required"
+        }
+        if {![string is boolean -strict $writable]} {
+            throw {NATS ErrInvalidArg} "writable = $writable is not a boolean"
+        }
+        if {"-mirror_name" in $args || "-mirror_domain" in $args} {
+            throw {NATS ErrInvalidArg} "-mirror_name and -mirror_domain are not allowed"
+        }
+        return [my CreateBucket $bucket $writable $origins false {*}$args]
+    }
+    method create_kv_mirror {name origin args} {
+        if {"-mirror_name" in $args || "-mirror_domain" in $args} {
+            throw {NATS ErrInvalidArg} "-mirror_name and -mirror_domain are not allowed"
+        }
+        my CreateBucket $name false $origin true {*}$args
+        return
+    }
+    method CreateBucket {bucket writable origins is_mirror args} {
         my CheckBucketName $bucket
-
+        set streamName "KV_$bucket"
+        
         nats::_parse_args $args {
             description     valid_str null
             max_value_size  int null
@@ -651,6 +673,7 @@ oo::class create ::nats::jet_stream {
                 dict set stream_config $opt [set $opt]
             }
         }
+        # -mirror_name and -mirror_domain are deprecated; use create_kv_mirror instead
         if {[info exists mirror_name]} {
             set srcArgs [list -name "KV_$mirror_name"]
             if {[info exists mirror_domain]} {
@@ -662,10 +685,74 @@ oo::class create ::nats::jet_stream {
             dict set stream_config subjects "\$KV.$bucket.>"
         }
         
-        set stream_info [my add_stream "KV_$bucket" {*}$stream_config]
+        if {$is_mirror} {
+            # this is a KV mirror, it can have only one origin, and you can't bind to it
+            # can't check for [llength $origins] != 1 because it's a dict
+            dict set stream_config mirror_direct true
+            dict unset stream_config subjects
+            if [string match "KV_*" $bucket] {
+                throw {NATS ErrInvalidArg} "Mirror name must not be KV" ;# ensure users can't bind to it
+            }
+            set streamName $bucket
+            dict set stream_config mirror [my OriginToMirror $origins]
+        } else {
+            if [llength $origins] {
+                # this is a KV aggregate, it can have one or more origins, and you can bind to it
+                foreach origin $origins {
+                    lappend streamSources [my OriginToSource $origin $bucket]
+                }
+                dict set stream_config sources $streamSources
+                if {$writable} {
+                    dict set stream_config deny_delete false
+                } else {
+                    dict unset stream_config subjects
+                }
+            }
+        }
+        set stream_info [my add_stream $streamName {*}$stream_config]
         return [::nats::key_value new $Conn [self] $Domain $bucket [dict get $stream_info config]]
     }
 
+    method OriginToSource {origin new_bucket} {
+        dict with origin {
+            if {![info exists stream]} {
+                set stream "KV_$bucket"
+            }
+            if {![info exists keys] || [llength $keys] == 0} {
+                lappend keys >
+            }
+            foreach key $keys {
+                lappend transforms [nats::make_subject_transform -src "\$KV.$bucket.$key" -dest "\$KV.$new_bucket.$key"]
+            }
+            set srcArgs [list -name $stream -subject_transforms $transforms]
+            if [info exists api] {
+                lappend srcArgs -api $api
+                if [info exists deliver] {
+                    lappend srcArgs -deliver $deliver
+                }
+            }
+            nats::make_stream_source {*}$srcArgs ;# implicit return
+        }
+    }
+    method OriginToMirror {origin} {
+        dict with origin {
+            set srcArgs [list -name "KV_$bucket"]
+            if {[info exists keys] && [llength $keys]} {
+                foreach key $keys {
+                    lappend transforms [nats::make_subject_transform -src "\$KV.$bucket.$key" -dest "\$KV.$bucket.$key"]
+                }
+                lappend srcArgs -subject_transforms $transforms
+            }
+            if [info exists api] {
+                lappend srcArgs -api $api
+                if [info exists deliver] {
+                    lappend srcArgs -deliver $deliver
+                }
+            }
+            nats::make_stream_source {*}$srcArgs ;# implicit return
+        }
+    }
+    
     method delete_kv_bucket {bucket} {
         my CheckBucketName $bucket
         set stream "KV_$bucket"
@@ -1132,4 +1219,15 @@ proc ::nats::make_republish {args} {
         dest  valid_str NATS_TCL_REQUIRED
         headers_only bool false}
     return [nats::_dict2json $spec $args]
+}
+proc ::nats::make_kv_origin {args} {
+    set spec {
+        stream  valid_str null
+        bucket  valid_str NATS_TCL_REQUIRED
+        keys    str null
+        api     valid_str null
+        deliver valid_str null}
+
+    nats::_parse_args $args $spec
+    return [nats::_local2dict $spec]
 }

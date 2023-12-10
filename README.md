@@ -46,11 +46,11 @@ If you are using a "batteries-included" Tcl distribution, like [Magicsplat](http
 - Publishing and consuming messages from JetStream, providing "at least once" or "exactly once" delivery guarantee
 - Management of JetStream streams, consumers and Key-Value buckets
 - Key-Value store, including watchers
+- Hub/leaf JetStream topology
 - Standard `configure` method with many options
 - Protected connections using TLS
 - Automatic reconnection in case of network or server failure
-- While the client is trying to reconnect, outgoing messages are buffered in memory and will be flushed as soon as the connection is restored
-- Authentication with NATS server using a login+password, an authentication token or a TLS certificate
+- Authentication with a login+password, an authentication token or a TLS certificate
 - Cluster support (including receiving additional server addresses from INFO messages)
 - Configurable logging, compatible with the [logger](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/log/logger.md) package
 - (Windows-specific) If the [iocp package](https://iocp.magicsplat.com/) is available, the client will use it for better TCP socket performance
@@ -58,7 +58,26 @@ If you are using a "batteries-included" Tcl distribution, like [Magicsplat](http
 
 ## Examples
 Look into the [examples](examples) folder.
+## Implemented ADRs
+ADRs (architecture decision records) provide a *single source of truth* that all NATS clients should follow. Thus, they have been immensely helpful in understanding the NATS design and rationale behind it. The Tcl client follows these ADRs:
 
+| ADR | Title | Comment |
+| ----- |--------|--------|
+| [ADR-1](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-1.md) | JetStream JSON API Design | |
+| [ADR-4](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-4.md) | NATS Message Headers | |
+| [ADR-6](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-6.md) | Naming Rules | |
+| [ADR-8](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-8.md) | JetStream based Key-Value Stores |Including Oct 2023 updates with API v1.1|
+| [ADR-9](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-9.md) | JetStream Consumer Idle Heartbeats | |
+| [ADR-10](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-10.md) | JetStream Extended Purge | |
+| [ADR-13](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-13.md) | Pull Subscribe internals | |
+| [ADR-15](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-15.md) | JetStream Subscribe Workflow | |
+| [ADR-17](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-17.md) | Ordered Consumer | |
+| [ADR-19](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-19.md) | API prefixes for materialized JetStream views | |
+| [ADR-31](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-31.md) | JetStream Direct Get | |
+| [ADR-33](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-33.md) | Metadata for Stream and Consumer | |
+| [ADR-36](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-36.md) | Subject Mapping Transforms in Streams | |
+
+API documentation in this repository focuses on specific details of the Tcl implementation. Users are expected to have sufficient understanding of NATS in general, so other information is provided through links to ADRs and other external docs.
 ## Missing features (in comparison to official NATS clients)
-- The new authentication mechanism using NKey & JWT.
+- Authentication with NKey & JWT.
 - WebSocket is not supported. The only available transport is TCP.

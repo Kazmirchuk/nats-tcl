@@ -2,6 +2,8 @@
 
 JetStream functionality of NATS can be accessed by creating the `nats::jet_stream` TclOO object. Do not create it directly - instead, call the [jet_stream](CoreAPI.md#objectname-jet_stream--timeout-ms--domain-domain) method of your `nats::connection`. You can have multiple JS objects created from the same connection, each having its own timeout and domain.
 
+Key/value-related functions of `nats::jet_stream` are documented [here](KvAPI.md).
+
 # Synopsis
 ## Class `nats::jet_stream`
 [*js* publish *subject message ?args?*](#js-publish-subject-message-args)<br/>
@@ -35,12 +37,6 @@ JetStream functionality of NATS can be accessed by creating the `nats::jet_strea
 [*js* stream_msg_get *stream* ?-last_by_subj *subj*? ?-next_by_subj *subj*? ?-seq *int*?](#js-stream_msg_get-stream--last_by_subj-subj--next_by_subj-subj--seq-int)<br/>
 [*js* stream_direct_get *stream* ?-last_by_subj *subj*? ?-next_by_subj *subj*? ?-seq *int*?](#js-stream_direct_get-stream--last_by_subj-subj--next_by_subj-subj--seq-int)<br/>
 [*js* stream_msg_delete *stream* -seq *int* ?-no_erase *bool*?](#js-stream_msg_delete-stream--seq-int--no_erase-bool)<br/>
-
-[*js* bind_kv_bucket *bucket*](#js-bind_kv_bucket-bucket)<br/>
-[*js* create_kv_bucket *bucket* ?-option *value*?..](#js-create_kv_bucket-bucket--option-value)<br/>
-[*js* delete_kv_bucket *bucket*](#js-delete_kv_bucket-bucket)<br/>
-[*js* kv_buckets *bucket*](#js-kv_buckets)<br/>
-[*js* empty_kv_bucket *bucket*](#js-empty_kv_bucket-bucket)<br/>
 
 [*js* account_info](#js-account_info)<br/>
 [*js* api_prefix](#js-api_prefix)<br/>
@@ -298,7 +294,7 @@ Returns a list of all consumers defined on this stream.
 ### js ordered_consumer *stream ?args?*
 Creates an [ordered](https://docs.nats.io/using-nats/developer/develop_jetstream/consumers#python) ephemeral push consumer on a `stream` and returns a new object [nats::ordered_consumer](#natsordered_consumer).
 You can provide the following options that have the same meaning as in `add_consumer`:
-- `-description`
+- `-description string`
 - `-headers_only bool` default false
 - `-deliver_policy policy` default `all`
 - `-idle_heartbeat ms` default 5000
@@ -324,33 +320,6 @@ Returns a message from `stream` using the [DIRECT.GET](https://github.com/nats-i
 
 ### js stream_msg_delete *stream* -seq *int* ?-no_erase *bool*?
 Deletes a message from `stream` with the given `sequence` number. `-no_erase` is true by default. Set it to false if NATS should overwrite the message with random data, like `SecureDeleteMsg` in nats.go.
-### js bind_kv_bucket *bucket*
-This 'factory' method creates [KeyValueObject](KvAPI.md) to access the `bucket`.
-### js create_kv_bucket *bucket* ?-option *value*?..
-Creates a Key-Value `bucket` with configuration specified as option-value pairs. See the [official docs](https://docs.nats.io/nats-concepts/jetstream/key-value-store) and [ADR-8](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-8.md) for explanation of these options.
-| Option        | Type   | Default |
-| ------------- |--------|---------|
-| -description | string | |
-| -max_value_size | int | |
-| -history | int | 1 |
-| -ttl | ms | |
-| -max_bucket_size | int | |
-| -storage | one of: memory, file | file |
-| -num_replicas | int | 1 |
-| -compression | one of:  none, s2 |  |
-| -mirror_name | string | |
-| -mirror_domain | string| |
-| -metadata  | dict |  |
-
-To create a mirror of a different bucket, use `-mirror_name`. If this bucket is in another domain, use `-mirror_domain` as well.
-
-Returns [KeyValueObject](KvAPI.md).
-### js delete_kv_bucket *bucket*
-Deletes the bucket.
-### js kv_buckets
-Returns a list of all Key-Value buckets.
-### js empty_kv_bucket *bucket*
-Deletes all entries and history from the bucket without destroying the bucket itself. Note that it does **not** reset the bucket's revision counter.
 ### js account_info
 Returns a dict with information about the current account, e.g. used storage, number of streams, consumers, various limits etc.
 ### js api_prefix
@@ -409,9 +378,9 @@ Returns a stream source configuration formatted as JSON to be used with `-mirror
 - `-filter_subject subject`
 - `-subject_transforms` - list of subject transforms
 
-If the source stream is in another JetStream domain or account, you will need two more options:
+If the source stream is in another JetStream domain or account, you need two more options:
 - `-api APIPrefix` (required) - the subject prefix that imports the other account/domain
-- `-deliver deliverySubject` - the delivery subject to use for the push consumer
+- `-deliver deliverySubject` (optional) - the delivery subject to use for the push consumer
 
 Example of creating a stream sourcing messages from 2 other streams `SOURCE_STREAM_1` and `SOURCE_STREAM_1` that are located in the `hub` domain:
 ```Tcl
@@ -434,6 +403,7 @@ set sourceConfig [nats::make_stream_source -name SOURCE_STREAM -subject_transfor
 $js add_stream AGGREGATE -sources [list $sourceConfig]
 ```
 Note that for plural options like `-subject_transforms` and `-sources` you *need* to use `[list]` even if it has only one element.
+See also [ADR-36](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-36.md).
 ### nats::make_republish ?-option *value*?..
 Returns a [RePublish](https://docs.nats.io/nats-concepts/jetstream/streams#republish) configuration formatted as JSON to be used with `-republish` option in [add_stream](#js-add_stream-stream--option-value). You can provide the following options:
 - `-src string` (required)

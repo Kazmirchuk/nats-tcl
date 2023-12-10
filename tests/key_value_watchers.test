@@ -42,24 +42,28 @@ test key_value_watchers-history-2 "Get history for a key" -setup {
                       key key1 \
                       value value1_1 \
                       revision 1 \
+                      delta 3 \
                       operation PUT] [lindex $entries 0]]}
     assert {[dict_in [dict create \
                       bucket $bucket \
                       key key1 \
                       value value1_2 \
                       revision 2 \
+                      delta 2 \
                       operation PUT] [lindex $entries 1]]}
     assert {[dict_in [dict create \
                       bucket $bucket \
                       key key1 \
                       value {} \
                       revision 3 \
+                      delta 1 \
                       operation DEL] [lindex $entries 2]]}
     assert {[dict_in [dict create \
                       bucket $bucket \
                       key key1 \
                       value value1_3 \
                       revision 4 \
+                      delta 0 \
                       operation PUT] [lindex $entries 3]]}
 }
 

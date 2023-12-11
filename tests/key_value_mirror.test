@@ -188,6 +188,25 @@ test key_value-aggregate-3 "Try putting a value to a read-only KV aggregate" -bo
     $js_leaf delete_kv_bucket ORDERS_RO
 }
 
+test key_value-aggregate-4 "Source a KV aggregate from a mirror" -body {
+    # Create a mirror in the hub - remember about the KV_ prefix
+    set mirrorConfig [nats::make_stream_source -name "KV_$hub_bucket"]
+    $js_hub add_stream MIRROR -allow_direct true -mirror $mirrorConfig
+    sleep 500  ;# let them sync
+    assert {[dict get [$js_hub stream_info MIRROR] state messages] == 3} 1
+    # in this case we need to specify both -bucket and -stream
+    set origin [nats::make_kv_origin -bucket $hub_bucket -stream MIRROR -api "\$JS.hub.API"]
+    set aggrKV [$js_leaf create_kv_aggregate ALL_ORDERS false [list $origin]]
+    sleep 500
+    set kvStatus [$aggrKV status]
+    assert {[dict get $kvStatus stream_state messages] == 3} 1
+    set streamConfig [dict get $kvStatus stream_config]
+    dict get [lindex [dict get $streamConfig sources] 0] name
+} -result MIRROR -cleanup {
+    $js_leaf delete_kv_bucket ALL_ORDERS
+    $js_hub delete_stream MIRROR
+}
+
 test key_value-mirror-1 "Create a filtered KV mirror in the leaf" -body {
     # mirrors can have only one origin, are always read-only and you can't bind to them; they exist only to load-balance reads using DIRECT.GET
     set origin [nats::make_kv_origin -bucket $hub_bucket -keys new.> -api "\$JS.hub.API"]

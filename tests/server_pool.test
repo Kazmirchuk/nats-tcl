@@ -81,10 +81,11 @@ test server_pool-11 "Clear the pool" -body {
 
 test server_pool-12 "Connection fails immediately with an empty pool" -body {
     duration {
-        catch {$conn connect} err errOpts
+        try {
+            $conn connect
+        } trap {NATS ErrNoServers} err {}
     } elapsed
     assert {$elapsed < 20}
-    assert {[dict get $errOpts -errorcode] eq {NATS ErrNoServers}}    
     set err
 } -result "Server pool is empty"
 
@@ -92,11 +93,12 @@ test server_pool-13.1 "Initial connection attempt goes through the server pool o
     # remember that by default max_reconnect_attempts=60, but it matters only for reconnecting
     $conn configure -servers [list nats://localhost:4222 nats://localhost:4223]
     duration {
-        catch {$conn connect} err errOpts
+        try {
+            $conn connect
+        } trap {NATS ErrNoServers} err {}
     } elapsed
     # connect_timeout=2000 for 2 servers
     assert { $elapsed < 5000 }
-    assert {[dict get $errOpts -errorcode] eq {NATS ErrNoServers}}    
     set err
 } -result "No servers available for connection"
 

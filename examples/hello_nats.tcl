@@ -21,6 +21,10 @@ $conn configure -servers nats://localhost:4222
 
 # now we can connect. By default this call will block unless you pass the -async option. If the connection fails, an error is thrown.
 $conn connect
+# connection status can be checked at any time:
+puts "Connection status: [$conn cget -status]"  ;# prints "connected"
+# after a connection to NATS is established, we can get various details about the server
+puts "NATS version: [dict get [$conn server_info] version]"
 
 # define a callback for incoming messages
 proc onMessage {subject message replyTo} {

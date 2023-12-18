@@ -170,14 +170,15 @@ test basic-6 "Synchronous request with timeout - success" -body {
 
 test basic-7 "Synchronous request with timeout - failure" -body {
     duration {
-        catch {$conn request service "600 basic-7" -timeout 500} err errOpts
+        try {
+            $conn request service "600 basic-7" -timeout 500
+        } trap {NATS ErrTimeout} err {}
     } elapsed
     assert {[approx $elapsed 500]}
-    assert {[dict get $errOpts -errorcode] eq {NATS ErrTimeout}}
     set err
 } -result {Request to service timed out}
 
-# wait until the delayed message arrives - you will see it in the debug log
+# wait until the delayed message arrives
 sleep 500
 
 test basic-8 "Asynchronous request" -body {
@@ -314,7 +315,7 @@ test basic-17 "Check internal state before and after disconnection" -body {
     assert {[array size ${conn}::subscriptions] == 0} 1
 }
 
-test basic-18 "Disconnection cancels pending async requests" -body {
+test basic-18.1 "Disconnection cancels pending async requests" -body {
     set resp [responder new]
     set inMsg -1
     $conn connect
@@ -326,6 +327,19 @@ test basic-18 "Disconnection cancels pending async requests" -body {
 } -result -1 -cleanup {
     $resp destroy
 }
+# TODO
+#test basic-18.2 "Disconnection makes sync requests raise an error" -body {
+    #set resp [responder new]
+    #set inMsg -1
+    #$conn connect
+    #$conn request service "2000 foo" -timeout 1000 -callback asyncReqCallback
+    #wait_flush $conn
+    #$conn disconnect
+    #sleep 1500  ;# more than -timeout
+    #set inMsg ;# asyncReqCallback was not invoked
+#} -result -1 -cleanup {
+#    $resp destroy
+#}
 
 # see also cluster.test for more tests of how requests react to disconnections
 

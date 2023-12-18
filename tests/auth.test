@@ -49,8 +49,9 @@ test auth-1.2 "Connect to NATS using login/password in options" -body {
 
 test auth-1.3 "Try connecting to NATS with wrong login/password - multiple servers in the pool" -body {
     conn configure -servers [list nats://localhost:4223 nats://localhost:4222] -user bilbo -password ring2
-    catch {conn connect} err errOpts
-    assert {[dict get $errOpts -errorcode] eq {NATS ErrNoServers}}
+    try {
+        conn connect
+    } trap {NATS ErrNoServers} err {}
     set errCode [lastError conn errMessage]
     assert {$errCode eq "ErrAuthorization"}
     set errMessage

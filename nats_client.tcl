@@ -616,7 +616,7 @@ oo::class create ::nats::connection {
     # or we got a timeout for async request
     method OldStyleRequestCb {reqID subj msg reply} {
         if {![info exists requests($reqID)]} {
-            return
+            return ;# overdue message
         }
         if {$subj eq ""} {
             set subID [dict get $requests($reqID) subID]

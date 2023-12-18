@@ -79,5 +79,6 @@ ADRs (architecture decision records) provide a *single source of truth* that all
 
 API documentation in this repository focuses on specific details of the Tcl implementation. Users are expected to have sufficient understanding of NATS in general, so other information is provided through links to ADRs and other external docs.
 ## Missing features (in comparison to official NATS clients)
-- Authentication with NKey & JWT.
+- Authentication with [NKey](https://docs.nats.io/running-a-nats-service/configuration/securing_nats/auth_intro/nkey_auth) & JWT.
 - WebSocket is not supported. The only available transport is TCP.
+- [Object Store](https://docs.nats.io/nats-concepts/jetstream/obj_store)

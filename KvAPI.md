@@ -218,7 +218,7 @@ See also [nats::make_stream_source](JsApi.md#natsmake_stream_source--option-valu
 # Error handling
 KV-specific errors are listed in JsAPI.md
 
-[^1]: `-mirror_name` and `-mirror_domain` are deprecated per ADR-8 API v1.1 in favour of KV aggregates and mirrors based on subject transforms.
+[^1]: `-mirror_name` and `-mirror_domain` are deprecated per ADR-8 API v1.1 in favour of KV aggregates and mirrors based on subject transforms. Subject transforms are available in NATS server starting from [version 2.10](https://docs.nats.io/release-notes/whats_new/whats_new_210).
 
 [^2]: while for normal KV buckets and aggregates the name of the underlying stream always starts with "KV_", this is not the case for KV mirrors.
 

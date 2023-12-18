@@ -8,7 +8,7 @@
 # JetStream JSON API Design https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-1.md
 
 oo::class create ::nats::SyncPullRequest {
-    variable Conn MsgList Status
+    variable Conn MsgList Status ID
     
     constructor {} {
         set MsgList [list]
@@ -16,7 +16,7 @@ oo::class create ::nats::SyncPullRequest {
     }
     method run {conn subject msg timeout batch } {
         set Conn $conn
-        set reqID [$conn request $subject $msg -dictmsg true -timeout $timeout -max_msgs $batch -callback [mymethod OnMsg]]
+        set ID [$conn request $subject $msg -dictmsg true -timeout $timeout -max_msgs $batch -callback [mymethod OnMsg]]
         try {
             while {1} {
                 nats::_coroVwait [self namespace]::Status ;# wait for 1 message
@@ -33,7 +33,7 @@ oo::class create ::nats::SyncPullRequest {
                         # we've received a status message, which means that the pull request is done
                         if {$batch - $msgCount > 1} {
                             # no need to cancel the request if this was the last expected message
-                            $Conn cancel_request $reqID
+                            $Conn cancel_request $ID
                         }
                         break
                     }

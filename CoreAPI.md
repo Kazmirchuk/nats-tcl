@@ -77,7 +77,7 @@ The connection object exposes 3 "public" read-only variables:
 - `last_error` - used to deliver asynchronous errors, e.g. if the network fails. It is a dict with 2 keys similar to the arguments for `throw`:
   - code: error code, e.g. {NATS ErrAuthorization}
   - errorMessage: human-readable error message
-- `status` - connection status, one of `$nats::status_closed`, `$nats::status_connecting`, `$nats::status_connected` or `$nats::status_reconnecting`. Also you can query the status using `$connection cget status`.
+- `status` - connection status, one of `$nats::status_closed`, `$nats::status_connecting`, `$nats::status_connected` or `$nats::status_reconnecting`. Also you can query the status using `$connection cget -status`.
 - `serverInfo` - array with INFO from the current server. Intended only for tracing. Note there is `server_info` method that returns a dict with the same data.
 
 You can set up traces on these variables to get notified e.g. when the connection status changes or NATS server enters `ldm` - lame duck mode. See the example below in the paragraph about asynchronous error handling.
@@ -117,7 +117,7 @@ The constructor also initializes the logging functionality. With no arguments, t
 See also the [examples](examples) folder.
 
 ### objectName cget *option*
-Returns the current value of a NATS option as described in the table above. You can also query the connection status.
+Returns the current value of a NATS option as described in the table above. You can also query the connection `-status`.
 
 ### objectName configure *?option? ?value option value...?*
 When given no arguments, returns a dict of all options with their current values. When given one option, returns its current value (same as `cget`). When given more arguments, assigns each value to an option. The only mandatory option is `servers`, and others have reasonable defaults.
@@ -319,7 +319,7 @@ puts "Error text: [dict get $err errorMessage]"
 # Connection status and the reconnection process
 You can check the connection status as follows:
 ```Tcl
-if {[$conn cget status] eq $nats::status_closed} {
+if {[$conn cget -status] eq $nats::status_closed} {
     puts "Connection closed!"
 }
 ```

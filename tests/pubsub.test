@@ -104,12 +104,13 @@ test pubsub-4 "Receive no-responders from a subscription" -body {
 
 test pubsub-5 "Receive no-responders from a sync request" -body {
     duration {
-        catch {$conn request nats_2.2 "no response" -timeout 500} err errOpts
+        try {
+            $conn request nats_2.2 "no response" -timeout 500
+        } trap {NATS ErrNoResponders} err {}
     } elapsed
     assert { $elapsed < 100 } ;# much lower than the timeout!
-    assert {[dict get $errOpts -errorcode] eq {NATS ErrNoResponders}}
-    assert {$err eq "No responders available for request" }
-}
+    set err
+} -result "No responders available for request"
 
 test pubsub-6 "Receive no-responders from an async request" -body {
     $conn request nats_2.2 "no response" -timeout 500 -dictmsg 1 -callback [lambda {timedOut msg} {
@@ -200,9 +201,10 @@ test pubsub-7.5 "Old-style request - sync - not all messages" -body {
 
 test pubsub-7.6 "Old-style request - sync - timeout" -body {
     duration {
-        catch {$conn request service "500 I need help" -max_msgs 3 -timeout 100} err errOpts
+        try {
+            $conn request service "500 I need help" -max_msgs 3 -timeout 100
+        } trap {NATS ErrTimeout} err {}
     } elapsed
-    assert {[dict get $errOpts -errorcode] eq {NATS ErrTimeout}}
     assert {$err eq "Request to service timed out"}
     assert {[approx $elapsed 100]}
     array size ${conn}::requests

@@ -83,31 +83,58 @@ test cluster-1.2 "Restore subscriptions after reconnecting to another server" -b
 
 test cluster-2 "Outgoing messages are buffered while reconnecting" -body {
     startNats NATS1 ;# no need to create a real cluster for this test case
-    $conn configure -servers nats://localhost:4222
+    $conn configure -servers nats://localhost:4222 -reconnect_time_wait 500
     $conn connect
-    $conn subscribe subj -callback subCallback -max_msgs 1
-    $conn ping
-    stopNats NATS1
-    catch {$conn ping -timeout 500} err errOpts ;# find out about the failure ASAP
-    set errCode [lindex [dict get $errOpts -errorcode] 1]
-    assert {$errCode eq "ErrTimeout" || $errCode eq "ErrConnectionClosed"} ;# most likely ErrTimeout, but both are valid
-    assert {[$conn cget status] eq $nats::status_reconnecting} 1
     
-    $conn publish subj "Buffered message"
-    sleep 100 ;# reconnect to NATS2, restore the subscription and publish the message
-    startNats NATS1
+    # use a separate connection for subscribing
+    set watcherConn [nats::connection new "Watcher" -log_chan [tcltest::outputChannel]]
+    $watcherConn configure -servers nats://localhost:4222
+    $watcherConn connect
+    set connMsgCount 0
+    set bufMsgCount 0
+    $watcherConn subscribe subj -callback [lambda {subj msg reply} {
+        if {$msg eq "connected"} {
+            incr ::connMsgCount
+        } else {
+            incr ::bufMsgCount
+        }
+    }]
+    wait_flush $watcherConn
+    # try to be more realistic and simulate a continuous flow of PUBs
+    test_utils::log::info "Publishing messages..."
+    for {set i 0} {$i < 30} {incr i} {
+        $conn publish subj "connected"
+    }
+    wait_flush $conn
+    test_utils::log::info "Corrupted message..."
+    intercept $conn "" [dict create "\r\nPUB" "\r\nPUB-BOGUS"] ;# corrupt all PUBs starting with the second one
+    for {set i 0} {$i < 10} {incr i} {
+        $conn publish subj "connected" ;# make NATS terminate the connection with "-ERR unknown protocol operation"
+    }
+    try {
+        $conn ping -timeout 400 ;# find out about the failure ASAP
+    } trap {NATS ErrTimeout} err {
+    } on ok result {
+        assert {false}
+    }
+    assert {[$conn cget status] eq $nats::status_reconnecting} 1
+    for {set i 0} {$i < 50} {incr i} {
+        $conn publish subj "Buffered message"
+    }
+    # reconnect, restore the subscription and publish the buffered messages
     duration {
-        wait_flush $conn
+        while {[$conn cget -status] ne $nats::status_connected} {
+            wait_for ${connNs}::status 1000
+        }
     } elapsed
-    assert {$elapsed <= [$conn cget -reconnect_time_wait]} 1 ;# 2s by default
     assert {[$conn cget status] eq $nats::status_connected} 1
-    sleep 500    
-    assert {$inMsg eq "Buffered message"}
-    $conn publish subj "Buffered message 2"
-    sleep 500
-    set inMsg ;# check that UNSUB worked too
-} -result "Buffered message" -cleanup {
+    assert {[approx $elapsed 100 100]} ;# 500 (reconnect_time_wait) - 400 (ping timeout) = 100
+    sleep 1000
+    assert {$connMsgCount == 31}
+    assert {$bufMsgCount == 50}
+} -result "" -cleanup {
     $conn disconnect
+    $watcherConn destroy
 }
 
 test cluster-3.1 "Requests time out if connection is lost - async" -setup {
@@ -115,7 +142,6 @@ test cluster-3.1 "Requests time out if connection is lost - async" -setup {
     $conn configure -max_reconnect_attempts 1 -connect_timeout 500 -reconnect_time_wait 0
     $conn connect
 } -body {
-    # note that timeouts do not happen, if the user calls 'disconnect', see test basic-18
     set now [clock milliseconds]
     $conn request service "500 lost message" -timeout 2000 -callback [lambda {timedOut msg} {
         set ::cbResult [list $timedOut $msg [clock milliseconds]]
@@ -126,11 +152,14 @@ test cluster-3.1 "Requests time out if connection is lost - async" -setup {
     # - on Windows: after connect_timeout=500ms
     # - on Linux: connection is rejected immediately
     # after that the server is removed from the pool
-    duration {
-        catch {$conn ping -timeout 800} err errOpts
-    } elapsed
-    assert {$elapsed < 900}
-    assert {[$conn cget status] eq $nats::status_closed} 1
+    try {
+       $conn ping -timeout 600 ;# find out about the failure ASAP
+       # I choose 600ms > -connect_timeout=500 to get ErrConnectionClosed
+    } trap {NATS ErrConnectionClosed} err {} on ok result {
+        assert {false}
+    }
+    assert {[$conn cget -status] eq $nats::status_closed} 1
+    wait_for ::cbResult
     lassign $cbResult timedOut msg timestamp
     assert {$timedOut}
     assert {$timestamp - $now < 1100} ;# stopNats=500ms + connect_timeout=500ms
@@ -174,7 +203,7 @@ test cluster-4 "Requests can transfer from one server to another within a cluste
     while {1} {
         try {
             # give time for both servers to exchange the subscription interest graph, otherwise we may get no-responders to our request
-            sleep 500
+            sleep 1000
             set reply [$conn request cluster "0 ready?"]
             assert {$reply eq "ready?"}
             break

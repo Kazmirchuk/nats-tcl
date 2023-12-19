@@ -48,6 +48,7 @@ set ::nats::_option_spec {
     check_subjects bool true
     dictmsg bool false
     utf8_convert bool false
+    request_timeout timeout 10000
 }
 
 oo::class create ::nats::connection {
@@ -259,9 +260,6 @@ oo::class create ::nats::connection {
         if {$status eq $nats::status_closed} {
             return
         }
-        foreach reqID [array names requests] {
-            after cancel [dict lookup $requests($reqID) timer]
-        }
         if {$sock eq ""} {
             # if a user calls disconnect while we are waiting for reconnect_time_wait, we only need to stop the coroutine
             $coro stop
@@ -376,7 +374,7 @@ oo::class create ::nats::connection {
         
         #the format is UNSUB <sid> [max_msgs]
         if {$max_msgs == 0 || [dict get $subscriptions($subID) recMsgs] >= $max_msgs} {
-            unset -nocomplain subscriptions($subID)  ;# not sure if -nocomplain is really needed, but it was contributed by ANT
+            unset subscriptions($subID)
             set data "UNSUB $subID"
         } else {
             dict set subscriptions($subID) maxMsgs $max_msgs
@@ -390,9 +388,10 @@ oo::class create ::nats::connection {
     }
     
     method request_msg {msg args} {
+        set timeout $config(request_timeout)
         set dictmsg $config(dictmsg)
         nats::_parse_args $args {
-            timeout timeout 0
+            timeout timeout null
             callback str ""
             dictmsg bool null
         }
@@ -406,9 +405,10 @@ oo::class create ::nats::connection {
     }
     
     method request {subject message args} {
+        set timeout $config(request_timeout)
         set dictmsg $config(dictmsg)
         nats::_parse_args $args {
-            timeout timeout 0
+            timeout timeout null
             callback str ""
             dictmsg bool null
             header dict ""
@@ -451,6 +451,9 @@ oo::class create ::nats::connection {
         set requests($reqID) [dict create timer $timerID]
         nats::_coroVwait [self namespace]::requests($reqID)
         if {![info exists requests($reqID)]} {
+            if {$last_error eq ""} {
+                throw {NATS ErrConnectionClosed} "Connection closed"
+            }
             throw {NATS ErrTimeout} "Connection lost"
         }
         set sync_req $requests($reqID)
@@ -494,6 +497,9 @@ oo::class create ::nats::connection {
         while {1} {
             nats::_coroVwait [self namespace]::requests($reqID)
             if {![info exists requests($reqID)]} {
+                if {$last_error eq ""} {
+                    throw {NATS ErrConnectionClosed} "Connection closed"
+                }
                 throw {NATS ErrTimeout} "Connection lost"
             }
             set sync_req $requests($reqID)
@@ -542,7 +548,7 @@ oo::class create ::nats::connection {
         }
 
         if {$status ne $nats::status_connected} {
-            # unlike CheckConnection, here we want to raise the error also if the client is reconnecting, in line with cnats
+            # this is different from nats.go (func FlushTimeout) that throws ErrConnectionClosed only if the connection is closed
             throw {NATS ErrConnectionClosed} "No connection to NATS server"
         }
 
@@ -555,6 +561,10 @@ oo::class create ::nats::connection {
         after cancel $timerID
         if {$pong} {
             return true
+        }
+        if {$status eq $nats::status_closed} {
+            # user called disconnect while we've been waiting for PONG
+            throw {NATS ErrConnectionClosed} "Connection closed"
         }
         throw {NATS ErrTimeout} "PING timeout"
     }
@@ -809,7 +819,6 @@ oo::class create ::nats::connection {
         if {[llength $subsBuffer] > 0} {
             # ensure SUBs are sent before any pending PUBs
             set outBuffer [linsert $outBuffer 0 {*}$subsBuffer]
-            my ScheduleFlush
         }
     }
     
@@ -993,6 +1002,9 @@ oo::class create ::nats::connection {
             set last_error "" ;# cleanup possible error messages about prior connection attempts
             set status $nats::status_connected ;# exit from vwait in "connect"
             my RestoreSubs
+            if {[llength $outBuffer]} {
+                my ScheduleFlush 
+            }
             set timers(ping) [after $config(ping_interval) [mymethod Pinger]]
         }
     }
@@ -1048,38 +1060,49 @@ oo::class create ::nats::connection {
             while {1} {
                 set reason [yield]
                 if {$reason eq "stop"} {
-                    break
+                    break ;# deliberate disconnect; the socket has been already closed
                 }
                 my ProcessEvent $reason
             }
         } trap {NATS STOP_CORO} {msg opts} {
-            # we get here after call to "disconnect"; the socket has been already closed
+            # deliberate disconnect; the socket has been already closed
         } trap {NATS ErrNoServers} {msg opts} {
-            # don't overwrite the real last_error; need to log this in case of "connect -async"
+            # connection lost; don't overwrite the real last_error - need to log this in case of "connect -async"
             log::error $msg
-            # mark all pending requests as timed out
-            foreach reqID [array names requests] {
-                log::debug "Force timeout of request $reqID"
-                after cancel [dict lookup $requests($reqID) timer]
-                set callback [dict lookup $requests($reqID) callback]
-                if {$callback eq ""} {
-                    # leave vwait in all sync requests
-                    set requests($reqID) 1 ;# strangely, without this line vwait's don't return
-                    unset requests($reqID)
-                } else {
-                    after 0 [list {*}$callback 1 ""]
-                }
-            }
         } trap {} {msg opts} {
             log::error "Unexpected error: $msg $opts"
         }
+        my CancelAllRequests
+        set pong 0 ;# cancel pending pings
         array unset subscriptions ;# make sure we don't try to restore subscriptions, when we connect next time
-        array unset requests
         set requestsInboxPrefix ""
         my CancelConnectTimer
         set status $nats::status_closed
         log::debug "Finished coroutine $coro"
         set coro ""
+    }
+    
+    method CancelAllRequests {} {
+        foreach reqID [array names requests] {
+            #log::debug "Force timeout of request $reqID"
+            after cancel [dict lookup $requests($reqID) timer]
+            set callback [dict lookup $requests($reqID) callback]
+            if {$callback eq ""} {
+                set requests($reqID) "" ;# leave vwait in all sync requests
+            } else {
+                if {[dict exists $requests($reqID) subID]} {
+                    # most probably this is JS fetch - mark it as timed out for proper cleanup
+                    after 0 [list {*}$callback 1 ""]
+                    continue
+                }
+                if {$last_error eq ""} {
+                    continue
+                }
+                # invoke other callbacks only if the connection was lost
+                after 0 [list {*}$callback 1 ""]
+            }
+        }
+        array unset requests
     }
     
     method ProcessEvent {reason} {

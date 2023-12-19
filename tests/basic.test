@@ -161,17 +161,18 @@ test basic-5.3 "Synchronous request - read from socket" -body {
 } -result hello
 
 test basic-6 "Synchronous request with timeout - success" -body {
+    $conn configure request_timeout 500
     duration {
-        set result [$conn request service "500 basic-6" -timeout 600]
+        set result [$conn request service "100 basic-6"]
     } elapsed
-    assert {[approx $elapsed 510]}
+    assert {[approx $elapsed 100]}
     set result
 } -result basic-6
 
 test basic-7 "Synchronous request with timeout - failure" -body {
     duration {
         try {
-            $conn request service "600 basic-7" -timeout 500
+            $conn request service "600 basic-7"
         } trap {NATS ErrTimeout} err {}
     } elapsed
     assert {[approx $elapsed 500]}
@@ -197,7 +198,7 @@ test basic-8 "Asynchronous request" -body {
 
 test basic-9 "Asynchronous request with timeout - success" -body {
     duration {
-        $conn request service "0 async_req2" -timeout 600 -callback asyncReqCallback
+        $conn request service "0 async_req2" -callback asyncReqCallback
         wait_for ::inMsg
     } elapsed
     assert {$elapsed < 300}
@@ -206,11 +207,13 @@ test basic-9 "Asynchronous request with timeout - success" -body {
 
 test basic-10 "Asynchronous request with timeout - failure" -body {
     duration {
-        $conn request service "1000 async_req3" -timeout 600 -callback asyncReqCallback
+        $conn request service "1000 async_req3" -callback asyncReqCallback
         wait_for ::inMsg 900
     } elapsed
-    assert {[approx $elapsed 600]}
+    assert {[approx $elapsed 500]}
     assert {$inMsg eq "timeout"}
+} -cleanup {
+    $conn reset request_timeout
 }
 
 # wait until the delayed message arrives
@@ -327,19 +330,46 @@ test basic-18.1 "Disconnection cancels pending async requests" -body {
 } -result -1 -cleanup {
     $resp destroy
 }
-# TODO
-#test basic-18.2 "Disconnection makes sync requests raise an error" -body {
-    #set resp [responder new]
-    #set inMsg -1
-    #$conn connect
-    #$conn request service "2000 foo" -timeout 1000 -callback asyncReqCallback
-    #wait_flush $conn
-    #$conn disconnect
-    #sleep 1500  ;# more than -timeout
-    #set inMsg ;# asyncReqCallback was not invoked
-#} -result -1 -cleanup {
-#    $resp destroy
-#}
+# nats.go/TestRequestClose
+test basic-18.2 "Disconnection makes sync requests raise ErrConnectionClosed" -body {
+    set resp [responder new]
+    $conn connect
+    after 200 [list $conn disconnect]
+    duration {
+        try {
+            set reply [$conn request service "2000 foo" -timeout 1000]
+        } trap {NATS ErrConnectionClosed} err {}
+    } elapsed
+    assert {[approx $elapsed 200]}
+    set err
+} -result "Connection closed" -cleanup {
+    $resp destroy
+}
+
+test basic-18.3 "Disconnection makes pending pings raise ErrConnectionClosed" -body {
+    $conn connect
+    after 200 [list $conn disconnect]
+    intercept $conn [dict create "PONG\r\n" {}] "" ;# delete all PONGs sent by the server
+    duration {
+        try {
+            $conn ping -timeout 1000
+        } trap {NATS ErrConnectionClosed} err {}
+    } elapsed
+    assert {[approx $elapsed 200]}
+    set err
+} -result "Connection closed"
+
+test basic-19 "Test ping timeout" -body {
+    $conn connect
+    intercept $conn [dict create "PONG\r\n" {}] "" ;# delete all PONGs sent by the server
+    duration {
+        try {
+            $conn ping -timeout 500
+        } trap {NATS ErrTimeout} err {}
+    } elapsed
+    assert {[approx $elapsed 500]}
+    set err
+} -result "PING timeout"
 
 # see also cluster.test for more tests of how requests react to disconnections
 

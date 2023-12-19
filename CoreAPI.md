@@ -105,6 +105,7 @@ The `configure` method accepts the following options. Make sure to set them *bef
 | -check_subjects | boolean | true | Enable client-side checking of subjects when publishing or subscribing |
 | -dictmsg | boolean | false | Return messages from `subscribe` and `request` as dicts by default |
 | -utf8_convert | boolean | false | By default, the client does not change a message body when it is sent or received. Setting this option to `true` will encode outgoing messages to UTF-8 and decode incoming messages from UTF-8. This option applies to the higher-level classes as well: `jet_stream` and `key_value`. |
+ -request_timeout | integer | 10000 |Default timeout (ms) for requests|
 
 # Commands
 ## `nats::connection`
@@ -164,7 +165,7 @@ Unsubscribes from a subscription with a given `subID` immediately. If `-max_msgs
 Sends `message` (payload) to the specified `subject` with an automatically generated transient reply-to (inbox).
 
 You can provide the following options:
-- `-timeout ms` - expire the request after X ms (recommended!). Default timeout is infinite.
+- `-timeout ms` - expire the request after X ms (recommended!). Default timeout is taken from the `-request_timeout` option.
 - `-callback cmdPrefix` - do not block and deliver the reply to this callback.
 - `-dictmsg bool` - return the reply as a dict accessible to the [nats::msg](#natsmsg) ensemble.
 - `-max_msgs int` - gather multiple replies. If this option is not used, the 'new-style' request is triggered under the hood (uses a shared subscription for all requests), and only the first reply is returned. If this option is used (even with `maxMsgs`=1), it triggers the 'old-style' request that creates its own subscription. `-dictmsg` is always true in this case.
@@ -260,7 +261,7 @@ Converts an ISO timestamp (as used by the NATS wire format, e.g. 2022-11-22T13:3
 ### nats::msec_to_isotime *msec ?tz?*
 Converts integer milliseconds to an ISO timestamp in the given timezone (default UTC). The local time zone can be specified as `:localtime` (see the [Tcl reference](https://www.tcl.tk/man/tcl8.6/TclCmd/clock.html#M78)). Note that the time zone designator is not included in the returned string.
 
-# Error handling
+# Error Handling
 Error codes are similar to those from the nats.go client as much as possible. A few additional error codes provide more information about failed connection attempts to the NATS server: ErrBrokenSocket, ErrTLS, ErrConnectionRefused.
 
 All synchronous errors are raised using `throw {NATS <error_code>} human-readable message`, so you can handle them using try&trap, for example: 
@@ -316,7 +317,7 @@ puts "Error text: [dict get $err errorMessage]"
 | ErrAccountAuthExpired | NATS server account authorization has expired| yes |
 | ErrProtocol | Received an invalid protocol token | yes |
 
-# Connection status and the reconnection process
+# Connection Status and the Reconnection Process
 You can check the connection status as follows:
 ```Tcl
 if {[$conn cget -status] eq $nats::status_closed} {
@@ -340,7 +341,24 @@ Official NATS clients have a few more statuses:
   - `unsubscribe -max_msgs` + `ping` and wait until the subscription callback is no longer invoked
   - or use JetStream
 
-# Encrypted TLS connections
+# Requests Error Handling
+
+This table summarizes how different types of requests behave in case of:
+- timeout
+- no-responders message from NATS
+- if the connection goes into the reconnecting mode after the request has been issued
+- if the connection is lost (no more NATS servers to try)
+- if a user calls `disconnect`
+
+together with references to the testing suite. Note that if a connection is closed deliberately by calling `disconnect` or `destroy`, pending synchronous requests immediately throw `ErrConnectionClosed`, while callbacks for asynchronous requests are simply not invoked.
+
+|      | Timeout |No responders|Reconnecting|Connection lost|Connection closed|
+| ---- |--------|----|---- |--------|----|
+|sync request|ErrTimeout<br/>basic-7|ErrNoResponders<br/>pubsub-5 |continues ok|ErrTimeout<br/>cluster-3.2 |ErrConnectionClosed<br/>basic-18.2|
+|async request|$timeout=1, blank msg<br/>basic-10|$timeout=1, no-resp msg<br/> pubsub-6 |continues ok<br/>cluster-4|$timeout=1, blank msg<br/>cluster-3.1 |callback is not invoked<br/>basic-18.1|
+|ping|ErrTimeout<br/>basic-19|N/A|ErrConnectionClosed|ErrConnectionClosed<br/>cluster-3.1|ErrConnectionClosed<br/>basic-18.3|
+
+# Encrypted TLS Connections
 NATS can be [configured](https://docs.nats.io/running-a-nats-service/configuration/securing_nats/tls) to encrypt connections using TLS. Note that according to the NATS protocol, the handshake always starts with plain TCP. If the [INFO](https://docs.nats.io/reference/reference-protocols/nats-protocol#info) message from NATS contains `tls_required=true`, then the client upgrades the connection to TLS before sending the `CONNECT` message.
 
 You can configure the client to require a TLS connection in two ways:

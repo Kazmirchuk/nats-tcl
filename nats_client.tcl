@@ -10,7 +10,6 @@
 
 package require json
 package require json::write
-package require oo::util
 package require coroutine
 
 # optional packages
@@ -25,6 +24,17 @@ namespace eval ::nats {
     variable status_connecting "connecting"
     variable status_connected "connected"
     variable status_reconnecting "reconnecting"
+    
+    # mymethod from oo::util does not account for a chance that the method's object can be destroyed after an event has been scheduled
+    proc SafeCallback {mycmd method args} {
+        if {[llength [info commands $mycmd]]} {
+            $mycmd $method {*}$args
+        }
+    }
+    proc mymethod {method args} {
+        set mycmd [uplevel 1 {namespace which my}]
+        list nats::SafeCallback $mycmd $method {*}$args
+    }
 }
 
 # all options for "configure"
@@ -234,7 +244,7 @@ oo::class create ::nats::connection {
         set status $nats::status_connecting
         # this coroutine will handle all work to connect and read from the socket
         # current namespace is prepended to the coroutine name, so it's unique
-        coroutine coro {*}[mymethod CoroMain]
+        coroutine coro {*}[nats::mymethod CoroMain]
         
         if {!$async} {
             # $status will become "closed" straightaway
@@ -260,6 +270,7 @@ oo::class create ::nats::connection {
         if {$status eq $nats::status_closed} {
             return
         }
+        set last_error ""
         if {$sock eq ""} {
             # if a user calls disconnect while we are waiting for reconnect_time_wait, we only need to stop the coroutine
             $coro stop
@@ -428,7 +439,7 @@ oo::class create ::nats::connection {
         # only the first response is delivered
         if {$requestsInboxPrefix eq ""} {
             set requestsInboxPrefix [my inbox]
-            my subscribe "$requestsInboxPrefix.*" -dictmsg 1 -callback [mymethod NewStyleRequestCb -1] -post false
+            my subscribe "$requestsInboxPrefix.*" -dictmsg 1 -callback [nats::mymethod NewStyleRequestCb -1] -post false
         }
         set reqID [incr counters(request)]
         # will perform more argument checking, so it may raise an error
@@ -437,7 +448,7 @@ oo::class create ::nats::connection {
         set timerID ""
         if {$callback ne ""} {
             if {$timeout != 0} {
-                set timerID [after $timeout [mymethod NewStyleRequestCb $reqID "" "" ""]]
+                set timerID [after $timeout [nats::mymethod NewStyleRequestCb $reqID "" "" ""]]
             }
             set requests($reqID) [dict create timer $timerID callback $callback isDictMsg $dictmsg]
             return $reqID
@@ -479,12 +490,12 @@ oo::class create ::nats::connection {
         # we still use the same requests array to vwait on
         set reply [my inbox]
         set reqID [incr counters(request)]
-        set subID [my subscribe $reply -dictmsg 1 -callback [mymethod OldStyleRequestCb $reqID] -max_msgs $max_msgs -post false]
+        set subID [my subscribe $reply -dictmsg 1 -callback [nats::mymethod OldStyleRequestCb $reqID] -max_msgs $max_msgs -post false]
         my publish $subject $message -reply $reply -header $header
         set timerID ""
         if {$callback ne ""} {
             if {$timeout != 0} {
-                set timerID [after $timeout [mymethod OldStyleRequestCb $reqID "" "" ""]]
+                set timerID [after $timeout [nats::mymethod OldStyleRequestCb $reqID "" "" ""]]
             }
             set requests($reqID) [dict create timer $timerID callback $callback subID $subID]
             return $reqID
@@ -703,7 +714,7 @@ oo::class create ::nats::connection {
     }
     
     method Pinger {} {
-        set timers(ping) [after $config(ping_interval) [mymethod Pinger]]
+        set timers(ping) [after $config(ping_interval) [nats::mymethod Pinger]]
         
         if {$counters(pendingPings) >= $config(max_outstanding_pings)} {
             my AsyncError ErrStaleConnection "The server did not respond to $counters(pendingPings) PINGs" 1
@@ -719,7 +730,7 @@ oo::class create ::nats::connection {
     
     method ScheduleFlush {} {
         if {$timers(flush) eq "" && $status eq $nats::status_connected} {
-            set timers(flush) [after 0 [mymethod Flusher]]
+            set timers(flush) [after 0 [nats::mymethod Flusher]]
         }
     }
     
@@ -1005,7 +1016,7 @@ oo::class create ::nats::connection {
             if {[llength $outBuffer]} {
                 my ScheduleFlush 
             }
-            set timers(ping) [after $config(ping_interval) [mymethod Pinger]]
+            set timers(ping) [after $config(ping_interval) [nats::mymethod Pinger]]
         }
     }
     

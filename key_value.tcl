@@ -284,9 +284,9 @@ oo::class create ::nats::kv_watcher {
         if {$arr ne ""} {
             upvar 2 $arr [self namespace]::ValuesArray
         }
-        set Consumer [$js ordered_consumer $stream -callback [mymethod OnMsg] -post false {*}$consumer_opts]
+        set Consumer [$js ordered_consumer $stream -callback [nats::mymethod OnMsg] -post false {*}$consumer_opts]
         if {[dict get [$Consumer info] num_pending] == 0} {
-            after 0 [mymethod InitStageDone] ;# NB do not call it directly, because the user should be able to call e.g. "history" right after "watch"
+            after 0 [nats::mymethod InitStageDone] ;# NB do not call it directly, because the user should be able to call e.g. "history" right after "watch"
         }
     }
     

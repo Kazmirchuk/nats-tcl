@@ -16,13 +16,23 @@ oo::class create ::nats::SyncPullRequest {
     }
     method run {conn subject msg timeout batch } {
         set Conn $conn
-        set ID [$conn request $subject $msg -dictmsg true -timeout $timeout -max_msgs $batch -callback [mymethod OnMsg]]
+        set ID [$conn request $subject $msg -dictmsg true -timeout $timeout -max_msgs $batch -callback [nats::mymethod OnMsg]]
         try {
             while {1} {
                 nats::_coroVwait [self namespace]::Status ;# wait for 1 message
                 set msgCount [llength $MsgList]
                 switch -- $Status {
                     timeout {
+                        # check if the connection is lost/closed.
+                        # It could have been still possible to return messages received so far, but the user wouldn't be able to ACK them anyway,
+                        # so we discard them
+                        set connNs [info object namespace $Conn]
+                        if {[set ${connNs}::status] eq $nats::status_closed} {
+                            if {[set ${connNs}::last_error] eq ""} {
+                                throw {NATS ErrConnectionClosed} "Connection closed"
+                            }
+                            throw {NATS ErrTimeout} "Connection lost"
+                        }
                         if {$msgCount > 0} {
                             break ;# we've received at least some messages - return them
                         }
@@ -85,14 +95,23 @@ oo::class create ::nats::AsyncPullRequest {
     method run {conn subject msg timeout batch} {
         set Conn $conn
         set Batch $batch
-        set ID [$conn request $subject $msg -dictmsg true -timeout $timeout -max_msgs $batch -callback [mymethod OnMsg]]
+        set ID [$conn request $subject $msg -dictmsg true -timeout $timeout -max_msgs $batch -callback [nats::mymethod OnMsg]]
         return [self]
     }
     method OnMsg {timedOut msg} {
         if {$timedOut} {
             # client-side timeout or connection lost; we may have received some messages before
             [info object namespace $Conn]::log::debug "Async pull request $ID timed out"
-            after 0 [list {*}$UserCb 1 ""]
+            set invokeCb 1
+            set connNs [info object namespace $Conn]
+            if {[set ${connNs}::status] eq $nats::status_closed} {
+                if {[set ${connNs}::last_error] eq ""} {
+                    set invokeCb 0 ;# same as async requests
+                }
+            }
+            if {$invokeCb} {
+                after 0 [list {*}$UserCb 1 ""]
+            }
             set ID 0 ;# the request has been already cancelled by OldStyleRequest
             my destroy
             return
@@ -120,9 +139,6 @@ oo::class create ::nats::AsyncPullRequest {
         if {$Batch - $MsgCount <= 1 || $ID == 0} {
             return
         }
-        # there's a small chance of race here:
-        # if the fetch is cancelled after "mymethod OnMsg" has been scheduled in the event loop, it will trigger a background error
-        # because the object doesn't exist anymore. But it doesn't lead to any data loss, because the NATS message won't be ACK'ed
         $Conn cancel_request $ID
     }
 }
@@ -290,10 +306,12 @@ oo::class create ::nats::jet_stream {
         try {
             return [$req run $Conn $subject $msg $timeout $batch]
         } trap {NATS ErrTimeout} {err errOpts} {
-            # only for sync fetches:
-            # probably wrong stream/consumer - see also https://github.com/nats-io/nats-server/issues/2107
-            # raise a more meaningful ErrConsumerNotFound/ErrStreamNotFound
-            my consumer_info $stream $consumer
+            if {$err ne "Connection lost"} {
+                # only for sync fetches:
+                # probably wrong stream/consumer - see also https://github.com/nats-io/nats-server/issues/2107
+                # raise a more meaningful ErrConsumerNotFound/ErrStreamNotFound/ErrJetStreamNotEnabled
+                my consumer_info $stream $consumer
+            }
             # if consumer_info doesn't throw, rethrow the original error
             return -options $errOpts $err
         }
@@ -352,7 +370,7 @@ oo::class create ::nats::jet_stream {
             nats::header set msg Nats-Expected-Stream $stream
         }
         if {$callback ne ""} {
-            return [$Conn request_msg $msg -callback [mymethod PublishCallback $callback] -timeout $timeout -dictmsg false]
+            return [$Conn request_msg $msg -callback [nats::mymethod PublishCallback $callback] -timeout $timeout -dictmsg false]
         }
         set response [json::json2dict [$Conn request_msg $msg -timeout $timeout -dictmsg false]]
         nats::_checkJsError $response
@@ -912,14 +930,14 @@ oo::class create ::nats::ordered_consumer {
         set Name [dict get $ConsumerInfo name]
         set StreamSeq [dict get $ConsumerInfo delivered stream_seq]
         set ConsumerSeq [dict get $ConsumerInfo delivered consumer_seq]
-        set SubID [$Conn subscribe $inbox -dictmsg true -callback [mymethod OnMsg] -post false]
+        set SubID [$Conn subscribe $inbox -dictmsg true -callback [nats::mymethod OnMsg] -post false]
         my RestartHbTimer
         [info object namespace $Conn]::log::debug "Ordered consumer $Name subscribed to $Stream, stream_seq = $StreamSeq, filter = [dict get $Config filter_subject]"
     }
     method RestartHbTimer {} {
         after cancel $Timer
         # reset if we don't receive any message within interval*3 ms; works also if somebody deletes the consumer in NATS
-        set Timer [after [expr {[dict get $Config idle_heartbeat] * 3}] [mymethod OnMissingHb]]
+        set Timer [after [expr {[dict get $Config idle_heartbeat] * 3}] [nats::mymethod OnMissingHb]]
     }
     method ScheduleReset {errCode {delay 0}} {
         set Name "" ;# make the name blank while reset in is progress
@@ -928,7 +946,7 @@ oo::class create ::nats::ordered_consumer {
             $Conn unsubscribe $SubID ;# unsub immediately to avoid OnMsg being called again while reset is in progress
             set SubID ""
         }
-        set Timer [after $delay [mymethod Reset $errCode]] ;# due to -post=false we are inside the coroutine, so can't call reset directly
+        set Timer [after $delay [nats::mymethod Reset $errCode]] ;# due to -post=false we are inside the coroutine, so can't call reset directly
     }
     method OnMsg {subj msg reply} {
         my RestartHbTimer

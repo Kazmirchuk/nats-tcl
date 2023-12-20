@@ -26,7 +26,8 @@ oo::class create ::nats::SyncPullRequest {
                         if {$msgCount > 0} {
                             break ;# we've received at least some messages - return them
                         }
-                        # probably wrong stream/consumer - see also https://github.com/nats-io/nats-server/issues/2107
+                        # it might seem strange to throw ErrTimeout only in this case
+                        # but it is consistent with nats.go, see func TestPullSubscribeFetchWithHeartbeat
                         throw {NATS ErrTimeout} "Sync pull request timeout, subject=$subject"
                     }
                     done {
@@ -238,7 +239,7 @@ oo::class create ::nats::jet_stream {
         }
 
         set subject "$ApiPrefix.CONSUMER.MSG.NEXT.$stream.$consumer"
-        # TODO add idle_heartbeat
+        
         nats::_parse_args $args {
             timeout timeout null
             batch_size pos_int 1
@@ -250,7 +251,8 @@ oo::class create ::nats::jet_stream {
         if {[info exists timeout]} {
             set no_wait false
             if {![info exists expires]} {
-                set expires [expr {$timeout >= 20 ? $timeout - 10 : $timeout}] ;# same as in nats.go
+                set expires [expr {$timeout >= 20 ? $timeout - 10 : $timeout}] ;# same as in nats.go v1, see func (sub *Subscription) Fetch
+                # but in JS v2 they've changed default expires to 30s
             }
         } else {
             if {[info exists expires]} {
@@ -274,10 +276,6 @@ oo::class create ::nats::jet_stream {
         # if there are no messages, and I send no_wait=false, I get 408 after the request expires
         # if there are some messages, I get them followed by 408
         # if there are all needed messages, there's no additional status message
-        # if we've got no messages:
-        # - server-side timeout raises no error, and we return an empty list
-        # - client-side timeout raises ErrTimeout - this is consistent with nats.py
-        # TODO check on Slack if this is canonical? doesn't look logical
         
         # both classes self-destruct, when the pull request is done
         if {$callback eq ""} {
@@ -289,7 +287,16 @@ oo::class create ::nats::jet_stream {
         if {$Trace} {
             [info object namespace $Conn]::log::debug ">>> $subject $msg"
         }
-        return [$req run $Conn $subject $msg $timeout $batch]
+        try {
+            return [$req run $Conn $subject $msg $timeout $batch]
+        } trap {NATS ErrTimeout} {err errOpts} {
+            # only for sync fetches:
+            # probably wrong stream/consumer - see also https://github.com/nats-io/nats-server/issues/2107
+            # raise a more meaningful ErrConsumerNotFound/ErrStreamNotFound
+            my consumer_info $stream $consumer
+            # if consumer_info doesn't throw, rethrow the original error
+            return -options $errOpts $err
+        }
     }
     
     method cancel_pull_request {fetchID} {

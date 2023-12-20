@@ -332,7 +332,7 @@ The connection can have one of the four statuses:
 
 Calling `connect` when the status is not `$nats::status_closed`, is no-op.<br/>
 Calling `ping` when the status is not `$nats::status_connected`, raises `ErrConnectionClosed`.<br/>
-Calling `disconnect` cancels all pending asynchronous requests, and the callbacks will not be invoked.
+Calling `disconnect` cancels all pending requests and pings as described in the table below.
 
 Official NATS clients have a few more statuses:
 - They distinguish between `DISCONNECTED` (when initial connection attempts failed) and `CLOSED` (if the user called `close` or the connection was lost). I don't see any value in this, so both statuses correspond to `$nats::status_closed`.

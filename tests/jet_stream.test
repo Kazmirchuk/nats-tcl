@@ -242,23 +242,25 @@ test jet_stream-4.4 "Fetch with expires - get all messages" -setup {
     ${natsLogger}::setlevel warn
 }
 
+test jet_stream-4.5 "Fetch from a stream that doesn't exist" -body {
+    $jet_stream fetch BOGUS_STREAM BOGUS_CONSUMER -timeout 500
+} -result {stream not found} -errorCode {NATS ErrStreamNotFound}
+
+test jet_stream-4.6 "Fetch from a consumer that doesn't exist" -body {
+    $jet_stream fetch $stream_name BOGUS_CONSUMER -timeout 500
+} -result {consumer not found} -errorCode {NATS ErrConsumerNotFound}
+
 test jet_stream-5.1 "Async fetch - no messages - expire" -setup {
     ${natsLogger}::setlevel debug
 } -body {
-    duration {
-        $jet_stream fetch $stream_name $consumer_name -batch_size 10 -timeout 1000 -expires 500 -callback asyncReqCallback
-        wait_for ::inMsg 1000
-    } elapsed
-    assert {[approx $elapsed 500]}
+    $jet_stream fetch $stream_name $consumer_name -batch_size 10 -timeout 1000 -expires 500 -callback asyncReqCallback
+    wait_for ::inMsg 600
     set inMsg
 } -result timeout {*}[test_stdout "got status message 408"]
 
 test jet_stream-5.2 "Async fetch - no messages - client-side timeout" -body {
-    duration {
-        $jet_stream fetch $stream_name $consumer_name -batch_size 10 -timeout 500 -expires 1000 -callback asyncReqCallback
-        wait_for ::inMsg 1000
-    } elapsed
-    assert {[approx $elapsed 500]}
+    $jet_stream fetch $stream_name $consumer_name -batch_size 10 -timeout 500 -expires 1000 -callback asyncReqCallback
+    wait_for ::inMsg 600
     set inMsg
 } -result timeout {*}[test_stdout "pull request*timed out"]
 
@@ -344,21 +346,31 @@ test jet_stream-5.5 "Async fetch - get all messages" -setup {
     ${natsLogger}::setlevel warn
 }
 
-test jet_stream-6.1 "Async fetch with no_wait - no messages" -setup {
+test jet_stream-5.6 "Async fetch with no_wait - no messages" -setup {
     ${natsLogger}::setlevel debug
     set gotMsgs [list]
 } -body {
-    duration {
-        $jet_stream fetch $stream_name $consumer_name -batch_size 10 -callback $autoAckCallback
-        wait_for ::gotMsgs
-    } elapsed
-    assert {$elapsed < 100}
+    $jet_stream fetch $stream_name $consumer_name -batch_size 10 -callback $autoAckCallback
+    wait_for ::gotMsgs 100
     lassign [lindex $gotMsgs 0] timedOut msg
     assert {$timedOut}
     nats::header lookup $msg Status ""
 } -result 404 {*}[test_stdout "got status message 404"] -cleanup {
     ${natsLogger}::setlevel warn
 }
+
+# sync fetches are better in such cases, because they report an actual error instead of a generic timeout
+test jet_stream-6.1 "Async fetch from a stream that doesn't exist" -body {
+    $jet_stream fetch BOGUS_STREAM BOGUS_CONSUMER -timeout 500 -callback asyncReqCallback
+    wait_for ::inMsg 600  ;# allow 100ms tolerance
+    set inMsg
+} -result timeout
+
+test jet_stream-6.2 "Async fetch from a consumer that doesn't exist" -body {
+    $jet_stream fetch $stream_name BOGUS_CONSUMER -timeout 500 -callback asyncReqCallback
+    wait_for ::inMsg 600
+    set inMsg
+} -result timeout
 
 test jet_stream-7 "Cancel a pull request" -setup {
     set gotMsgs [list]
@@ -404,6 +416,8 @@ test jet_stream-8.2 "Check there are no pending pull requests left" -body {
     array size ${conn}::requests
 } -result 0
 
+$conn destroy ;# from now on use usual logging
+
 # ------------------------------- ORDERED CONSUMERS --------------------------------------
 proc consumerCallback {msg} {
     lappend ::gotMsgs $msg ;# no ACK needed when using Ordered Consumer
@@ -426,6 +440,11 @@ proc intercept_clear {obj} {
         deletemethod OnMsg
     }
 }
+
+set conn [nats::connection new "OrderedConsumer" -log_chan [tcltest::outputChannel]]
+$conn configure -servers nats://localhost:4222 -dictmsg true
+$conn connect
+set jet_stream [$conn jet_stream -timeout 1000]
 
 test jet_stream-9.1 "Ordered consumer - no such stream" -body {
     $jet_stream ordered_consumer BOGUS_STREAM -callback consumerCallback

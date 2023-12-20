@@ -1,6 +1,6 @@
 # Key-Value API
 
-NATS server implements a Key-Value storage on top of JetStream streams. A specific KV bucket is accessed using the `nats::key_value` TclOO object. Do not create it directly - instead, call the [bind_kv_bucket](JsAPI.md#js-bind_kv_bucket-bucket) or [create_kv_bucket](JsAPI.md#js-create_kv_bucket-bucket--option-value) method of your `nats::jet_stream`. KV management functions to create & delete buckets are available in `nats::jet_stream`, but documented here for cohesion.
+NATS server implements a Key-Value storage on top of JetStream streams. A specific KV bucket is accessed using the `nats::key_value` TclOO object. Do not create it directly - instead, call the [bind_kv_bucket](JsAPI.md#js-bind_kv_bucket-bucket) or [create_kv_bucket](JsAPI.md#js-create_kv_bucket-bucket--option-value) method of your `nats::jet_stream`. KV management functions are available in `nats::jet_stream`, but they are documented here for cohesion.
 
 Please refer to the [official documentation](https://docs.nats.io/nats-concepts/jetstream/key-value-store) for the description of general concepts and to [ADR-8](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-8.md) for implementation details.
 
@@ -11,7 +11,7 @@ Please refer to the [official documentation](https://docs.nats.io/nats-concepts/
 [*js* create_kv_aggregate *bucket writable origins* ?-option *value*?..](#js-create_kv_aggregate-bucket-writable-origins--option-value)<br/>
 [*js* create_kv_mirror *name origin* ?-option *value*?..](#js-create_kv_mirror-name-origin--option-value)<br/>
 [*js* delete_kv_bucket *bucket*](#js-delete_kv_bucket-bucket)<br/>
-[*js* kv_buckets *bucket*](#js-kv_buckets)<br/>
+[*js* kv_buckets](#js-kv_buckets)<br/>
 [*js* empty_kv_bucket *bucket*](#js-empty_kv_bucket-bucket)<br/>
 
 ## Class `nats::key_value`

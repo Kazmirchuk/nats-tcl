@@ -99,10 +99,12 @@ The benefit is clear for all programming languages having proper autocompletion 
 2. Removal of the overly complex `JetStream.Subscribe` function. This is achieved by breaking it down to smaller specialized functions and by deprecating push consumers. <br/>
 This change does not affect the Tcl client. Pull and push consumers are always created explicitly by calling `add_consumer`. There is no dedicated method to subscribe to push consumers. The core NATS subscription is perfectly adequate for durable push consumers. If it is configured with idle heartbeats, you will need to filter them out by checking `nats::msg idle_heartbeat`. And for ephemeral consumers you can use `nats::ordered_consumer`.
 
-3. Introduction of the new way to pull messages from a consumer using continuous polling. This API is designed to combine the best of pull and push consumers, thus helping users to move away from push consumers. The new function is called `Consume`, while the old method is called `Fetch`. <br/>
+3. Removal of `JetStream.PullSubscribe` function. `Fetch` is now a function of `Consumer` interface that performs both subscribing and receiving messages. This change actually brings nats.go closer to nats-tcl, where `fetch` (aka `consume`) has always been working like this.
+
+4. Introduction of the new way to pull messages from a consumer using continuous polling. This API is designed to combine the best of pull and push consumers, thus helping users to move away from push consumers. The new function is called `Consume`, while the old method is called `Fetch`. <br/>
 Unfortunately, the Tcl client already has `$js consume` method that actually performs fetching and should have been called `fetch` from the beginning. So, to avoid future confusion, I've added a new method [fetch](#js-fetch-stream-consumer-args) that works exactly like `consume`. The old `consume` stays in place for backwards compatibility. If in future I decide to implement the real `consume` (continuous polling), it will be done in another TclOO class.
 
-4. Having a dedicated Stream class allows the implementation to choose between `STREAM.MSG.GET` and `DIRECT.GET` API depending on the stream configuration, i.e. if it has AllowDirect=true. This is done transparently for the user - compare e.g. `Stream.GetMsg` in JetStream v2 with `JetStreamManager.GetMsg` in JetStream v1 that has an option `DirectGet`.<br/>The Tcl client provides separate methods for these APIs: `stream_msg_get` and `stream_direct_get` respectively. However, [key_value](KvAPI.md) class knows the stream configuration and chooses between these 2 methods automatically.
+5. Having a dedicated Stream class allows the implementation to choose between `STREAM.MSG.GET` and `DIRECT.GET` API depending on the stream configuration, i.e. if it has AllowDirect=true. This is done transparently for the user - compare e.g. `Stream.GetMsg` in JetStream v2 with `JetStreamManager.GetMsg` in JetStream v1 that has an option `DirectGet`.<br/>The Tcl client provides separate methods for these APIs: `stream_msg_get` and `stream_direct_get` respectively. However, [key_value](KvAPI.md) class knows the stream configuration and chooses between these 2 methods automatically.
 
 ## JetStream wire format
 The JetStream wire format uses nanoseconds for timestamps and durations in all requests and replies. To be consistent with the rest of the Tcl API, the client converts them to milliseconds before returning to a user. And vice versa: all function arguments are accepted as ms and converted to ns before sending.
@@ -176,17 +178,15 @@ If `-timeout` is given, it defines both the client-side and server-side timeouts
 - the client-side timeout is the timeout for the underlying `request`
 - the server-side timeout is 10ms shorter than `timeout`, and it is sent in the `expires` JSON field[^1]. This behaviour is consistent with `nats.go`.
 
-If a callback is not given, the request is synchronous and blocks in a (coroutine-aware) `vwait` until all expected messages are received or the pull request expires. If the client-side timeout fires before the server-side timeout, and no messages have been received, the method raises `ErrTimeout`. In all other cases the method returns a list with as many messages as currently avaiable, but not more than `batch_size`.
+If a callback is not given, the request is synchronous and blocks in a (coroutine-aware) `vwait` until all expected messages are received or the pull request expires. If the client-side timeout fires *before* the server-side timeout, and no messages have been received, the method raises `ErrTimeout`[^2]. In all other cases it returns a list with as many messages as currently avaiable, but not more than `batch_size`.
 
 If a callback is given, the call returns immediately. Return value is a unique ID that can be used to cancel the pull request. When a message is pulled or a timeout fires, the callback will be invoked from the event loop. It must have the following signature:
 
 **cmdPrefix** *timedOut message*
 
-If less than `batch_size` messages are pulled before the pull request times out, the callback is invoked one last time with `timedOut=1`.
+The client handles status messages 404 (no messages), 408 (request expired) and 409 (consumer deleted) appropriately. You can see them in the debug log, if needed. Also, they are passed to the callback together with `timedOut=1`.
 
-The client handles status messages 404, 408 and 409 transparently. You can see them in the debug log, if needed. Also, they are passed to the callback together with `timedOut=1`.
-
-Depending on the consumer's [AckPolicy](https://docs.nats.io/nats-concepts/jetstream/consumers#ackpolicy), you might need to acknowledge the received messages with one of the methods below. [This](https://docs.nats.io/using-nats/developer/develop_jetstream/consumers#delivery-reliability) official doc explains all different kinds of ACKs.
+Depending on the consumer's [AckPolicy](https://docs.nats.io/nats-concepts/jetstream/consumers#ackpolicy), you might need to acknowledge the received messages with one of the methods below. [This page](https://docs.nats.io/using-nats/developer/develop_jetstream/consumers#delivery-reliability) explains all different kinds of ACKs.
 
 **NB!** This method used to be called `consume`. However, [JetStream Client API V2](https://nats.io/blog/preview-release-new-jetstream-client-api/) has introduced a new way for continuously fetching messages using a self-refilling buffer, called "consume". This method is not supported yet by this library. So, to avoid confusion for new users of the library, `consume` is now deprecated, and new Tcl code should use `fetch`.
 
@@ -236,7 +236,7 @@ Creates a new `stream` with configuration specified as option-value pairs. See t
 
 Returns a JetStream reply (same as `stream_info`).
 ### js update_stream *stream* ?-option *value*?..
-Updates the `stream` configuration with new options. Arguments and the return value are the same as in `add_stream`.[^2]
+Updates the `stream` configuration with new options. Arguments and the return value are the same as in `add_stream`.[^3]
 ### js add_stream_from_json *json_config*
 Creates a stream with configuration specified as JSON. The stream name is taken from the JSON.
 ### js delete_stream *stream*
@@ -251,7 +251,7 @@ Returns a list of all streams or the streams matching the filter.
 Creates or updates a pull or push consumer defined on `stream`. See the [official docs](https://docs.nats.io/nats-concepts/jetstream/consumers#configuration) for explanation of these options.
 | Option        | Type   | Default |
 | ------------- |--------|---------|
-| -name[^3] | string | |
+| -name[^4] | string | |
 | -durable_name | string | |
 | -description | string | |
 | -deliver_policy | one of: all, last, new, by_start_sequence<br/> by_start_time last_per_subject | all|
@@ -278,7 +278,7 @@ Creates or updates a pull or push consumer defined on `stream`. See the [officia
 
 Returns a JetStream reply (same as `consumer_info`).
 ### js update_consumer *stream* ?-option *value*?..
-Updates the consumer configuration with new options[^4]. Arguments and the return value are the same as in `add_consumer`.
+Updates the consumer configuration with new options[^5]. Arguments and the return value are the same as in `add_consumer`.
 ### js add_pull_consumer *stream consumer ?args?*
 A shortcut for `add_consumer` to create a durable pull consumer. Rest of `args` are the same as above.
 ### js add_push_consumer *stream consumer deliver_subject ?args?*
@@ -429,8 +429,10 @@ In addition to all [core NATS errors](CoreAPI.md#error-handling), the `jet_strea
 
 [^1]: You can specify the `-expires` option explicitly (ms), but this is an advanced use case and normally should not be needed.
 
-[^2]: In principle, it is enough to pass only the new option-values, and the rest of configuration is left untouched. However, if your stream is configured with an option which is non-editable and not default (e.g. storage=memory), calling `update_stream` will result in a NATS error "stream configuration update can not change ... ". In such cases you need to get the current configuration first using [stream_info](#js-stream_info-stream), update the options and pass it to `update_stream`.
+[^2]: Throwing `ErrTimeout` might seem counter-intuitive and inconvenient, since users need to check for an empty list *and* a timeout. However, this is consistent with nats.go JS API v1.
 
-[^3]: `-name` and `-durable_name` are mutually exclusive. Depending on this choice, the library will invoke either `$JS.API.CONSUMER.CREATE` (default `InactiveThreshold` is 5s) or `$JS.API.CONSUMER.DURABLE.CREATE` (default `InactiveThreshold` is unlimited). `-name` is supported only by NATS>=2.9. `CONSUMER.DURABLE.CREATE` is considered [legacy API](https://github.com/nats-io/nats.go/blob/main/js.go).
+[^3]: In principle, it is enough to pass only the new option-values, and the rest of configuration is left untouched. However, if your stream is configured with an option which is non-editable and not default (e.g. storage=memory), calling `update_stream` will result in a NATS error "stream configuration update can not change ... ". In such cases you need to get the current configuration first using [stream_info](#js-stream_info-stream), update the options and pass it to `update_stream`.
 
-[^4]: Prior to NATS 2.10, the same request could create a new consumer or update its configuration. This behaviour leads to potential race conditions and has been [fixed](https://github.com/nats-io/nats.go/pull/1379) in NATS 2.10 by adding a new field "action" to the JSON request. The Tcl library detects the server version and includes this field automatically.
+[^4]: `-name` and `-durable_name` are mutually exclusive. Depending on this choice, the library will invoke either `$JS.API.CONSUMER.CREATE` (default `InactiveThreshold` is 5s) or `$JS.API.CONSUMER.DURABLE.CREATE` (default `InactiveThreshold` is unlimited). `-name` is supported only by NATS>=2.9. `CONSUMER.DURABLE.CREATE` is considered [legacy API](https://github.com/nats-io/nats.go/blob/main/js.go).
+
+[^5]: Prior to NATS 2.10, the same request could create a new consumer or update its configuration. This behaviour leads to potential race conditions and has been [fixed](https://github.com/nats-io/nats.go/pull/1379) in NATS 2.10 by adding a new field "action" to the JSON request. The Tcl library detects the server version and includes this field automatically.

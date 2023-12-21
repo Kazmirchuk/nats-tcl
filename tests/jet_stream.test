@@ -418,6 +418,27 @@ test jet_stream-8.2 "Check there are no pending pull requests left" -body {
 
 $conn destroy ;# from now on use usual logging
 
+set conn [nats::connection new "JS" -log_chan [tcltest::outputChannel]]
+$conn configure -servers nats://localhost:4222 -dictmsg true -max_reconnect_attempts 1 -connect_timeout 500 -reconnect_time_wait 0
+$conn connect
+set jet_stream [$conn jet_stream -timeout 1000]
+
+test jet_stream-8.3 "Fetch times out if connection is lost" -body {
+    coroutine sync_fetch {*}[lambda {} {
+        catch {[$::jet_stream fetch $::stream_name $::consumer_name -timeout 2000]} err errOpts
+        set ::fetch_done $errOpts
+    }]
+    stopNats NATS
+    wait_for ::fetch_done 600 ;# connect_timeout=500ms
+    assert {[$conn cget status] eq $nats::status_closed} 1
+    dict get $fetch_done -errorcode
+} -result {NATS ErrTimeout} -cleanup {
+    startNats NATS --jetstream
+    $conn configure -servers nats://localhost:4222
+    $conn reset -max_reconnect_attempts -connect_timeout -reconnect_time_wait
+    $conn connect
+}
+
 # ------------------------------- ORDERED CONSUMERS --------------------------------------
 proc consumerCallback {msg} {
     lappend ::gotMsgs $msg ;# no ACK needed when using Ordered Consumer
@@ -440,11 +461,6 @@ proc intercept_clear {obj} {
         deletemethod OnMsg
     }
 }
-
-set conn [nats::connection new "OrderedConsumer" -log_chan [tcltest::outputChannel]]
-$conn configure -servers nats://localhost:4222 -dictmsg true
-$conn connect
-set jet_stream [$conn jet_stream -timeout 1000]
 
 test jet_stream-9.1 "Ordered consumer - no such stream" -body {
     $jet_stream ordered_consumer BOGUS_STREAM -callback consumerCallback
@@ -585,7 +601,32 @@ test jet_stream-13 "Ordered consumer - reset - server restart" -body {
     $cons destroy
 }
 
-test jet_stream-14 "Ordered consumer - reset - stream deleted" -body {
+test jet_stream-14 "Ordered consumer - quick reconnect" -body {
+    set gotMsgs [list]
+    set allErrors [list]
+    $jet_stream publish test.14 1 -stream $stream_name
+    set cons [$jet_stream ordered_consumer $stream_name -callback consumerCallback -filter_subject test.14]
+    set consumerName [$cons name]
+    set connNs [info object namespace $conn]
+    trace add variable ${connNs}::last_error write errorTrace
+    wait_for ::gotMsgs
+    intercept $conn "" [dict create "PUB" "PUB-BOGUS"] ;# corrupt the next PUB
+    $conn publish test.14 2
+    wait_for ::allErrors 1000
+    while {[$conn cget status] ne $nats::status_connected} {
+        wait_for ${connNs}::status 2000
+    }
+    $jet_stream publish test.14 3 -stream $stream_name
+    wait_for ::gotMsgs 500
+    assert {$allErrors eq "ErrServer"} ;# unknown protocol operation
+    assert {$consumerName eq [$cons name]}  ;# still the same push consumer in NATS
+    assert {[set ${cons}::last_error] eq ""}
+    lmap msg $gotMsgs {nats::msg data $msg}
+} -result {1 3} -cleanup {
+    $cons destroy
+}
+
+test jet_stream-15 "Ordered consumer - reset - stream deleted" -body {
     set gotMsgs [list]
     set allErrors [list]
     set cons [$jet_stream ordered_consumer $stream_name -callback consumerCallback -filter_subject test.14 -idle_heartbeat 500]
@@ -599,7 +640,7 @@ test jet_stream-14 "Ordered consumer - reset - stream deleted" -body {
 } -cleanup {
     $cons destroy
 }
-# TODO connection lost+quick reconnect without push consumer lost
+
 $jet_stream destroy
 $conn destroy
 stopNats NATS

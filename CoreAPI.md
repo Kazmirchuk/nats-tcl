@@ -51,6 +51,7 @@ All commands are defined in and exported from the `::nats` namespace.
 [nats::timestamp](#natstimestamp)<br/>
 [nats::isotime_to_msec *isotime*](#natsisotime_to_msec-isotime)<br/>
 [nats::msec_to_isotime *msec ?tz?*](#natsmsec_to_isotime-msec-tz)<br/>
+[nats::mymethod *method ?args?*](#natsmymethod-method-args)<br/>
 
 # Description
 ## Event processing
@@ -260,7 +261,8 @@ Returns current local time in the ISO 8601 format, including milliseconds. Usefu
 Converts an ISO timestamp (as used by the NATS wire format, e.g. 2022-11-22T13:31:35.4514983Z) to integer milliseconds since the epoch (note possible rounding of fractional seconds).
 ### nats::msec_to_isotime *msec ?tz?*
 Converts integer milliseconds to an ISO timestamp in the given timezone (default UTC). The local time zone can be specified as `:localtime` (see the [Tcl reference](https://www.tcl.tk/man/tcl8.6/TclCmd/clock.html#M78)). Note that the time zone designator is not included in the returned string.
-
+### nats::mymethod *method ?args?*
+Same thing as [mymethod](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/ooutil/ooutil.md#1), but safe to use even if the object is destroyed by the time when the callback is scheduled.
 # Error Handling
 Error codes are similar to those from the nats.go client as much as possible. A few additional error codes provide more information about failed connection attempts to the NATS server: ErrBrokenSocket, ErrTLS, ErrConnectionRefused.
 
@@ -332,7 +334,8 @@ The connection can have one of the four statuses:
 
 Calling `connect` when the status is not `$nats::status_closed`, is no-op.<br/>
 Calling `ping` when the status is not `$nats::status_connected`, raises `ErrConnectionClosed`.<br/>
-Calling `disconnect` cancels all pending requests and pings as described in the table below.
+Calling `disconnect` cancels all pending requests and pings as described in the table below.<br/>
+After connection was lost, the server pool must be restored by calling `configure -servers` before attempting to `connect` again.
 
 Official NATS clients have a few more statuses:
 - They distinguish between `DISCONNECTED` (when initial connection attempts failed) and `CLOSED` (if the user called `close` or the connection was lost). I don't see any value in this, so both statuses correspond to `$nats::status_closed`.
@@ -343,7 +346,7 @@ Official NATS clients have a few more statuses:
 
 # Requests Error Handling
 
-This table summarizes how different types of requests behave in case of:
+This table summarizes how [request](#objectName-request-subject-message-args), [ping](#objectName-ping--timeout-ms) and [fetch](JsApi.md#js-fetch-stream-consumer-args) behave in case of:
 - timeout
 - no-responders message from NATS
 - if the connection goes into the reconnecting mode after the request has been issued
@@ -357,6 +360,8 @@ together with references to the testing suite. Note that if a connection is clos
 |sync request|ErrTimeout<br/>basic-7|ErrNoResponders<br/>pubsub-5 |continues ok|ErrTimeout<br/>cluster-3.2 |ErrConnectionClosed<br/>basic-18.2|
 |async request|$timeout=1, blank msg<br/>basic-10|$timeout=1, no-resp msg<br/> pubsub-6 |continues ok<br/>cluster-4|$timeout=1, blank msg<br/>cluster-3.1 |callback is not invoked<br/>basic-18.1|
 |ping|ErrTimeout<br/>basic-19|N/A|ErrConnectionClosed|ErrConnectionClosed<br/>cluster-3.1|ErrConnectionClosed<br/>basic-18.3|
+|sync fetch|ErrTimeout<br/>jet_stream-4.2|N/A |continues ok |ErrTimeout<br/>jet_stream-8.3 |ErrConnectionClosed |
+|async fetch|$timeout=1, blank msg<br/>jet_stream-5.2|N/A |continues ok |$timeout=1, blank msg |callback not invoked |
 
 # Encrypted TLS Connections
 NATS can be [configured](https://docs.nats.io/running-a-nats-service/configuration/securing_nats/tls) to encrypt connections using TLS. Note that according to the NATS protocol, the handshake always starts with plain TCP. If the [INFO](https://docs.nats.io/reference/reference-protocols/nats-protocol#info) message from NATS contains `tls_required=true`, then the client upgrades the connection to TLS before sending the `CONNECT` message.

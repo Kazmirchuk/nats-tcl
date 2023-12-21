@@ -186,6 +186,8 @@ If a callback is given, the call returns immediately. Return value is a unique I
 
 The client handles status messages 404 (no messages), 408 (request expired) and 409 (consumer deleted) appropriately. You can see them in the debug log, if needed. Also, they are passed to the callback together with `timedOut=1`.
 
+Overall, the synchronous form of `fetch` has clearer error reporting, because it can throw `ErrConsumerNotFound`, `ErrStreamNotFound`, `ErrJetStreamNotEnabled` etc that are not available to the asynchronous callback.
+
 Depending on the consumer's [AckPolicy](https://docs.nats.io/nats-concepts/jetstream/consumers#ackpolicy), you might need to acknowledge the received messages with one of the methods below. [This page](https://docs.nats.io/using-nats/developer/develop_jetstream/consumers#delivery-reliability) explains all different kinds of ACKs.
 
 **NB!** This method used to be called `consume`. However, [JetStream Client API V2](https://nats.io/blog/preview-release-new-jetstream-client-api/) has introduced a new way for continuously fetching messages using a self-refilling buffer, called "consume". This method is not supported yet by this library. So, to avoid confusion for new users of the library, `consume` is now deprecated, and new Tcl code should use `fetch`.

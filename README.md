@@ -54,7 +54,7 @@ If you are using a "batteries-included" Tcl distribution, like [Magicsplat](http
 - Cluster support (including receiving additional server addresses from INFO messages)
 - Configurable logging, compatible with the [logger](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/tcllib/files/modules/log/logger.md) package
 - (Windows-specific) If the [iocp package](https://iocp.magicsplat.com/) is available, the client will use it for better TCP socket performance
-- Extensive test suite with 200+ unit tests, checking nominal use cases, error handling, timings and the wire protocol ensures that the Tcl client behaves in line with official NATS clients
+- Extensive test suite with 230+ unit tests, checking nominal use cases, error handling, timings and the wire protocol ensures that the Tcl client behaves in line with official NATS clients
 
 ## Examples
 Look into the [examples](examples) folder.

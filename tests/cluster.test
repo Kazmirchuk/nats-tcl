@@ -181,10 +181,7 @@ test cluster-3.2 "Requests time out if connection is lost - sync" -setup {
         set ::request_done $errOpts
     }]
     stopNats NATS1
-    duration {
-        wait_for ::request_done 5000
-    } elapsed
-    assert {$elapsed < 600} ;# connect_timeout=500ms
+    wait_for ::request_done 600 ;# connect_timeout=500ms
     assert {[$conn cget status] eq $nats::status_closed} 1
     dict get $request_done -errorcode
 } -result {NATS ErrTimeout} -cleanup {

@@ -389,27 +389,25 @@ If NATS server requires clients to authenticate using TLS certificates, you need
 
 ```mermaid
 classDiagram
-namespace nats {
-    class connection {
-        jet_stream()
-    }
-    class jet_stream {
-        ordered_consumer()
-        bind_kv_bucket()
-        create_kv_bucket()
-        create_kv_aggregate()
-    }
-    class key_value {
-        watch()
-    }
-    class kv_watcher
-    class ordered_consumer
+direction LR
+class connection {
+    jet_stream()
+}
+class jet_stream {
+    ordered_consumer()
+    bind_kv_bucket()
+    create_kv_bucket()
+    create_kv_aggregate()
+}
+class key_value {
+    watch()
 }
 connection "1" *-- "*" jet_stream
 jet_stream "1" *-- "*" ordered_consumer
 jet_stream "1" *-- "*" key_value
 jet_stream "1" *-- "*" kv_watcher
 key_value --> kv_watcher
+
 ```
 Note that `kv_watcher` can outlive the `key_value` object from which it was created.
 

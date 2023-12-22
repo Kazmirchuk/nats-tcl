@@ -389,7 +389,6 @@ If NATS server requires clients to authenticate using TLS certificates, you need
 
 ```mermaid
 classDiagram
-direction LR
 namespace nats {
     class connection {
         jet_stream()

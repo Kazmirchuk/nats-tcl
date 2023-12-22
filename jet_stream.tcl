@@ -144,12 +144,13 @@ oo::class create ::nats::AsyncPullRequest {
 }
 
 oo::class create ::nats::jet_stream {
-    variable Conn Timeout ApiPrefix Domain Trace
+    variable Conn Timeout ApiPrefix Domain Trace ChildrenRef
 
     constructor {conn timeout api_prefix domain trace} {
         set Conn $conn
         set Timeout $timeout
         set Trace $trace
+        array set ChildrenRef {}
         if {$api_prefix ne ""} {
             set ApiPrefix $api_prefix
             return
@@ -161,11 +162,25 @@ oo::class create ::nats::jet_stream {
             set ApiPrefix "\$JS.$domain.API"
         }
     }
-    
+    destructor {
+        $Conn releaseRef [self]
+        foreach obj [array names ChildrenRef] {
+            $obj destroy
+        }
+    }
+    # internal
+    method addRef {obj} {
+        set ChildrenRef($obj) ""
+    }
+    method releaseRef {obj} {
+        unset -nocomplain ChildrenRef($obj)
+    }
     method api_prefix {} {
         return $ApiPrefix
     }
-    
+    method timeout {} {
+        return $Timeout
+    }
     # JetStream Direct Get https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-31.md
     method stream_direct_get {stream args} {
         set spec {last_by_subj valid_str null
@@ -498,7 +513,6 @@ oo::class create ::nats::jet_stream {
         if {![my CheckFilenameSafe $stream]} {
             throw {NATS ErrInvalidArg} "Invalid stream name $stream"
         }
-        # TODO add max_msgs ?
         set spec {callback       valid_str ""
                   description    valid_str null
                   headers_only   bool null
@@ -511,7 +525,12 @@ oo::class create ::nats::jet_stream {
         # remove the args that do not belong to a consumer configuration
         dict unset consumerConfig callback
         dict unset consumerConfig post
-        return [nats::ordered_consumer new $Conn [self] $stream $consumerConfig $callback $post]
+        set ordConsumer [nats::ordered_consumer new $Conn [self] $stream $consumerConfig $callback $post]
+        if {$post} {
+            # if $post=false, the consumer is owned by a KV watcher
+            set ChildrenRef($ordConsumer) ""
+        }
+        return $ordConsumer
     }
     method add_stream {stream args} {
         return [my AddUpdateStream $stream CREATE {*}$args]
@@ -632,7 +651,9 @@ oo::class create ::nats::jet_stream {
         if {[dict get $stream_info config max_msgs_per_subject] < 1} {
             throw {NATS ErrBucketNotFound} "Bucket $bucket not found"
         }
-        return [nats::key_value new $Conn [self] $Domain $bucket [dict get $stream_info config]]
+        set keyValue [nats::key_value new $Conn [self] $Domain $bucket [dict get $stream_info config]]
+        set ChildrenRef($keyValue) ""
+        return $keyValue
     }
 
     method create_kv_bucket {bucket args} {
@@ -741,7 +762,9 @@ oo::class create ::nats::jet_stream {
             }
         }
         set stream_info [my add_stream $streamName {*}$stream_config]
-        return [::nats::key_value new $Conn [self] $Domain $bucket [dict get $stream_info config]]
+        set keyValue [nats::key_value new $Conn [self] $Domain $bucket [dict get $stream_info config]]
+        set ChildrenRef($keyValue) ""
+        return $keyValue
     }
 
     method OriginToSource {origin new_bucket} {
@@ -890,10 +913,15 @@ oo::class create ::nats::ordered_consumer {
     }
     destructor {
         after cancel $Timer
+        if {$PostEvent} {
+            $Js releaseRef [self]
+        }
         if {$SubID eq ""} {
             return
         }
-        $Conn unsubscribe $SubID ;# NATS will delete the ephemeral consumer
+        try {
+            $Conn unsubscribe $SubID ;# NATS will delete the ephemeral consumer
+        } trap {NATS ErrConnectionClosed} err {}
     }
     method Reset {{errCode ""}} {
         set inbox "_INBOX.[nats::_random_string]"

@@ -40,7 +40,9 @@ oo::class create ::nats::key_value {
             }
         }
     }
-    
+    destructor {
+        $Js releaseRef [self]
+    }
     method PublishToStream {key {value ""} {hdrs ""}} {
         my CheckKeyName $key
         if {$UseJsPrefix} {
@@ -200,7 +202,9 @@ oo::class create ::nats::key_value {
         if [info exists idle_heartbeat] {
             lappend consumerOpts -idle_heartbeat $idle_heartbeat
         }
-        return [nats::kv_watcher new [self] $consumerOpts $callback $ignore_deletes $values_array]
+        set watcher [nats::kv_watcher new [self] $consumerOpts $callback $ignore_deletes $values_array]
+        $Js addRef $watcher
+        return $watcher
     }
 
     method keys {} {
@@ -268,7 +272,7 @@ oo::class create ::nats::kv_watcher {
     # watcher options/vars
     variable SubID UserCb InitDone IgnoreDeletes Gathering ResultList ValuesArray Consumer
     # copied from the parent KV bucket, so that the user can destroy it while the watcher is living
-    variable Conn Bucket PrefixLen
+    variable Conn Bucket PrefixLen Js
     
     constructor {kv consumer_opts cb ignore_del arr} {
         set InitDone false  ;# becomes true after the current/historical data has been received
@@ -277,21 +281,28 @@ oo::class create ::nats::kv_watcher {
         set Conn [set ${kvNS}::Conn]
         set Bucket [set ${kvNS}::Bucket]
         set stream [set ${kvNS}::Stream]
-        set js [set ${kvNS}::Js]
+        set Js [set ${kvNS}::Js]
         set PrefixLen [string length [set ${kvNS}::ReadPrefix]]
         set UserCb $cb
         set IgnoreDeletes $ignore_del
         if {$arr ne ""} {
             upvar 2 $arr [self namespace]::ValuesArray
         }
-        set Consumer [$js ordered_consumer $stream -callback [nats::mymethod OnMsg] -post false {*}$consumer_opts]
+        try {
+            set Consumer [$Js ordered_consumer $stream -callback [nats::mymethod OnMsg] -post false {*}$consumer_opts]
+        } trap {NATS ErrStreamNotFound} err {
+            throw {NATS BucketNotFound} "Bucket $Bucket not found"
+        }
         if {[dict get [$Consumer info] num_pending] == 0} {
             after 0 [nats::mymethod InitStageDone] ;# NB do not call it directly, because the user should be able to call e.g. "history" right after "watch"
         }
     }
     
     destructor {
-        $Consumer destroy
+        if {[info exists Consumer]} {
+            $Consumer destroy ;# account for the case when ordered_consumer throws, like in test key_value_watchers-watch-5
+        }
+        $Js releaseRef [self]
     }
     
     method InitStageDone {} {
@@ -352,7 +363,12 @@ oo::class create ::nats::kv_watcher {
     method Gather {what} {
         set Gathering $what ;# keys or history
         set ResultList [list]
-        nats::_coroVwait [self]::InitDone ;# TODO handle if the ordered consumer stops
+        set timerID [after [$Js timeout] [list set [self namespace]::InitDone "timeout"]]
+        nats::_coroVwait [self namespace]::InitDone
+        if {$InitDone eq "timeout"} {
+            throw {NATS ErrTimeout} "Timeout while gathering $what in bucket $Bucket"
+        }
+        after cancel $timerID
         return $ResultList
     }
     method consumer {} {

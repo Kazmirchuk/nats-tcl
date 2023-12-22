@@ -425,7 +425,7 @@ set jet_stream [$conn jet_stream -timeout 1000]
 
 test jet_stream-8.3 "Fetch times out if connection is lost" -body {
     coroutine sync_fetch {*}[lambda {} {
-        catch {[$::jet_stream fetch $::stream_name $::consumer_name -timeout 2000]} err errOpts
+        catch {$::jet_stream fetch $::stream_name $::consumer_name -timeout 2000} err errOpts
         set ::fetch_done $errOpts
     }]
     stopNats NATS
@@ -636,12 +636,17 @@ test jet_stream-15 "Ordered consumer - reset - stream deleted" -body {
         wait_for ::allErrors 2000
     }
     assert {$allErrors eq {ErrConsumerNotActive ErrStreamNotFound}}
-    assert {[$cons name] eq ""}
-} -cleanup {
-    $cons destroy
-}
+    $cons name
+} -result ""
 
-$jet_stream destroy
 $conn destroy
 stopNats NATS
+
+test jet_stream-16 "Check garbage collection" -body {
+    foreach cls {jet_stream ordered_consumer} {
+        incr count [llength [info class instances nats::${cls}]]
+    }
+    set count
+} -result 0
+
 cleanupTests

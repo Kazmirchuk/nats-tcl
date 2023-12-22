@@ -214,7 +214,7 @@ You can provide the following options:
 Remember to destroy this object when it is no longer needed - there's no built-in garbage collection in `connection`.
 
 ### objectName destroy
-TclOO destructor. It calls `disconnect` and then destroys the connection.
+TclOO destructor. It calls `disconnect` and then destroys the connection together with all [children objects](#TclOO-Lifecycle).
 
 ## Ensemble `nats::msg`
 This ensemble encapsulates all commands to work with a NATS message. Accessing it as a dict is deprecated. 
@@ -349,9 +349,9 @@ Official NATS clients have a few more statuses:
 This table summarizes how [request](#objectName-request-subject-message-args), [ping](#objectName-ping--timeout-ms) and [fetch](JsApi.md#js-fetch-stream-consumer-args) behave in case of:
 - timeout
 - no-responders message from NATS
-- if the connection goes into the reconnecting mode after the request has been issued
+- if the connection goes into the reconnecting mode after a request has been issued
 - if the connection is lost (no more NATS servers to try)
-- if a user calls `disconnect`
+- if a user calls `disconnect` and the connection is closed
 
 together with references to the testing suite. Note that if a connection is closed deliberately by calling `disconnect` or `destroy`, pending synchronous requests immediately throw `ErrConnectionClosed`, while callbacks for asynchronous requests are simply not invoked.
 
@@ -362,6 +362,8 @@ together with references to the testing suite. Note that if a connection is clos
 |ping|ErrTimeout<br/>basic-19|N/A|ErrConnectionClosed|ErrConnectionClosed<br/>cluster-3.1|ErrConnectionClosed<br/>basic-18.3|
 |sync fetch|ErrTimeout<br/>jet_stream-4.2|N/A |continues ok |ErrTimeout<br/>jet_stream-8.3 |ErrConnectionClosed |
 |async fetch|$timeout=1, blank msg<br/>jet_stream-5.2|N/A |continues ok |$timeout=1, blank msg |callback not invoked |
+
+Both "connection lost" and "connection closed" are represented as `$nats::status_closed`. Users can distinguish between the two cases by checking `$last_error` that is blank in the latter case.
 
 # Encrypted TLS Connections
 NATS can be [configured](https://docs.nats.io/running-a-nats-service/configuration/securing_nats/tls) to encrypt connections using TLS. Note that according to the NATS protocol, the handshake always starts with plain TCP. If the [INFO](https://docs.nats.io/reference/reference-protocols/nats-protocol#info) message from NATS contains `tls_required=true`, then the client upgrades the connection to TLS before sending the `CONNECT` message.
@@ -381,5 +383,35 @@ Consult the documentation of [tls::import](https://core.tcl-lang.org/tcltls/wiki
 The client supplies default options `-require 1` and `-command ::nats::tls_callback` that you can override. The default callback does nothing.
 
 If NATS server requires clients to authenticate using TLS certificates, you need to use `-certfile` and `-keyfile` options.
+
+# TclOO Lifecycle
+`nats::connection` is the top-level object that can be created using both `new` and `create` TclOO commands. All other objects are created using respective factory methods and their lifecycle is limited to the lifecycle of the "parent" object. Depending on a use case, you can choose to call `destroy` explicitly or to rely on the automatic destruction of objects that this library implements as follows:
+
+```mermaid
+classDiagram
+direction LR
+namespace nats {
+    class connection {
+        jet_stream()
+    }
+    class jet_stream {
+        ordered_consumer()
+        bind_kv_bucket()
+        create_kv_bucket()
+        create_kv_aggregate()
+    }
+    class key_value {
+        watch()
+    }
+    class kv_watcher
+    class ordered_consumer
+}
+connection "1" *-- "*" jet_stream
+jet_stream "1" *-- "*" ordered_consumer
+jet_stream "1" *-- "*" key_value
+jet_stream "1" *-- "*" kv_watcher
+key_value --> kv_watcher
+```
+Note that `kv_watcher` can outlive the `key_value` object from which it was created.
 
 [^1]: Due to a [bug](https://core.tcl-lang.org/tcltls/tktview/3c42b2ba11) in TclTLS, the client does **not** verify that the certificate from NATS matches the hostname (X509v3 Subject Alternative Name).

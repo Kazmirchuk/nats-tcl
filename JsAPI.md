@@ -40,6 +40,7 @@ Key/value-related functions of `nats::jet_stream` are documented [here](KvAPI.md
 
 [*js* account_info](#js-account_info)<br/>
 [*js* api_prefix](#js-api_prefix)<br/>
+[*js* timeout](#js-timeout)<br/>
 
 [*js* destroy](#js-destroy)<br/>
 
@@ -326,8 +327,10 @@ Deletes a message from `stream` with the given `sequence` number. `-no_erase` is
 Returns a dict with information about the current account, e.g. used storage, number of streams, consumers, various limits etc.
 ### js api_prefix
 Returns the API prefix used for requests to JetStream API. It is based on the `-domain` and `-api_prefix` options passed to [$connection jet_stream](CoreAPI.md#objectname-jet_stream-args). Default is "$JS.API".
+### js timeout
+Returns the timeout for all JetStream calls.
 ### js destroy
-TclOO destructor. Remember to call it before destroying the parent `nats::connection`.
+TclOO destructor.
 ## `nats::ordered_consumer`
 Implements Ordered Consumer. Do not create it directly - instead, call the [ordered_consumer](JsAPI.md#js-ordered_consumer-stream-args) method of your `nats::jet_stream`.
 

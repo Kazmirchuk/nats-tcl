@@ -64,7 +64,7 @@ set ::nats::_option_spec {
 oo::class create ::nats::connection {
     # "private" variables
     variable config sock coro timers counters subscriptions requests serverPool \
-             outBuffer requestsInboxPrefix pong
+             outBuffer requestsInboxPrefix pong ChildrenRef
     
     # "public" variables, so that users can set up traces if needed
     variable status last_error serverInfo
@@ -102,11 +102,19 @@ oo::class create ::nats::connection {
         set requestsInboxPrefix ""
         set pong 0
         my InitLogger $logger $log_chan $log_level
+        array set ChildrenRef {}
     }
     
     destructor {
         my disconnect
         $serverPool destroy
+        foreach obj [array names ChildrenRef] {
+            $obj destroy
+        }
+    }
+    # internal
+    method releaseRef {obj} {
+        unset -nocomplain ChildrenRef($obj)
     }
     
     method InitLogger {logger log_chan log_level} {
@@ -590,7 +598,9 @@ oo::class create ::nats::connection {
         if {$domain ne "" && $api_prefix ne ""} {
             throw {NATS ErrInvalidArg} "-domain and -api_prefix are mutually exclusive"
         }
-        return [nats::jet_stream new [self] $timeout $api_prefix $domain $trace]
+        set js [nats::jet_stream new [self] $timeout $api_prefix $domain $trace]
+        set ChildrenRef($js) ""
+        return $js
     }
     
     method inbox {} {

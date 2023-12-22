@@ -141,6 +141,8 @@ Returns the status of the KV bucket as described above.
 ### kv history *key*
 Returns all historical entries for the `key`. A NATS wildcard pattern can be used as well, e.g. ">" to get all entries in the bucket.
 
+**NB!** Depending on the amount of received data and network throughput, this method may take longer than other KV operations. Since it inherits the timeout value from the parent JetStream, consider setting it to a generous value to avoid `ErrTimeout`.
+
 ### kv keys
 Returns all keys in the bucket. Throws `ErrKeyNotFound` if the bucket is empty.
 
@@ -150,7 +152,7 @@ Starts watching the `key` (that can be a NATS wildcard) and returns a new object
 kv watch >
 ```
 
-[Ordered consumer](JsAPI.md#js-ordered_consumer-stream-args) is used under the hood.
+[Ordered consumer](JsAPI.md#js-ordered_consumer-stream-args) is used under the hood[^3].
 
 KV entries can be delivered to a callback or to an array (or both):
 - `-callback cmdPrefix` - deliver **entries** to this callback.
@@ -177,7 +179,7 @@ The callback is invoked in the following order, once for each entry:
 3. Then it is invoked once again with an empty `entry` to signal "end of current data".
 4. When a key is updated, it is invoked with a new entry.
 
-With `-updates_only true`, the watcher starts with step #3. [^3]
+With `-updates_only true`, the watcher starts with step #3. [^4]
 
 If you opt for the **array** option:
 1. Current keys and values from the bucket are inserted into this array.
@@ -189,11 +191,11 @@ Thus, you effectively have a local cache of a whole KV bucket or its portion tha
 The array can't be a local variable.
 
 ### kv destroy
-TclOO destructor. Remember to call it before destroying the parent `nats::jet_stream`.
+TclOO destructor. See also the note on [automatic destruction](CoreAPI.md#TclOO-Lifecycle).
 
 ## `nats::kv_watcher`
 ### watcher consumer
-Returns the internal `nats::ordered_consumer` object (for advanced use cases). 
+Returns the internal `nats::ordered_consumer` object (for advanced use cases, e.g. tracking its `$last_error`). 
 ### watcher destroy
 Stops watching and destroys the object.
 
@@ -202,7 +204,7 @@ Stops watching and destroys the object.
 Returns a KV origin configuration to be used with [create_kv_aggregate](#js-create_kv_aggregate-bucket-writable-origins--option-value) and 
 [create_kv_mirror](#js-create_kv_mirror-name-origin--option-value). You can provide the following options:
 - `-bucket str` (required) - the origin bucket
-- `-stream str` - in case the origin is not an actual bucket, but a mirror, you need to pass the stream/mirror name as well [^4]
+- `-stream str` - in case the origin is not an actual bucket, but a mirror, you need to pass the stream/mirror name as well [^5]
 - `-keys list` - optional filter
 
 If the origin bucket is in another JetStream domain or account, you need two more options:
@@ -222,6 +224,8 @@ KV-specific errors are listed in JsAPI.md
 
 [^2]: while for normal KV buckets and aggregates the name of the underlying stream always starts with "KV_", this is not the case for KV mirrors.
 
-[^3]: nats.go deviates from ADR-8 and does *not* send the End Of Initial Data marker.
+[^3]: with all relevant implications, e.g. if the consumer [stops](JsAPI.md#error-handling), the KV watcher stops as well with no additional error reporting.
 
-[^4]: I think, `type KVAggregateOrigin` in ADR-8 is a bit confusing in specifying `Stream` as required and `Bucket` as optional. So, users always need to pass the underlying stream name starting with "KV_", which is not very convenient. So, in the Tcl client it is other way round: `Bucket` is required and `Stream` is optional.
+[^4]: nats.go deviates from ADR-8 and does *not* send the End Of Initial Data marker.
+
+[^5]: I think, `type KVAggregateOrigin` in ADR-8 is a bit confusing in specifying `Stream` as required and `Bucket` as optional. So, users always need to pass the underlying stream name starting with "KV_", which is not very convenient. So, in the Tcl client it is other way round: `Bucket` is required and `Stream` is optional.

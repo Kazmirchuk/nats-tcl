@@ -80,5 +80,5 @@ vwait untilDone
 
 $orderedConsumer destroy ;# unsubscribe from the stream
 $js delete_stream MY_STREAM
-$js destroy
+# $js destroy - optional - will be destroyed together with the connection object
 $conn destroy

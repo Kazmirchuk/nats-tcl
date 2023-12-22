@@ -18,7 +18,7 @@ startNats NATS_JS --jetstream
 set conn [nats::connection new "KV" -log_chan [tcltest::outputChannel]]
 $conn configure -servers nats://localhost:4222
 $conn connect
-set js [$conn jet_stream]
+set js [$conn jet_stream -timeout 1000]
 set kv [$js create_kv_bucket $bucket -history 64]
 
 test key_value_watchers-history-1 "Get history for an empty bucket" -body {
@@ -103,16 +103,12 @@ proc watcherCallback {entry} {
     lappend ::allEntries $entry
 }
 
-proc watcherCleanup {} {
-    $::watcher destroy
-    set ::allEntries [list]
-}
-
 test key_value_watchers-watch-1 "Watch one key" -body {
+    set ::allEntries [list]
     set watcher [$kv watch key2 -callback watcherCallback]
     # make sure we flush the SUB before calling [$kv put]
     # otherwise the test sometimes fails on Linux, because the 2nd and 3rd callbacks swap places
-    wait_flush $conn
+    $conn ping
     $kv put key2 value3
     $kv delete key2
     while {[llength $allEntries] < 4} {
@@ -134,9 +130,10 @@ test key_value_watchers-watch-1 "Watch one key" -body {
                       key key2 \
                       value {} \
                       operation DEL] [lindex $allEntries 3]]}
-} -cleanup watcherCleanup
+}
 
 test key_value_watchers-watch-2 "Watch a wildcard" -body {
+    set ::allEntries [list]
     set watcher [$kv watch keys.* -callback watcherCallback -ignore_deletes true]
     $kv put keys.1 value1
     $kv delete keys.1
@@ -155,7 +152,7 @@ test key_value_watchers-watch-2 "Watch a wildcard" -body {
                       key keys.2 \
                       value value2 \
                       operation PUT] [lindex $allEntries 2]]}
-} -cleanup watcherCleanup
+}
 
 test key_value_watchers-watch-3 "Watch with an array" -body {
     array set vals {}
@@ -171,9 +168,10 @@ test key_value_watchers-watch-3 "Watch with an array" -body {
     assert {[array size vals] == 2}
     assert {$vals(params.P2) eq "VAL2"}
     assert {$vals(params.P3) eq "VAL3"}
-} -cleanup watcherCleanup
+}
 
 test key_value_watchers-watch-4 "Watch with -updates_only" -body {
+    set ::allEntries [list]
     set watcher [$kv watch params.* -updates_only true -callback watcherCallback]
     $kv put params.P4 VAL4
     $kv put params.P5 VAL5
@@ -196,12 +194,35 @@ test key_value_watchers-watch-4 "Watch with -updates_only" -body {
                       bucket $bucket \
                       key params.P4 \
                       operation DEL] [lindex $allEntries 3]]}
-} -cleanup watcherCleanup
+}
 
-$kv destroy
-$js delete_kv_bucket $bucket
-$js destroy
+test key_value_watchers-watch-5 "Try to watch a deleted bucket" -body {
+    set kv2 [$js create_kv_bucket SHORT_LIVING_BUCKET]
+    $js delete_kv_bucket SHORT_LIVING_BUCKET
+    $kv2 watch >
+} -result * -match glob -errorCode {NATS BucketNotFound}
+
+test key_value_watchers-history-5 "history timeout" -body {
+    $conn configure -reconnect_time_wait 2000
+    intercept $conn [dict create "HMSG" "HMSG-BOGUS"] "" ;# corrupt the next incoming HMSG that carries DEL of key2
+    
+    coroutine get_history {*}[lambda {} {
+        catch {$::kv history key2} ::err ::errOpts
+    }]
+    sleep 200 ;# need some time to create the ordered consumer
+    stopNats NATS_JS
+    wait_for ::err 400 ;# JS timeout 1000ms - stopNats 500ms - sleep 200ms + tolerance 100ms
+    assert {[$conn cget status] eq $nats::status_reconnecting} 1
+    return -options $errOpts $err
+} -result "Timeout while gathering history*" -match glob -errorCode {NATS ErrTimeout}
+
 $conn destroy
-stopNats NATS_JS
+
+test key_value_watchers-gc "Check garbage collection" -body {
+    foreach cls {jet_stream ordered_consumer key_value kv_watcher} {
+        incr count [llength [info class instances nats::${cls}]]
+    }
+    set count
+} -result 0
 
 cleanupTests

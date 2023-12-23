@@ -207,13 +207,19 @@ Returns a KV origin configuration to be used with [create_kv_aggregate](#js-crea
 - `-stream str` - in case the origin is not an actual bucket, but a mirror, you need to pass the stream/mirror name as well [^5]
 - `-keys list` - optional filter
 
-If the origin bucket is in another JetStream domain or account, you need two more options:
-- `-api APIPrefix` (required) - the subject prefix that imports the other account/domain
-- `-deliver deliverySubject` (optional) - the delivery subject to use for the push consumer
+If the origin bucket is in another JetStream domain:
+- `-domain str` - domain name
+If the origin bucket is in another account:
+- `-api APIPrefix` - the subject prefix that imports the other account
+
+In both cases you can also specify:
+- `-deliver deliverySubject` (optional) - the delivery subject to use for the push consumer/KV watcher
+
+*Note*: `-domain` is a shorthand option equivalent to `-api "\$JS.$domain.API"`
 
 Example of creating a writable KV aggregate sourcing a subset `new.>` of keys/values from another bucket `HUB_BUCKET` located in the `hub` domain:
 ```Tcl
-set origin [nats::make_kv_origin -bucket HUB_BUCKET -keys new.> -api "\$JS.hub.API"]
+set origin [nats::make_kv_origin -bucket HUB_BUCKET -keys new.> -domain hub]
 set kv [$js create_kv_aggregate LEAF_KV true [list $origin] -description "writable filtered KV aggregate"]
 ```
 See also [nats::make_stream_source](JsApi.md#natsmake_stream_source--option-value).

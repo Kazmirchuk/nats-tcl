@@ -428,8 +428,9 @@ In addition to all [core NATS errors](CoreAPI.md#error-handling), the `jet_strea
 | ErrBucketNotFound | from ErrStreamNotFound | Bucket does not exist |
 | ErrMsgNotFound | 404/10037 | Message not found in a stream |
 | ErrKeyNotFound | from ErrMsgNotFound | Key not found in a bucket |
-| ErrJSResponse | | Other JetStream error. `code` and `err_code` is passed in the Tcl error code and `description` is used for the error message. |
- 
+| ErrJSResponse | any| Other JetStream error. `code` and `err_code` is passed in the Tcl error code and `description` is used for the error message. |
+| ErrNotJSMessage | N/A | Thrown by [nats::metadata](#natsmetadata-message) when a message didn't come from a consumer |
+
  See also "Error Response" in [ADR-1](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-1.md#error-response).
 
 [^1]: You can specify the `-expires` option explicitly (ms), but this is an advanced use case and normally should not be needed.

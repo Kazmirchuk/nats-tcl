@@ -1232,9 +1232,12 @@ proc ::nats::_ns2ms {dict_name args} {
 # metadata is encoded in the reply field:
 # V1: $JS.ACK.<stream>.<consumer>.<delivered>.<sseq>.<cseq>.<time>.<pending>
 # V2: $JS.ACK.<domain>.<account hash>.<stream>.<consumer>.<delivered>.<sseq>.<cseq>.<time>.<pending>.<random token>
-# NB! I've got confirmation in Slack that as of Feb 2023, V2 metadata is not implemented yet in NATS
+# NB! as of Dec 2023, V2 metadata is not implemented yet in NATS, see nats-server/server/consumer.go: const expectedNumReplyTokens = 9
 proc ::nats::metadata {msg} {
     set mlist [split [dict get $msg reply] .]
+    if {[llength $mlist] != 9} {
+        throw {NATS ErrNotJSMessage} "Message with subject [dict get $msg subject] is not a JetStream message"
+    }
     set mdict [dict create \
             stream [lindex $mlist 2] \
             consumer [lindex $mlist 3] \

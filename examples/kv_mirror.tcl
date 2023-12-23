@@ -23,12 +23,14 @@ set conn_hub [nats::connection new "HUB"]
 $conn_hub configure -servers nats://localhost:4222 -user acc -password acc
 $conn_hub connect
 set js_hub [$conn_hub jet_stream -timeout 1000]
+puts "Check JS domain: [dict get [$js_hub account_info] domain]"
 
 puts "Connecting to the 'leaf' NATS..."
 set conn_leaf [nats::connection new "LEAF"]
 $conn_leaf configure -servers nats://localhost:4111 -user acc -password acc
 $conn_leaf connect
 set js_leaf [$conn_leaf jet_stream -timeout 1000]
+puts "Check JS domain: [dict get [$js_leaf account_info] domain]"
 
 puts "Create a KV bucket in the hub..."
 set kv_hub [$js_hub create_kv_bucket HUB_BUCKET -history 64]

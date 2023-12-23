@@ -73,6 +73,5 @@ $kv destroy ;# disconnects from the bucket, but it stays in NATS
 puts "Deleting $bucket ..."
 $js delete_kv_bucket $bucket
 
-$js destroy
-$conn destroy
-puts "Done"
+$conn destroy ;# $js is destroyed automatically
+puts "Done! Remember to delete the NATS storage before running the example again"

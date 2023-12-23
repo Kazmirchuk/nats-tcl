@@ -134,6 +134,7 @@ test cluster-2 "Outgoing messages are buffered while reconnecting" -body {
     assert {$bufMsgCount == 50}
 } -result "" -cleanup {
     $conn disconnect
+    $conn reset -reconnect_time_wait
     $watcherConn destroy
 }
 
@@ -187,6 +188,7 @@ test cluster-3.2 "Requests time out if connection is lost - sync" -setup {
 } -result {NATS ErrTimeout} -cleanup {
     $resp destroy
     $conn disconnect
+    $conn reset -max_reconnect_attempts -connect_timeout -reconnect_time_wait
 }
 
 test cluster-4 "Requests can transfer from one server to another within a cluster" -setup {
@@ -226,7 +228,22 @@ test cluster-4 "Requests can transfer from one server to another within a cluste
     set inMsg
 } -result "hello" -cleanup {
     $resp destroy
-    $conn destroy
+    $conn disconnect
     stopNats NATS2
 }
+
+test cluster-5 "Call to 'disconnect/destroy' interrupts reconnecting process" -body {
+    startNats NATS
+    $conn configure -servers nats://localhost:4222 -reconnect_time_wait 0
+    $conn connect
+    stopNats NATS
+    while {[$conn cget status] ne $nats::status_reconnecting} {
+        wait_for ${connNs}::status 2000
+    }
+    $conn publish foo bar ;# make sure we have smth in outBuffer
+    $conn disconnect ;# check logs that there are no errors from CloseSocket
+    $conn cget status
+} -result $nats::status_closed
+
+$conn destroy
 cleanupTests

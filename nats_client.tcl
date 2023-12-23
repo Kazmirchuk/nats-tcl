@@ -697,11 +697,14 @@ oo::class create ::nats::connection {
             # we get here only from method disconnect
             lassign [my current_server] host port
             log::info "Closing connection to $host:$port" ;# in case of broken socket, the error will be logged in AsyncError
-            # make sure we wait until successful flush, if connection was not broken
-            chan configure $sock -blocking 1
-            foreach msg $outBuffer {
-                append msg "\r\n"
-                puts -nonewline $sock $msg
+            # make sure we wait until successful flush, if the connection was not broken
+            # but not if we're trying to connect to a new server!
+            if {![chan configure $sock -connecting]} {
+                chan configure $sock -blocking 1
+                foreach msg $outBuffer {
+                    append msg "\r\n"
+                    puts -nonewline $sock $msg
+                }
             }
             set outBuffer [list]
         }

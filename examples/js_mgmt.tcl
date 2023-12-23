@@ -64,5 +64,5 @@ $js delete_stream MY_STREAM2
 
 $js destroy
 $conn destroy
-
+puts "Done! Remember to delete the NATS storage before running the example again"
 # not all JetStream management functions are shown in this example! refer to the API docs and tests for more details

@@ -82,3 +82,4 @@ $orderedConsumer destroy ;# unsubscribe from the stream
 $js delete_stream MY_STREAM
 # $js destroy - optional - will be destroyed together with the connection object
 $conn destroy
+puts "Done! Remember to delete the NATS storage before running the example again"

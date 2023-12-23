@@ -70,7 +70,7 @@ oo::class create ::nats::SyncPullRequest {
         set msgStatus [nats::header lookup $msg Status ""]
         switch -- $msgStatus {
             100 {
-                return ;# TODO support HB/FC per ADR-9.md ?
+                return
             }
             404 - 408 - 409 {
                 [info object namespace $Conn]::log::debug "Sync pull request $ID got status message $msgStatus"
@@ -1278,15 +1278,4 @@ proc ::nats::make_republish {args} {
         dest  valid_str NATS_TCL_REQUIRED
         headers_only bool false}
     return [nats::_dict2json $spec $args]
-}
-proc ::nats::make_kv_origin {args} {
-    set spec {
-        stream  valid_str null
-        bucket  valid_str NATS_TCL_REQUIRED
-        keys    str null
-        api     valid_str null
-        deliver valid_str null}
-
-    nats::_parse_args $args $spec
-    return [nats::_local2dict $spec]
 }

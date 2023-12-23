@@ -156,7 +156,7 @@ test key_value-aggregate-1 "Test a writable filtered KV aggregate in the leaf" -
     $kv_hub put shipped.1 "order 1"
     $kv_hub put new.2 "order 2"
     $kv_hub put new.3 "order 3"
-    set origin [nats::make_kv_origin -bucket $hub_bucket -keys new.> -api "\$JS.hub.API"]
+    set origin [nats::make_kv_origin -bucket $hub_bucket -keys new.> -domain hub]
     set aggrKV [$js_leaf create_kv_aggregate NEW_ORDERS true [list $origin] -description "writable filtered KV aggregate"]
     sleep 500 ;# let them sync
     assert {[$aggrKV keys] eq {new.2 new.3}}
@@ -172,7 +172,7 @@ test key_value-aggregate-1 "Test a writable filtered KV aggregate in the leaf" -
 }
 
 test key_value-aggregate-2 "Test a read-only KV aggregate in the leaf" -body {
-    set origin [nats::make_kv_origin -bucket $hub_bucket -api "\$JS.hub.API"]
+    set origin [nats::make_kv_origin -bucket $hub_bucket -domain hub]
     set aggrKV [$js_leaf create_kv_aggregate ORDERS_RO false [list $origin]]
     sleep 500 ;# let them sync
     assert {[$aggrKV keys] eq {shipped.1 new.2 new.3}}
@@ -195,7 +195,7 @@ test key_value-aggregate-4 "Source a KV aggregate from a mirror" -body {
     sleep 500  ;# let them sync
     assert {[dict get [$js_hub stream_info MIRROR] state messages] == 3} 1
     # in this case we need to specify both -bucket and -stream
-    set origin [nats::make_kv_origin -bucket $hub_bucket -stream MIRROR -api "\$JS.hub.API"]
+    set origin [nats::make_kv_origin -bucket $hub_bucket -stream MIRROR -domain hub]
     set aggrKV [$js_leaf create_kv_aggregate ALL_ORDERS false [list $origin]]
     sleep 500
     set kvStatus [$aggrKV status]
@@ -209,7 +209,7 @@ test key_value-aggregate-4 "Source a KV aggregate from a mirror" -body {
 
 test key_value-mirror-1 "Create a filtered KV mirror in the leaf" -body {
     # mirrors can have only one origin, are always read-only and you can't bind to them; they exist only to load-balance reads using DIRECT.GET
-    set origin [nats::make_kv_origin -bucket $hub_bucket -keys new.> -api "\$JS.hub.API"]
+    set origin [nats::make_kv_origin -bucket $hub_bucket -keys new.> -domain hub]
     $js_leaf create_kv_mirror LEAF_MIRROR $origin
     sleep 500 ;# let them sync
     $js_leaf bind_kv_bucket LEAF_MIRROR

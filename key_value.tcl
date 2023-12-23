@@ -158,7 +158,7 @@ oo::class create ::nats::key_value {
         my PublishToStream $key "" $header
         return
     }
-    # TODO add revision
+    
     method purge {key} {
         my PublishToStream $key "" [dict create KV-Operation PURGE Nats-Rollup sub]
         return
@@ -374,4 +374,23 @@ oo::class create ::nats::kv_watcher {
     method consumer {} {
         return $Consumer
     }
+}
+proc ::nats::make_kv_origin {args} {
+    set spec {
+        stream  valid_str null
+        bucket  valid_str NATS_TCL_REQUIRED
+        keys    str null
+        api     valid_str null
+        deliver valid_str null
+        domain  valid_str null}
+
+    nats::_parse_args $args $spec
+    if {[info exists domain]} {
+        if {[info exists api]} {
+            throw {NATS ErrInvalidArg} "-domain and -api are mutually exclusive"
+        }
+        set api "\$JS.$domain.API"
+        unset domain
+    }
+    return [nats::_local2dict $spec]
 }

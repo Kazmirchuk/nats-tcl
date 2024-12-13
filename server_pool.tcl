@@ -135,15 +135,18 @@ oo::class create ::nats::server_pool {
     }
     
     method current_server_connected {ok} {
-        [info object namespace $Conn]::my CancelConnectTimer
+        set ns [info object namespace $Conn]
+        ${ns}::my CancelConnectTimer
         set s [lindex $Servers end]
-        dict set s last_attempt [clock milliseconds]
         if {$ok} {
             dict set s reconnects 0
+            dict set s last_attempt 0
         } else {
             dict incr s reconnects
+            dict set s last_attempt [clock milliseconds]
         }
         lset Servers end $s
+        ${ns}::log::debug "Current server ok=$ok: [dict get $s host]:[dict get $s port] [dict get $s reconnects] reconnects"
     }
     
     method format_credentials {} {

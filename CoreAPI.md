@@ -332,7 +332,7 @@ The connection can have one of the four statuses:
 - `$nats::status_connected`: the TCP connection to a NATS server is established (including TLS upgrade and credentials verification, if needed). Calling `disconnect` transitions the client into `$nats::status_closed`. If the connection is lost, the client transitions into `$nats::status_reconnecting`.
 - `$nats::status_reconnecting` - triggered by any of the above asynchronous errors that terminate the connection. The client is trying to connect to servers in the pool one by one. Consecutive attempts to connect to a specific server are at least `-reconnect_time_wait` ms apart. Every failed connection to a server increments its `reconnects` counter. Once this counter exceeds `-max_reconnect_attempts`, the server is removed from the pool. Once no servers are left in the pool, or the user calls `disconnect`, the client transitions into `$nats::status_closed`. Calling `subscribe`, `unsubscribe`, `publish` etc is allowed. As soon as the client transitions into `$nats::status_connected`, they will be flushed along with restoring all current subscriptions.
 
-Calling `connect` when the status is not `$nats::status_closed`, is no-op.<br/>
+Calling `connect` when the status is not `$nats::status_closed`, has no effect.<br/>
 Calling `ping` when the status is not `$nats::status_connected`, raises `ErrConnectionClosed`.<br/>
 Calling `disconnect` cancels all pending requests and pings as described in the table below.<br/>
 After connection was lost, the server pool must be restored by calling `configure -servers` before attempting to `connect` again.

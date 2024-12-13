@@ -76,6 +76,7 @@ ADRs (architecture decision records) provide a *single source of truth* that all
 | [ADR-31](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-31.md) | JetStream Direct Get | |
 | [ADR-33](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-33.md) | Metadata for Stream and Consumer | |
 | [ADR-36](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-36.md) | Subject Mapping Transforms in Streams | |
+| [ADR-40](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-40.md) | NATS Connection |`tls_first` is not supported |
 
 API documentation in this repository focuses on specific details of the Tcl implementation. Users are expected to have sufficient understanding of NATS in general, so other information is provided through links to ADRs and other external docs.
 ## Missing features (in comparison to official NATS clients)

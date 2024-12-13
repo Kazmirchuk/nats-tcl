@@ -778,7 +778,6 @@ oo::class create ::nats::connection {
                 # socket -async can throw e.g. in case of a DNS resolution failure
                 if {![catch {package present iocp_inet}]} {
                     set sock [iocp::inet::socket -async $host $port]
-                    log::debug "Created IOCP socket"
                 } else {
                     set sock [socket -async $host $port]
                 }

@@ -109,52 +109,46 @@ test server_pool-13.2 "DNS resolution failure" -body {
 
 test server_pool-14.1 "Reconnecting timings and counters" -body {
     startNats NATS
-    $conn configure -servers [list nats://localhost:4222 nats://localhost:5222 nats://localhost:6222] -randomize false
-    $conn configure -max_reconnect_attempts 1 -connect_timeout 500 -reconnect_time_wait 3000
+    $conn configure -servers [list nats://localhost:4222 nats://localhost:5222]
+    $conn configure -connect_timeout 100 -reconnect_time_wait 2000
     trace add variable ${connNs}::last_error write errorTrace
     $conn connect
-    stopNats NATS ;# the client goes into reconnecting
+    stopNats NATS
     duration {
-        startNats NATS
         test_utils::log::info "Waiting for the client to go into reconnecting"
         while {[$conn cget status] ne $nats::status_reconnecting} {
             wait_for ${connNs}::status 5000
         }
+        # 1. connect to NATS:5222 -> fail
+        # 2. connect to NATS:4222 -> fail
+        # 3. NATS:5222 has reconnects=1, so wait 2 - 0.1 = 1.9s
+        after 1000 [list startNats NATS -p 5222]
+        # 4. connect to NATS:5222 -> ok
         test_utils::log::info "Waiting for the client to restore connection"
         while {[$conn cget status] ne $nats::status_connected} {
             wait_for ${connNs}::status 5000
         }
     } elapsed
-    assert {[approx $elapsed 3000 1000]} ;# should be equal to reconnect_time_wait
+    assert {[approx $elapsed 2100 200]}
     # on Windows I get ErrConnectionTimeout, and on Linux I get ErrConnectionRefused
     assert {$allErrors eq {ErrBrokenSocket ErrConnectionTimeout ErrConnectionTimeout} || $allErrors eq {ErrBrokenSocket ErrConnectionRefused ErrConnectionRefused}}
-    foreach s [$conn all_servers] {
-        if {[dict get $s port] == 4222} {
-            assert {[dict get $s reconnects] == 0}
-        } else {
-            assert {[dict get $s reconnects] == 1}
-        }
-    }
 } -cleanup {
     trace remove variable ${connNs}::last_error write errorTrace
 }
 
 test server_pool-14.2 "Remove servers from the pool when they reach max_reconnect_attempts" -body {
-    stopNats NATS ;# the client goes into reconnecting    
-    startNats NATS
-    test_utils::log::info "Waiting for the client to go into reconnecting"
-    while {[$conn cget status] ne $nats::status_reconnecting} {
-        wait_for ${connNs}::status 5000
-    }
-    test_utils::log::info "Waiting for the client to restore connection"
-    while {[$conn cget status] ne $nats::status_connected} {
-        wait_for ${connNs}::status 5000
-    }
-    # you should see "Removed N from the server pool" in the debug log...
-    assert {[llength [$conn all_servers]] == 1} 1
+    $conn configure -max_reconnect_attempts 2 -reconnect_time_wait 500
+    stopNats NATS
+    duration {
+        # you should see "Removed N from the server pool" in the debug log...
+        while {[$conn cget status] ne $nats::status_closed} {
+            wait_for ${connNs}::status 5000
+        }
+    } elapsed
+    assert {[$conn all_servers] eq ""}
+    assert {[approx $elapsed 700 150]}
 } -cleanup {
     $conn disconnect
-    stopNats NATS
 }
     
 $conn destroy

@@ -678,10 +678,6 @@ oo::class create ::nats::connection {
     }
 
     method CloseSocket { {broken 0} } {
-        # this method is only for closing an established TCP connection
-        # it is not convenient to re-use it for all cases of close $sock (timeout or rejected connection)
-        # because it does a lot of other work
-        
         chan event $sock readable {}
         if {$broken} {
             if {$status ne $nats::status_connected} {
@@ -1137,11 +1133,7 @@ oo::class create ::nats::connection {
                 # the socket either connected or failed to connect
                 set errorMsg [chan configure $sock -error]
                 if { $errorMsg ne "" } {
-                    close $sock
-                    set sock ""
-                    $serverPool current_server_connected false
-                    my AsyncError ErrConnectionRefused "Failed to connect to $host:$port: $errorMsg"
-                    my ConnectNextServer
+                    my AsyncError ErrConnectionRefused "Failed to connect to $host:$port: $errorMsg" 1
                     return
                 }
                 # connection succeeded
@@ -1156,14 +1148,9 @@ oo::class create ::nats::connection {
                 chan event $sock readable [list $coro readable]
             }
             connect_timeout {
-                set timers(connect) ""
                 # we get here both in case of TCP-level timeout and if the server does not reply to the initial PING/PONG on time
                 lassign [my current_server] host port
-                close $sock
-                set sock ""
-                $serverPool current_server_connected false
-                my AsyncError ErrConnectionTimeout "Connection timeout for $host:$port"
-                my ConnectNextServer
+                my AsyncError ErrConnectionTimeout "Connection timeout for $host:$port" 1
             }
             readable {
                 # the chan readable event will be sent again and again for as long as there's pending data

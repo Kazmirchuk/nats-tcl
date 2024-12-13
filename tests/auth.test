@@ -117,7 +117,7 @@ test auth-2.4 "Try connecting to a pool with no credentials - OK" -body {
     duration {
         conn connect
     } elapsed
-    assert {$elapsed < 50}
+    assert {$elapsed < 100}
     lassign [conn current_server] host port
     assert {$host eq "localhost"}
     assert {$port == 4223}

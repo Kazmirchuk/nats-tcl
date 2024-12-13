@@ -21,9 +21,9 @@ startNats NATS --jetstream
 
 # some test cases here check for logging output
 set natsLogger [logger::init nats]
-logger::utils::applyAppender -appender fileAppend -service nats -appenderArgs {-outputChannel [tcltest::outputChannel] -conversionPattern {%m}}
+logger::utils::applyAppender -appender fileAppend -service nats -appenderArgs {-outputChannel [tcltest::outputChannel] -conversionPattern {\[[nats::timestamp] %c %p\] %m}}
 ${natsLogger}::setlevel warn
-set conn [nats::connection new "JS" -logger $natsLogger] ;# -log_chan [tcltest::outputChannel] -log_level debug]
+set conn [nats::connection new "JS" -logger $natsLogger]
 
 # a test case with -output does not produce this output on the console, but sometimes it is useful for troubleshooting
 set do_test_stdout 1  ;# set to 0 to see debug messages in the console
@@ -416,12 +416,9 @@ test jet_stream-8.2 "Check there are no pending pull requests left" -body {
     array size ${conn}::requests
 } -result 0
 
-$conn destroy ;# from now on use usual logging
-
-set conn [nats::connection new "JS" -log_chan [tcltest::outputChannel]]
+$conn disconnect
 $conn configure -servers nats://localhost:4222 -dictmsg true -max_reconnect_attempts 1 -connect_timeout 500 -reconnect_time_wait 0
 $conn connect
-set jet_stream [$conn jet_stream -timeout 1000]
 
 test jet_stream-8.3 "Fetch times out if connection is lost" -body {
     coroutine sync_fetch {*}[lambda {} {
@@ -581,12 +578,13 @@ test jet_stream-12 "Ordered consumer - reset - sequence mismatch in a message" -
 }
 
 test jet_stream-13 "Ordered consumer - reset - server restart" -body {
+    $conn configure -reconnect_time_wait 500 ;# must be less than RetryInterval
     set gotMsgs [list]
     set allErrors [list]
     $jet_stream publish test.13 1 -stream $stream_name
     set cons [$jet_stream ordered_consumer $stream_name -callback consumerCallback -filter_subject test.13 -idle_heartbeat 300]
     trace add variable ${cons}::last_error write errorTrace
-    set ${cons}::RetryInterval 700 ;# default interval 10s is recommended for production, but it's too long for the test
+    set ${cons}::RetryInterval 1000 ;# default interval 10s is recommended for production, but it's too long for the test
     wait_for ::gotMsgs
     stopNats NATS
     # consumer resets but fails to create a new push consumer due to a timeout
@@ -640,6 +638,7 @@ test jet_stream-15 "Ordered consumer - reset - stream deleted" -body {
 } -result ""
 
 $conn destroy
+${natsLogger}::delete
 stopNats NATS
 
 test jet_stream-16 "Check garbage collection" -body {

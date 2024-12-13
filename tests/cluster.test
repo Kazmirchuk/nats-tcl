@@ -111,13 +111,9 @@ test cluster-2 "Outgoing messages are buffered while reconnecting" -body {
     for {set i 0} {$i < 10} {incr i} {
         $conn publish subj "connected" ;# make NATS terminate the connection with "-ERR unknown protocol operation"
     }
-    try {
-        $conn ping -timeout 400 ;# find out about the failure ASAP
-    } trap {NATS ErrTimeout} err {
-    } on ok result {
-        assert {false}
+    while {[$conn cget status] ne $nats::status_reconnecting} {
+        wait_for ${connNs}::status 5000
     }
-    assert {[$conn cget status] eq $nats::status_reconnecting} 1
     for {set i 0} {$i < 50} {incr i} {
         $conn publish subj "Buffered message"
     }
@@ -127,9 +123,9 @@ test cluster-2 "Outgoing messages are buffered while reconnecting" -body {
             wait_for ${connNs}::status 1000
         }
     } elapsed
-    assert {[$conn cget status] eq $nats::status_connected} 1
-    assert {[approx $elapsed 100 100]} ;# 500 (reconnect_time_wait) - 400 (ping timeout) = 100
-    sleep 1000
+    assert {[$conn cget -status] eq $nats::status_connected} 1
+    assert {[approx $elapsed 50 100]}
+    sleep 500  ;# let the watcher receive all messages
     assert {$connMsgCount == 31}
     assert {$bufMsgCount == 50}
 } -result "" -cleanup {

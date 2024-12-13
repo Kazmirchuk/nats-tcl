@@ -84,7 +84,7 @@ test pubsub-3 "Receive a message with a header from NATS CLI" -body {
         assert {"val3" in $hdr_values}
         set ::msg_received 1
     }]]
-    wait_flush $conn
+    $conn ping
     execNatsCmd pub -H hdr1:val1 -H hdr2:val2 -H hdr2:val3 nats_cli payload 2>@1
     wait_for ::msg_received 1000
     set msg_received

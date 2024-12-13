@@ -314,7 +314,7 @@ test basic-17 "Check internal state before and after disconnection" -body {
     $conn disconnect
     
     assert {[set ${conn}::sock] eq ""} 1
-    assert {[$conn cget status] eq $nats::status_closed} 1
+    assert {[$conn cget -status] eq $nats::status_closed} 1
     assert {[array size ${conn}::subscriptions] == 0} 1
 }
 
@@ -323,7 +323,7 @@ test basic-18.1 "Disconnection cancels pending async requests" -body {
     set inMsg -1
     $conn connect
     $conn request service "2000 foo" -timeout 1000 -callback asyncReqCallback
-    wait_flush $conn
+    $conn ping
     $conn disconnect
     sleep 1500  ;# more than -timeout
     set inMsg ;# asyncReqCallback was not invoked

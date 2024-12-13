@@ -944,7 +944,7 @@ oo::class create ::nats::ordered_consumer {
             } trap {NATS} {err opts} {
                 # most likely ErrTimeout if we're reconnecting to NATS or ErrJetStreamNotEnabled if a JetStream cluster is electing a new leader
                 my AsyncError [lindex [dict get $opts -errorcode] 1] "failed to reset: $err"
-                if {[$Conn cget status] == $nats::status_closed} {
+                if {[$Conn cget -status] == $nats::status_closed} {
                     my AsyncError ErrConnectionClosed "stopped"
                     return
                 }

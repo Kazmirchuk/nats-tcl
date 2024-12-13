@@ -23,7 +23,7 @@ test extra_opts-1 "Check verbose and pedantic modes" -body {
     $conn configure -verbose true -pedantic true -check_subjects false
     $conn connect -async ;# NATS sends back INFO, then replies +OK to our CONNECT
     sniffer $conn {
-        while {[$conn cget status] ne $nats::status_connected} {
+        while {[$conn cget -status] ne $nats::status_connected} {
             wait_for ${connNs}::status
         }
         $conn publish dummy_subj "Hello NATS" ;# NATS sends back +OK
@@ -31,7 +31,7 @@ test extra_opts-1 "Check verbose and pedantic modes" -body {
         sleep 300
     } readData writtenData -all_lines 1
     
-    assert {[$conn cget status] eq $nats::status_connected} 1 ;# the connection should be still alive
+    assert {[$conn cget -status] eq $nats::status_connected} 1 ;# the connection should be still alive
 
     set connectDict [getConnectOpts [lindex $writtenData 0]] 
     assert {[dict get $connectDict verbose] eq "true"}
@@ -51,7 +51,7 @@ test extra_opts-2 "Check the echo=false option" -body {
     $conn configure -echo false
     $conn connect -async
     sniffer $conn {
-        while {[$conn cget status] ne $nats::status_connected} {
+        while {[$conn cget -status] ne $nats::status_connected} {
             wait_for ${connNs}::status
         }
     } rdata wdata
@@ -115,7 +115,7 @@ test extra_opts-4.2 "PING/PONG - no response from the client" -body {
         wait_for ${connNs}::status 6000
     } elapsed
     assert {[lastError $conn] eq "ErrStaleConnection"}
-    assert {[$conn cget status] eq $nats::status_reconnecting} 1
+    assert {[$conn cget -status] eq $nats::status_reconnecting} 1
     # after sending PING, the server will wait for 2s more before declaring 'Stale Connection'
     assert {$elapsed < 5000}
 } -cleanup {
@@ -134,7 +134,7 @@ test extra_opts-4.3 "PING/PONG - no response from the server" -body {
         wait_for ${connNs}::status 4000
     } elapsed
     assert {[lastError $conn] eq "ErrStaleConnection"}
-    assert {[$conn cget status] eq $nats::status_reconnecting} 1
+    assert {[$conn cget -status] eq $nats::status_reconnecting} 1
     assert {[approx $elapsed 3000]}
 } -cleanup {
     $conn disconnect
@@ -156,7 +156,7 @@ test extra_opts-6 "Check the utf8_convert option" -setup {
 } -body {
     $conn connect
     $conn subscribe UTF8_TEST -callback subCallback
-    wait_flush $conn
+    $conn ping
     execNatsCmd pub --force-stdin UTF8_TEST <$::tempFilePath 2>@1  ;# trying to pass UTF-8 just via CLI doesn't work
     wait_for ::inMsg
     test_utils::log::info "Got a corrupted UTF-8 message: $::inMsg"
@@ -174,7 +174,7 @@ test extra_opts-6 "Check the utf8_convert option" -setup {
 }
 
 test extra_opts-7.1 "Error handling when connection is closed" -body {
-    assert {[$conn cget status] eq $nats::status_closed}
+    assert {[$conn cget -status] eq $nats::status_closed}
     try {
         $conn publish foo bar
     } trap {NATS ErrConnectionClosed} err {}
@@ -184,7 +184,7 @@ test extra_opts-7.1 "Error handling when connection is closed" -body {
 test extra_opts-7.2 "connect -async allows to PUB/SUB" -body {
     # PUB/SUB/UNSUB are buffered and flushed after a connection is established
     $conn connect -async
-    assert {[$conn cget status] eq $nats::status_connecting}
+    assert {[$conn cget -status] eq $nats::status_connecting}
     $conn subscribe subject1 -callback subCallback
     $conn publish subject1 "hello"
     wait_for ::inMsg 1000

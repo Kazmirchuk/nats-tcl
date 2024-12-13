@@ -102,7 +102,7 @@ oo::class create ::nats::server_pool {
             #"pop" a server; using struct::queue seems like an overkill for such a small list
             set s [lindex $Servers 0]
             # during initial connecting process we go through the pool only once
-            if {[$Conn cget status] eq $nats::status_connecting && [dict get $s reconnects]}  {
+            if {[$Conn cget -status] eq $nats::status_connecting && [dict get $s reconnects]}  {
                 throw {NATS ErrNoServers} "No servers available for connection"
             }
             set Servers [lreplace $Servers 0 0]

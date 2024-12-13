@@ -99,19 +99,19 @@ test cluster-2 "Outgoing messages are buffered while reconnecting" -body {
             incr ::bufMsgCount
         }
     }]
-    wait_flush $watcherConn
+    $watcherConn ping
     # try to be more realistic and simulate a continuous flow of PUBs
     test_utils::log::info "Publishing messages..."
     for {set i 0} {$i < 30} {incr i} {
         $conn publish subj "connected"
     }
-    wait_flush $conn
+    $conn ping
     test_utils::log::info "Corrupted message..."
     intercept $conn "" [dict create "\r\nPUB" "\r\nPUB-BOGUS"] ;# corrupt all PUBs starting with the second one
     for {set i 0} {$i < 10} {incr i} {
         $conn publish subj "connected" ;# make NATS terminate the connection with "-ERR unknown protocol operation"
     }
-    while {[$conn cget status] ne $nats::status_reconnecting} {
+    while {[$conn cget -status] ne $nats::status_reconnecting} {
         wait_for ${connNs}::status 5000
     }
     for {set i 0} {$i < 50} {incr i} {
@@ -179,7 +179,7 @@ test cluster-3.2 "Requests time out if connection is lost - sync" -setup {
     }]
     stopNats NATS1
     wait_for ::request_done 600 ;# connect_timeout=500ms
-    assert {[$conn cget status] eq $nats::status_closed} 1
+    assert {[$conn cget -status] eq $nats::status_closed} 1
     dict get $request_done -errorcode
 } -result {NATS ErrTimeout} -cleanup {
     $resp destroy
@@ -211,7 +211,7 @@ test cluster-4 "Requests can transfer from one server to another within a cluste
     stopNats NATS1 ;# takes 500ms
     # $conn ping - involves vwait, so the whole failover process can succeed by the time we return from 'ping'
     $conn publish foo bar ;# find out about the failure
-    while {[$conn cget status] ne $nats::status_reconnecting} {
+    while {[$conn cget -status] ne $nats::status_reconnecting} {
         wait_for ${connNs}::status 2000
     }
     test_utils::log::info "The client is reconnecting..."
@@ -219,7 +219,7 @@ test cluster-4 "Requests can transfer from one server to another within a cluste
         wait_for ::inMsg 2000
     } elapsed
     assert {$elapsed < 1200} ;# should be ~1000ms
-    assert {[$conn cget status] eq $nats::status_connected} 1
+    assert {[$conn cget -status] eq $nats::status_connected} 1
     assert {[$conn current_server] eq {localhost 5222}} 1
     set inMsg
 } -result "hello" -cleanup {
@@ -233,12 +233,12 @@ test cluster-5 "Call to 'disconnect/destroy' interrupts reconnecting process" -b
     $conn configure -servers nats://localhost:4222 -reconnect_time_wait 0
     $conn connect
     stopNats NATS
-    while {[$conn cget status] ne $nats::status_reconnecting} {
+    while {[$conn cget -status] ne $nats::status_reconnecting} {
         wait_for ${connNs}::status 2000
     }
     $conn publish foo bar ;# make sure we have smth in outBuffer
     $conn disconnect ;# check logs that there are no errors from CloseSocket
-    $conn cget status
+    $conn cget -status
 } -result $nats::status_closed
 
 $conn destroy

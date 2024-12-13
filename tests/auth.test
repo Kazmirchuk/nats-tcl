@@ -121,7 +121,7 @@ test auth-2.4 "Try connecting to a pool with no credentials - OK" -body {
     lassign [conn current_server] host port
     assert {$host eq "localhost"}
     assert {$port == 4223}
-    assert {[conn cget status] eq $nats::status_connected} 1
+    assert {[conn cget -status] eq $nats::status_connected} 1
 } -cleanup {
     conn disconnect
     conn reset -servers

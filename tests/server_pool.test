@@ -116,7 +116,7 @@ test server_pool-14.1 "Reconnecting timings and counters" -body {
     stopNats NATS
     duration {
         test_utils::log::info "Waiting for the client to go into reconnecting"
-        while {[$conn cget status] ne $nats::status_reconnecting} {
+        while {[$conn cget -status] ne $nats::status_reconnecting} {
             wait_for ${connNs}::status 5000
         }
         # 1. connect to NATS:5222 -> fail
@@ -125,7 +125,7 @@ test server_pool-14.1 "Reconnecting timings and counters" -body {
         after 1000 [list startNats NATS -p 5222]
         # 4. connect to NATS:5222 -> ok
         test_utils::log::info "Waiting for the client to restore connection"
-        while {[$conn cget status] ne $nats::status_connected} {
+        while {[$conn cget -status] ne $nats::status_connected} {
             wait_for ${connNs}::status 5000
         }
     } elapsed
@@ -141,7 +141,7 @@ test server_pool-14.2 "Remove servers from the pool when they reach max_reconnec
     stopNats NATS
     duration {
         # you should see "Removed N from the server pool" in the debug log...
-        while {[$conn cget status] ne $nats::status_closed} {
+        while {[$conn cget -status] ne $nats::status_closed} {
             wait_for ${connNs}::status 5000
         }
     } elapsed

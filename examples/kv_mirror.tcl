@@ -59,7 +59,7 @@ sleep 1000
 puts "Now stop the hub NATS with \[Ctrl+c\]; then press \[Enter\] to continue with the example..."
 gets stdin
 
-while {[$conn_hub cget status] ne $nats::status_reconnecting} {
+while {[$conn_hub cget -status] ne $nats::status_reconnecting} {
     puts "Waiting for the hub connection to break..."
     sleep 1000
 }

@@ -212,7 +212,7 @@ test key_value_watchers-history-5 "history timeout" -body {
     sleep 200 ;# need some time to create the ordered consumer
     stopNats NATS_JS
     wait_for ::err 400 ;# JS timeout 1000ms - stopNats 500ms - sleep 200ms + tolerance 100ms
-    assert {[$conn cget status] eq $nats::status_reconnecting} 1
+    assert {[$conn cget -status] eq $nats::status_reconnecting} 1
     return -options $errOpts $err
 } -result "Timeout while gathering history*" -match glob -errorCode {NATS ErrTimeout}
 

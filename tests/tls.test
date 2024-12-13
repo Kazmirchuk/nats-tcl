@@ -34,7 +34,7 @@ test tls-1.2 "Connect to NATS using CA" -constraints tls -body {
     $conn configure -tls_opts {-cafile rootCA.pem}
     $conn connect
     assert { [dict get [$conn server_info] tls_required]} 1
-    $conn cget status
+    $conn cget -status
 } -result $nats::status_connected -cleanup {
     $conn disconnect
     $conn reset -tls_opts
@@ -47,7 +47,7 @@ test tls-2.1 "Connect to NATS with client verification" -constraints tls -setup 
     $conn configure -tls_opts {-cafile rootCA.pem -certfile client-cert.pem -keyfile client-key.pem}
     $conn connect
     assert {[dict get [$conn server_info] tls_verify]} 1
-    $conn cget status
+    $conn cget -status
 } -result $nats::status_connected -cleanup {
     $conn disconnect
     $conn reset -tls_opts

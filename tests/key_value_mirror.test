@@ -107,14 +107,17 @@ test key_value-mirror-direct-get-1 "Create a KV mirror in the same domain and ge
 # see also func TestKeyValueMirrorCrossDomains in nats.go
 set kv_hub [$js_hub create_kv_bucket $hub_bucket -history 64]
 set kv_leaf [$js_leaf create_kv_bucket $leaf_mirror_bucket -mirror_name $hub_bucket -mirror_domain hub -history 64]
-set rev [$kv_hub put key2 value1]
-sleep 100
 
-test key_value-mirror-different-domain-1 "Create a KV mirror in another domain and get a value" -body {
+set rev [$kv_hub put key2 value1]
+sleep 500
+    
+test key_value-mirror-different-domain-1 "Create a KV mirror in another domain and get a value" -body {    
     $kv_leaf get key2
 } -match glob -result [dict create bucket $leaf_mirror_bucket key key2 value value1 revision $rev created * operation PUT]
 
 set rev [$kv_leaf put key2 value2]
+sleep 500
+
 test key_value-mirror-different-domain-2 "Put a value into the mirror and check the source KV in the 'hub' domain" -body {
     $kv_hub get key2
 } -match glob -result [dict create bucket $hub_bucket key key2 value value2 revision $rev created * operation PUT]

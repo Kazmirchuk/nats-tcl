@@ -689,8 +689,9 @@ oo::class create ::nats::connection {
         set timers(ping) [after $config(ping_interval) [mymethod Pinger]]
         
         if {$counters(pendingPings) >= $config(max_outstanding_pings)} {
-            my AsyncError ErrStaleConnection "The server did not respond to $counters(pendingPings) PINGs" 1
+            my AsyncError ErrStaleConnection "The server did not respond to $counters(pendingPings) PINGs"
             set counters(pendingPings) 0
+            $coro reconnect
             return
         }
         
@@ -716,7 +717,8 @@ oo::class create ::nats::connection {
             flush $sock
         } on error err {
             lassign [my current_server] host port
-            my AsyncError ErrBrokenSocket "Failed to send data to $host:$port: $err" 1
+            my AsyncError ErrBrokenSocket "Failed to send data to $host:$port: $err"
+            $coro reconnect
         }
         # in any case the buffer must be cleared to guarantee at-most-once delivery
         set outBuffer [list]
@@ -759,7 +761,7 @@ oo::class create ::nats::connection {
                                     tls_required $tls_done \
                                     name [json::write string $config(name)] \
                                     lang [json::write string Tcl] \
-                                    version [json::write string 2.0.3] \
+                                    version [json::write string 2.0.4] \
                                     protocol 1 \
                                     echo $config(echo)]
             
@@ -911,6 +913,11 @@ oo::class create ::nats::connection {
                 }
                 stop {
                     throw {NATS STOP_CORO} "Stop coroutine" ;# break from the main loop
+                }
+                reconnect {
+                    my CloseSocket 1
+                    my ConnectNextServer
+                    return
                 }
                 default {
                     log::error "MSG: unknown reason $reason"
@@ -1151,6 +1158,10 @@ oo::class create ::nats::connection {
                 } else {
                     log::error "Invalid protocol $protocol_op $protocol_arg"
                 }
+            }
+            reconnect {
+                my CloseSocket 1
+                my ConnectNextServer
             }
             default {
                 log::error "CoroMain: unknown reason $reason"

@@ -150,6 +150,75 @@ test server_pool-14.2 "Remove servers from the pool when they reach max_reconnec
 } -cleanup {
     $conn disconnect
 }
+
+# cases 15.1 and 15.2 test for https://github.com/Kazmirchuk/nats-tcl/issues/28
+
+startNats NATS
+startNats NATS2 -p 5222
+# reconnect_time_wait must be > 3*ping_interval
+# default max_outstanding_pings=2
+$conn configure -randomize false -ping_interval 500 -reconnect_time_wait 2000
+
+test server_pool-15.1 "Check ErrStaleConnection combined with reconnect_time_wait" -body {
+    $conn configure -servers [list nats://localhost:4222 nats://localhost:5222]
+    $conn connect
+    # pretend that we already waited for NATS2, so that the next attempt waits for reconnect_time_wait
+    # 'connect' calls 'reset_counters', so we need to do this *after* 'connect'
+    upvar #0 [info object namespace $sp]::Servers serverList
+    set srv2 [lindex $serverList 0]
+    assert {[dict get $srv2 port] == 5222}
+    dict set srv2 last_attempt [clock milliseconds]
+    lset serverList 0 $srv2
+
+    intercept $conn [dict create "PONG\r\n" {}] "" ;# delete all PONGs sent by the server
+    duration {
+        wait_for ${connNs}::status 4000
+    } elapsed
+    assert {[lastError $conn] eq "ErrStaleConnection"}
+    assert {[$conn cget -status] eq $nats::status_reconnecting} 1
     
+    duration {
+        while {[$conn cget -status] ne $nats::status_connected} {
+            # the client waits for approx 2000-3*500 = 500ms
+            wait_for ${connNs}::status 5000
+        }
+    } elapsed
+    assert {[approx $elapsed 500 150]}
+} -cleanup {
+    $conn disconnect
+}
+
+test server_pool-15.2 "Check ErrBrokenSocket combined with reconnect_time_wait" -body {
+    $conn configure -servers [list nats://localhost:4222 nats://localhost:5222] 
+    $conn connect
+    upvar #0 [info object namespace $sp]::Servers serverList
+    set srv2 [lindex $serverList 0]
+    assert {[dict get $srv2 port] == 5222}
+    dict set srv2 last_attempt [clock milliseconds]
+    lset serverList 0 $srv2
+
+    stopNats NATS  ;# 500ms
+    $conn publish foo bar
+
+    duration {
+        wait_for ${connNs}::status 4000
+    } elapsed
+    assert {[lastError $conn] eq "ErrBrokenSocket"}
+    assert {[$conn cget -status] eq $nats::status_reconnecting} 1
+    
+    duration {
+        while {[$conn cget -status] ne $nats::status_connected} {
+            # the client waits for approx 2000-500 = 1500ms
+            wait_for ${connNs}::status 5000
+        }
+    } elapsed
+    assert {[approx $elapsed 1500 150]}
+} -cleanup {
+    $conn disconnect
+}
+
+stopNats NATS
+stopNats NATS2
+
 $conn destroy
 cleanupTests

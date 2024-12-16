@@ -726,8 +726,9 @@ oo::class create ::nats::connection {
         set timers(ping) [after $config(ping_interval) [nats::mymethod Pinger]]
         
         if {$counters(pendingPings) >= $config(max_outstanding_pings)} {
-            my AsyncError ErrStaleConnection "The server did not respond to $counters(pendingPings) PINGs" 1
+            my AsyncError ErrStaleConnection "The server did not respond to $counters(pendingPings) PINGs"
             set counters(pendingPings) 0
+            $coro reconnect
             return
         }
         
@@ -753,7 +754,8 @@ oo::class create ::nats::connection {
             flush $sock
         } on error err {
             lassign [my current_server] host port
-            my AsyncError ErrBrokenSocket "Failed to send data to $host:$port: $err" 1
+            my AsyncError ErrBrokenSocket "Failed to send data to $host:$port: $err"
+            $coro reconnect
         }
         # in any case the buffer must be cleared to guarantee at-most-once delivery
         set outBuffer [list]
@@ -938,7 +940,7 @@ oo::class create ::nats::connection {
             }
             set remainingBytes [expr {$expMsgLength - $actualLength}]
             # wait for the remainder of the message; we may need multiple reads to receive all of it
-            # it's cleaner to have a second "yield" here than putting this logic in CoroMain
+            # it's cleaner to have a "yield" here than putting this logic in CoroMain
             set reason [yield]
             switch -- $reason {
                 readable {
@@ -946,6 +948,11 @@ oo::class create ::nats::connection {
                 }
                 stop {
                     throw {NATS STOP_CORO} "Stop coroutine" ;# break from the main loop
+                }
+                reconnect {
+                    my CloseSocket 1
+                    my ConnectNextServer
+                    return
                 }
                 default {
                     log::error "MSG: unknown reason $reason"
@@ -1192,6 +1199,10 @@ oo::class create ::nats::connection {
                     my AsyncError ErrProtocol "Invalid protocol $protocol_op $protocol_arg" 1
                 }
             }
+            reconnect {
+                my CloseSocket 1
+                my ConnectNextServer
+            }
             default {
                 log::error "CoroMain: unknown reason $reason"
             }
@@ -1246,7 +1257,11 @@ oo::class create ::nats::connection {
         set last_error [dict create code [list NATS $code] errorMessage $msg]
         if {$doReconnect} {
             my CloseSocket 1
-            my ConnectNextServer ;# can be done only in the coro
+            if {[info coroutine] eq ""} {
+                log::error "ConnectNextServer can be called only in the coro" ;# ensure we don't hit bug #28 again
+            } else {
+                my ConnectNextServer
+            }
         }
     }
     

@@ -19,6 +19,7 @@ if {$::tcl_platform(platform) eq "windows"} {
 }
 
 namespace eval ::nats {
+    set Version 3.1
     # improvised enum
     variable status_closed "closed"
     variable status_connecting "connecting"
@@ -797,7 +798,7 @@ oo::class create ::nats::connection {
                                     tls_required $tls_done \
                                     name [json::write string $config(name)] \
                                     lang [json::write string Tcl] \
-                                    version [json::write string 3.0] \
+                                    version [json::write string $nats::Version] \
                                     protocol 1 \
                                     echo $config(echo)]
             

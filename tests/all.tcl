@@ -22,4 +22,6 @@ tcltest::configure -testdir $thisDir -tmpdir [file join $thisDir temp] -verbose 
 if {![tcltest::singleProcess]} {
     encoding system utf-8  ;# in test key_value-utf8 printing Unicode to the console produces corrupted output unless I call this
 }
+
+puts [tcltest::outputChannel] "Testing against [exec nats-server --version]"
 exit [tcltest::runAllTests]

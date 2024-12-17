@@ -708,7 +708,7 @@ oo::class create ::nats::connection {
         try {
             close $sock ;# all buffered input is discarded, all buffered output is flushed
         } on error err {
-            log::error "Failed to close the socket: $err"
+            log::warn "Failed to close the socket: $err"
         }
         set sock ""
         after cancel $timers(ping)
@@ -1096,6 +1096,11 @@ oo::class create ::nats::connection {
         } trap {NATS ErrNoServers} {msg opts} {
             # connection lost; don't overwrite the real last_error - need to log this in case of "connect -async"
             log::error $msg
+            set msgCount [llength [lsearch -all -regexp $outBuffer {^(H?PUB)}]]
+            if {$msgCount > 0} {
+                log::warn "Discarded $msgCount buffered messages"
+            }
+            set outBuffer [list]
         } trap {} {msg opts} {
             log::error "Unexpected error: $msg $opts"
         }
@@ -1181,12 +1186,11 @@ oo::class create ::nats::connection {
                     return
                 }
                 if {$readCount <= 0} {
-                    if {[chan pending input $sock] > 1024} {
+                    if {[chan pending input $sock] > 4096} {
                         # do not let the buffer grow forever if \r\n never arrives
-                        # max length of control line in the NATS protocol is 1024 (see MAX_CONTROL_LINE_SIZE in nats.py)
-                        # this should not happen unless the NATS server is malfunctioning
+                        # see also https://docs.nats.io/using-nats/developer/connecting/misc#set-the-maximum-control-line-size
+                        # and https://wiki.tcl-lang.org/page/chan+pending
                         my AsyncError ErrServer "Maximum control line exceeded" 1
-                        return
                     }
                     # else - we don't have a full line yet - wait for next chan event
                     return

@@ -139,11 +139,14 @@ test cluster-3.1 "Requests time out if connection is lost - async" -setup {
     $conn configure -max_reconnect_attempts 1 -connect_timeout 500 -reconnect_time_wait 0
     $conn connect
 } -body {
+    set reply [$conn request service "0 test" -timeout 500]
+    assert {$reply eq "test"}
     set now [clock milliseconds]
     $conn request service "500 lost message" -timeout 2000 -callback [lambda {timedOut msg} {
         set ::cbResult [list $timedOut $msg [clock milliseconds]]
     }]
     $conn ping
+    $resp destroy
     stopNats NATS1
     # the client tries to connect to NATS once more and times out:
     # - on Windows: after connect_timeout=500ms
@@ -162,7 +165,6 @@ test cluster-3.1 "Requests time out if connection is lost - async" -setup {
     assert {$timestamp - $now < 1100} ;# stopNats=500ms + connect_timeout=500ms
     set msg
 } -result "" -cleanup {
-    $resp destroy
     $conn disconnect
 }
 
@@ -173,16 +175,18 @@ test cluster-3.2 "Requests time out if connection is lost - sync" -setup {
     $conn configure -servers nats://localhost:4222
     $conn connect
 } -body {
+    set reply [$conn request service "0 test" -timeout 500]
+    assert {$reply eq "test"}
     coroutine sync_request {*}[lambda {} {
         catch {[$::conn request service "500 lost message" -timeout 2000]} err errOpts
         set ::request_done $errOpts
     }]
+    $resp destroy
     stopNats NATS1
     wait_for ::request_done 600 ;# connect_timeout=500ms
     assert {[$conn cget -status] eq $nats::status_closed} 1
     dict get $request_done -errorcode
 } -result {NATS ErrTimeout} -cleanup {
-    $resp destroy
     $conn disconnect
     $conn reset -max_reconnect_attempts -connect_timeout -reconnect_time_wait
 }

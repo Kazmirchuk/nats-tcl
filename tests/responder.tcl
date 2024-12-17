@@ -6,9 +6,10 @@
 # a dummy service that listens to a subject, default "service"
 # after receiving a message it waits for the specified time (ms) and then replies with the same message
 # all these procs are run in a background thread, invoked by the responder object in test_utils
-# normally, no logging should be done here, because I can't access tcltest::outputChannel
+# tcltest implicitly redirects stdout from the responder to outputChannel
 
 package require nats
+package require lambda
 
 namespace eval ::responder {
     variable conn ""
@@ -24,7 +25,15 @@ proc ::responder::echo {subj msg reply} {
     nats::msg set msg -subject $reply
     nats::msg set msg -data $payload
     nats::msg set msg -reply ""
-    after $delay [list $responder::conn publish_msg $msg]
+    after $delay [lambda {conn msg} {
+        set s [$conn cget -status]
+        if {$s ne "connected"} {
+            # avoid that a message is buffered while the responder is reconnecting; if we get here, test timings are wrong
+            puts "\[[nats::timestamp] [$conn cget -name] error\] Trying to send [nats::msg data $msg] while $s"
+            return
+        }
+        $conn publish_msg $msg
+    } $responder::conn $msg]
 }
 
 proc ::responder::init {id subj queue servers} {

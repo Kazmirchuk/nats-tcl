@@ -1,9 +1,9 @@
 package require fileutil
 
-set version [lindex $argv 0]
+set version [package require nats]
 
 set module \
-{# Copyright (c) 2020-2024 Petro Kazmirchuk https://github.com/Kazmirchuk
+{# Copyright (c) 2020-2025 Petro Kazmirchuk https://github.com/Kazmirchuk
 # Copyright (c) 2023 ANT Solutions https://antsolutions.eu/
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0

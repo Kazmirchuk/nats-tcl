@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2023 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2021-2025 Petro Kazmirchuk https://github.com/Kazmirchuk
 # Copyright (c) 2021 ANT Solutions https://antsolutions.eu/
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
@@ -27,7 +27,7 @@ oo::class create ::nats::SyncPullRequest {
                         # It could have been still possible to return messages received so far, but the user wouldn't be able to ACK them anyway,
                         # so we discard them
                         set connNs [info object namespace $Conn]
-                        if {[set ${connNs}::status] eq $nats::status_closed} {
+                        if {[set ${connNs}::status] eq $::nats::status_closed} {
                             if {[set ${connNs}::last_error] eq ""} {
                                 throw {NATS ErrConnectionClosed} "Connection closed"
                             }
@@ -104,7 +104,7 @@ oo::class create ::nats::AsyncPullRequest {
             [info object namespace $Conn]::log::debug "Async pull request $ID timed out"
             set invokeCb 1
             set connNs [info object namespace $Conn]
-            if {[set ${connNs}::status] eq $nats::status_closed} {
+            if {[set ${connNs}::status] eq $::nats::status_closed} {
                 if {[set ${connNs}::last_error] eq ""} {
                     set invokeCb 0 ;# same as async requests
                 }
@@ -944,7 +944,7 @@ oo::class create ::nats::ordered_consumer {
             } trap {NATS} {err opts} {
                 # most likely ErrTimeout if we're reconnecting to NATS or ErrJetStreamNotEnabled if a JetStream cluster is electing a new leader
                 my AsyncError [lindex [dict get $opts -errorcode] 1] "failed to reset: $err"
-                if {[$Conn cget -status] == $nats::status_closed} {
+                if {[$Conn cget -status] eq $::nats::status_closed} {
                     my AsyncError ErrConnectionClosed "stopped"
                     return
                 }
@@ -1281,4 +1281,8 @@ proc ::nats::make_republish {args} {
         dest  valid_str NATS_TCL_REQUIRED
         headers_only bool false}
     return [nats::_dict2json $spec $args]
+}
+
+namespace eval ::nats {
+    namespace export metadata make_stream_source make_subject_transform make_republish
 }

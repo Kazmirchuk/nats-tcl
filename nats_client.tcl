@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2023 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2020-2025 Petro Kazmirchuk https://github.com/Kazmirchuk
 # Copyright (c) 2021 ANT Solutions https://antsolutions.eu/
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
@@ -8,6 +8,7 @@
 # NATS protocol: https://docs.nats.io/reference/reference-protocols/nats-protocol
 # Tcllib: https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/toc.md
 
+package require Tcl 8.6-
 package require json
 package require json::write
 package require coroutine
@@ -73,7 +74,7 @@ oo::class create ::nats::connection {
     constructor { { conn_name "" } args } {
         # if _parse_args throws, TclOO will call the destructor, so at least these vars must be valid
         set serverPool [nats::server_pool new [self]]
-        set status $nats::status_closed
+        set status $::nats::status_closed
         
         nats::_parse_args $args {
             logger valid_str ""
@@ -82,7 +83,7 @@ oo::class create ::nats::connection {
         }
         set last_error ""
         # initialise default configuration
-        foreach {name type def} $nats::_option_spec {
+        foreach {name type def} $::nats::_option_spec {
             set config($name) $def
         }
         set config(name) $conn_name
@@ -181,13 +182,13 @@ oo::class create ::nats::connection {
         } 
         
         # cmdline::typedGetoptions is garbage
-        nats::_parse_args $args $nats::_option_spec 1
+        nats::_parse_args $args $::nats::_option_spec 1
 
         set servers_opt [lsearch -exact $args "-servers"]
         if {$servers_opt == -1} {
             return
         }
-        if {$status ne $nats::status_closed} {
+        if {$status ne $::nats::status_closed} {
             # in principle, most other config options can be changed on the fly
             # allowing -servers to be changed when connected is possible, but a bit tricky
             throw {NATS ErrInvalidArg} "Cannot configure servers when already connected"
@@ -200,10 +201,10 @@ oo::class create ::nats::connection {
     method reset {args} {
         foreach option $args {
             set opt [string trimleft $option -]
-            set pos [lsearch -exact $nats::_option_spec $opt]
+            set pos [lsearch -exact $::nats::_option_spec $opt]
             if {$pos != -1} {
                 incr pos 2
-                set config($opt) [lindex $nats::_option_spec $pos]
+                set config($opt) [lindex $::nats::_option_spec $pos]
                 if {$opt eq "servers"} {
                     $serverPool clear
                 }
@@ -238,7 +239,7 @@ oo::class create ::nats::connection {
                 throw {NATS ErrInvalidArg} "Unknown option $args"
             }
         }
-        if {$status ne $nats::status_closed} {
+        if {$status ne $::nats::status_closed} {
             return
         }
         
@@ -250,7 +251,7 @@ oo::class create ::nats::connection {
         # e.g. if a server is in the pool, but it is down, we want to keep track of its "reconnects" counter
         $serverPool reset_counters
         
-        set status $nats::status_connecting
+        set status $::nats::status_connecting
         # this coroutine will handle all work to connect and read from the socket
         # current namespace is prepended to the coroutine name, so it's unique
         coroutine coro {*}[nats::mymethod CoroMain]
@@ -259,12 +260,12 @@ oo::class create ::nats::connection {
             # $status will become "closed" straightaway
             # in case all calls to [socket] fail immediately and we exhaust the server pool
             # so we shouldn't vwait in this case
-            if {$status eq $nats::status_connecting} {
+            if {$status eq $::nats::status_connecting} {
                 log::debug "Waiting for connection status"
                 nats::_coroVwait [self namespace]::status
                 log::debug "Finished waiting for connection status"
             }
-            if {$status ne $nats::status_connected} {
+            if {$status ne $::nats::status_connected} {
                 # if there's only one server in the pool, it's more user-friendly to report the actual error
                 if {[dict exists $last_error code] && [llength [$serverPool all_servers]] == 1} {
                     throw [dict get $last_error code] [dict get $last_error errorMessage]
@@ -276,7 +277,7 @@ oo::class create ::nats::connection {
     }
     
     method disconnect {} {
-        if {$status eq $nats::status_closed} {
+        if {$status eq $::nats::status_closed} {
             return
         }
         set last_error ""
@@ -371,7 +372,7 @@ oo::class create ::nats::connection {
         set subID [incr counters(subscription)]
         set subscriptions($subID) [dict create subj $subject queue $queue callback $callback maxMsgs $max_msgs recMsgs 0 isDictMsg $dictmsg post $post]
         
-        if {$status eq $nats::status_connected} {
+        if {$status eq $::nats::status_connected} {
             # it will be sent anyway when we reconnect
             lappend outBuffer "SUB $subject $queue $subID"
             if {$max_msgs > 0} {
@@ -400,7 +401,7 @@ oo::class create ::nats::connection {
             dict set subscriptions($subID) maxMsgs $max_msgs
             set data "UNSUB $subID $max_msgs"
         }
-        if {$status eq $nats::status_connected} {
+        if {$status eq $::nats::status_connected} {
             lappend outBuffer $data
             my ScheduleFlush
         }
@@ -567,7 +568,7 @@ oo::class create ::nats::connection {
             timeout timeout 10000
         }
 
-        if {$status ne $nats::status_connected} {
+        if {$status ne $::nats::status_connected} {
             # this is different from nats.go (func FlushTimeout) that throws ErrConnectionClosed only if the connection is closed
             throw {NATS ErrConnectionClosed} "No connection to NATS server"
         }
@@ -582,7 +583,7 @@ oo::class create ::nats::connection {
         if {$pong} {
             return true
         }
-        if {$status eq $nats::status_closed} {
+        if {$status eq $::nats::status_closed} {
             # user called disconnect while we've been waiting for PONG
             throw {NATS ErrConnectionClosed} "Connection closed"
         }
@@ -681,14 +682,14 @@ oo::class create ::nats::connection {
     method CloseSocket { {broken 0} } {
         chan event $sock readable {}
         if {$broken} {
-            if {$status ne $nats::status_connected} {
+            if {$status ne $::nats::status_connected} {
                 # whether we are connecting or reconnecting, increment reconnect count for this server
                 $serverPool current_server_connected false
             }
-            if {$status eq $nats::status_connected} {
+            if {$status eq $::nats::status_connected} {
                 # recall that during initial connection round we try all servers only once
                 # method next_server relies on this status to know that
-                set status $nats::status_reconnecting
+                set status $::nats::status_reconnecting
             }
         } else {
             # we get here only from method disconnect
@@ -740,7 +741,7 @@ oo::class create ::nats::connection {
     }
     
     method ScheduleFlush {} {
-        if {$timers(flush) eq "" && $status eq $nats::status_connected} {
+        if {$timers(flush) eq "" && $status eq $::nats::status_connected} {
             set timers(flush) [after 0 [nats::mymethod Flusher]]
         }
     }
@@ -798,7 +799,7 @@ oo::class create ::nats::connection {
                                     tls_required $tls_done \
                                     name [json::write string $config(name)] \
                                     lang [json::write string Tcl] \
-                                    version [json::write string $nats::Version] \
+                                    version [json::write string $::nats::Version] \
                                     protocol 1 \
                                     echo $config(echo)]
             
@@ -845,7 +846,7 @@ oo::class create ::nats::connection {
     }
     
     method INFO {cmd} {
-        if {$status eq $nats::status_connected} {
+        if {$status eq $::nats::status_connected} {
             # when we say "proto":1 in CONNECT, we may receive information about other servers in the cluster - add them to serverPool
             # and mark as discovered=true
             # example connect_urls : ["192.168.2.5:4222", "192.168.91.1:4222", "192.168.157.1:4223", "192.168.2.5:4223"]
@@ -1021,13 +1022,13 @@ oo::class create ::nats::connection {
         set pong 1
         set counters(pendingPings) 0
         log::debug "received PONG, status: $status"
-        if {$status ne $nats::status_connected} {
+        if {$status ne $::nats::status_connected} {
             # auth OK: finalise the connection process
             $serverPool current_server_connected true
             lassign [my current_server] host port
             log::info "Connected to the server at $host:$port"
             set last_error "" ;# cleanup possible error messages about prior connection attempts
-            set status $nats::status_connected ;# exit from vwait in "connect"
+            set status $::nats::status_connected ;# exit from vwait in "connect"
             my RestoreSubs
             if {[llength $outBuffer]} {
                 my ScheduleFlush 
@@ -1109,7 +1110,7 @@ oo::class create ::nats::connection {
         array unset subscriptions ;# make sure we don't try to restore subscriptions, when we connect next time
         set requestsInboxPrefix ""
         my CancelConnectTimer
-        set status $nats::status_closed
+        set status $::nats::status_closed
         log::debug "Finished coroutine $coro"
         set coro ""
     }
@@ -1157,7 +1158,7 @@ oo::class create ::nats::connection {
                 # when writing to the socket, we need to turn off the translation when sending a message payload
                 # but outBuffer doesn't know which element is a message, so it's easier to write CR+LF ourselves
                 # -buffersize is probably not needed, because we call flush regularly anyway
-                chan configure $sock -translation {crlf binary} -blocking 0 -buffering full -encoding binary
+                chan configure $sock -translation {crlf binary} -blocking 0 -buffering full
                 chan event $sock readable [list $coro readable]
             }
             connect_timeout {
@@ -1251,7 +1252,7 @@ oo::class create ::nats::connection {
     
     method CheckConnection {} {
         # allow to buffer PUB/SUB/UNSUB even before the connection to NATS is finalized
-        if {$status eq $nats::status_closed} {
+        if {$status eq $::nats::status_closed} {
             throw {NATS ErrConnectionClosed} "No connection to NATS server"
         }
     }

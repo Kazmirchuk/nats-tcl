@@ -1,4 +1,4 @@
-# Copyright (c) 2023 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2023-2025 Petro Kazmirchuk https://github.com/Kazmirchuk
 # Copyright (c) 2023 ANT Solutions https://antsolutions.eu/
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
@@ -393,4 +393,8 @@ proc ::nats::make_kv_origin {args} {
         unset domain
     }
     return [nats::_local2dict $spec]
+}
+
+namespace eval ::nats {
+    namespace export make_kv_origin
 }

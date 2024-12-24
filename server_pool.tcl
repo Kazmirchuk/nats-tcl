@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2023 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2021-2025 Petro Kazmirchuk https://github.com/Kazmirchuk
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
@@ -102,7 +102,7 @@ oo::class create ::nats::server_pool {
             #"pop" a server; using struct::queue seems like an overkill for such a small list
             set s [lindex $Servers 0]
             # during initial connecting process we go through the pool only once
-            if {[$Conn cget -status] eq $nats::status_connecting && [dict get $s reconnects]}  {
+            if {[$Conn cget -status] eq $::nats::status_connecting && [dict get $s reconnects]}  {
                 throw {NATS ErrNoServers} "No servers available for connection"
             }
             set Servers [lreplace $Servers 0 0]

@@ -33,7 +33,7 @@ proc ::responder::echo {subj msg reply} {
             return
         }
         $conn publish_msg $msg
-    } $responder::conn $msg]
+    } $::responder::conn $msg]
 }
 
 proc ::responder::init {id subj queue servers} {
@@ -58,5 +58,5 @@ proc ::responder::init {id subj queue servers} {
 }
 
 proc ::responder::shutdown {} {
-    $responder::conn destroy
+    $::responder::conn destroy
 }

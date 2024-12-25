@@ -20,7 +20,7 @@ if {$::tcl_platform(platform) eq "windows"} {
 }
 
 namespace eval ::nats {
-    set Version 3.1
+    variable Version 3.1
     # improvised enum
     variable status_closed "closed"
     variable status_connecting "connecting"

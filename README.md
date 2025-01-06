@@ -12,7 +12,7 @@ The API reference documentation is split into [Core NATS](CoreAPI.md), [JetStrea
 
 ## Supported platforms
 
-The package is written in pure Tcl, without any C code, and so will work anywhere with `Tcl 8.6` and [Tcllib](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/toc.md). If you need to connect to a NATS server using TLS, of course you will need the [TclTLS](https://core.tcl-lang.org/tcltls/index) package too. On Windows, these packages are normally included in Tcl installers, and on Linux they should be available from your distribution's package manager.
+The package is written in pure Tcl, without any C code, and so will work anywhere with Tcl versions 8.6 or 9 and [Tcllib](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/toc.md). If you need to connect to a NATS server using TLS, of course you will need the [TclTLS](https://core.tcl-lang.org/tcltls/index) package too. On Windows, these packages are normally included in Tcl installers, and on Linux they should be available from your distribution's package manager.
 
 ## Installing
 The package is available in two forms:

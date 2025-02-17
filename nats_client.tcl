@@ -929,7 +929,13 @@ oo::class create ::nats::connection {
         set remainingBytes $expMsgLength ;# how many bytes left to read until the message is complete
         set payload "" ;# both header (if any) and body
         while {1} {
-            append payload [chan read $sock $remainingBytes]
+            try {
+                append payload [chan read $sock $remainingBytes]
+            } trap {POSIX} {err errOpts} {
+                lassign [my current_server] host port
+                my AsyncError ErrBrokenSocket "Connection to $host:$port broken - [lindex [dict get $errOpts -errorcode] end]: $err" 1
+                return
+            }
             if {[eof $sock]} {
                 # server closed the socket - Tcl will invoke "CoroMain readable" again and close the socket
                 # so no need to do anything here

@@ -20,7 +20,6 @@ if {$::tcl_platform(platform) eq "windows"} {
 }
 
 namespace eval ::nats {
-    variable Version 3.1
     # improvised enum
     variable status_closed "closed"
     variable status_connecting "connecting"
@@ -560,7 +559,6 @@ oo::class create ::nats::connection {
         unset requests($reqID)
         log::debug "Cancelled request $reqID"
     }
-    
     #this function is called "flush" in all other NATS clients, but I find it confusing
     # default timeout in nats.go is 10s
     method ping { args } {
@@ -702,6 +700,7 @@ oo::class create ::nats::connection {
                 foreach msg $outBuffer {
                     append msg "\r\n"
                     puts -nonewline $sock $msg
+                    # even if the connection gets broken right now, no need to catch anything here, because we don't flush
                 }
             }
             set outBuffer [list]
@@ -799,7 +798,7 @@ oo::class create ::nats::connection {
                                     tls_required $tls_done \
                                     name [json::write string $config(name)] \
                                     lang [json::write string Tcl] \
-                                    version [json::write string $::nats::Version] \
+                                    version [json::write string [package present nats]] \
                                     protocol 1 \
                                     echo $config(echo)]
             
@@ -820,9 +819,14 @@ oo::class create ::nats::connection {
         
         # do NOT use outBuffer here! it may have pending messages from a previous connection
         # we can flush them only after authentication is confirmed
-        puts -nonewline $sock "CONNECT $jsonMsg\r\n"
-        puts -nonewline $sock "PING\r\n"
-        flush $sock
+        try {
+            puts -nonewline $sock "CONNECT $jsonMsg\r\n"
+            puts -nonewline $sock "PING\r\n"
+            flush $sock
+        } on error err {
+            lassign [my current_server] host port
+            my AsyncError ErrBrokenSocket "Failed to send CONNECT protocol to $host:$port: $err" 1
+        }
         # rest of the handshake is done in method PONG 
     }
     
@@ -1196,13 +1200,18 @@ oo::class create ::nats::connection {
                     # else - we don't have a full line yet - wait for next chan event
                     return
                 }
-                # extract the first word from the line (INFO, MSG etc)
-                # protocol_arg will be empty in case of PING/PONG/OK
+                # extract the first word from the line (INFO, MSG etc); protocol_arg will be empty in case of PING/PONG/OK
                 set protocol_arg [lassign $line protocol_op]
-                if {$protocol_op in {MSG HMSG INFO -ERR +OK PING PONG}} {
-                    my $protocol_op $protocol_arg
-                } else {
+                if {$protocol_op ni {MSG HMSG INFO -ERR +OK PING PONG}} {
                     my AsyncError ErrProtocol "Invalid protocol $protocol_op $protocol_arg" 1
+                    return
+                }
+                try {
+                    my $protocol_op $protocol_arg
+                } trap {POSIX} {err errOpts} {
+                    # can happen only with MSG/HMSG, but nicer to handle it on the same level with [chan gets]
+                    lassign [my current_server] host port
+                    my AsyncError ErrBrokenSocket "Connection to $host:$port broken - [lindex [dict get $errOpts -errorcode] end]" 1
                 }
             }
             reconnect {

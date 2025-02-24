@@ -170,13 +170,13 @@ namespace eval test_utils {
             lappend ::allErrors [lindex [dict get $e code] 1]
         }
     }
-    # start NATS server in the background unless it is already running; it must be available in $PATH
+    # start NATS server in the background; it must be available in $PATH
     proc startNats {id args} {
-        if {$id eq "NATS"} {
-            if {![NeedStartNats $args]} {
-                return
-            }
-        }
+        #if {$id eq "NATS"} {
+        #    if {![NeedStartNats $args]} {
+        #        return
+        #    }
+        #}
         variable natsPid
         # NATS ignores --store_dir if JS is not enabled
         lappend args --store_dir [file join [tcltest::temporaryDirectory] $id]

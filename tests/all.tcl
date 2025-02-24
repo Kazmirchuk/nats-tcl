@@ -4,6 +4,7 @@
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
 
 package require tcltest 2.5  ;# -errorCode option is relatively recent - make sure it's available
+package require nats
 
 set thisDir [file dirname [file normalize [info script]]]
 # doing a simple [cd] and -testdir is enough for the tests to work
@@ -26,5 +27,5 @@ if {![tcltest::singleProcess]} {
     encoding system utf-8  ;# in test key_value-utf8 printing Unicode to the console produces corrupted output unless I call this
 }
 
-puts [tcltest::outputChannel] "Testing against [exec nats-server --version]"
+puts [tcltest::outputChannel] "Testing nats-tcl [package present nats] against [exec nats-server --version] in Tcl [package present Tcl]"
 exit [tcltest::runAllTests]

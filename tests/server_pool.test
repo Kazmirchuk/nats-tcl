@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2023 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2021-2025 Petro Kazmirchuk https://github.com/Kazmirchuk
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
@@ -7,6 +7,8 @@
 # - parsing of server URLs
 # - formatting of credentials for the CONNECT message
 # - trying to connect when there are no NATS servers available
+# - timings of reconnect_time_wait
+# - remote peer closed the connection
 source test_utils.tcl
 
 set conn [nats::connection new "ServerPool" -log_chan [tcltest::outputChannel]]
@@ -108,12 +110,12 @@ test server_pool-13.2 "DNS resolution failure" -body {
 } -result {Failed to connect*} -match glob -errorCode {NATS ErrConnectionRefused}
 
 test server_pool-14.1 "Reconnecting timings and counters" -body {
-    startNats NATS
+    startNats NATS1
     $conn configure -servers [list nats://localhost:4222 nats://localhost:5222]
     $conn configure -connect_timeout 100 -reconnect_time_wait 2000
     trace add variable ${connNs}::last_error write errorTrace
     $conn connect
-    stopNats NATS
+    stopNats NATS1
     duration {
         test_utils::log::info "Waiting for the client to go into reconnecting"
         while {[$conn cget -status] ne $nats::status_reconnecting} {
@@ -122,7 +124,7 @@ test server_pool-14.1 "Reconnecting timings and counters" -body {
         # 1. connect to NATS:5222 -> fail
         # 2. connect to NATS:4222 -> fail
         # 3. NATS:5222 has reconnects=1, so wait 2 - 0.1 = 1.9s
-        after 1000 [list startNats NATS -p 5222]
+        after 1000 [list startNats NATS2 -p 5222]
         # 4. connect to NATS:5222 -> ok
         test_utils::log::info "Waiting for the client to restore connection"
         while {[$conn cget -status] ne $nats::status_connected} {
@@ -138,7 +140,7 @@ test server_pool-14.1 "Reconnecting timings and counters" -body {
 
 test server_pool-14.2 "Remove servers from the pool when they reach max_reconnect_attempts" -body {
     $conn configure -max_reconnect_attempts 2 -reconnect_time_wait 500
-    stopNats NATS
+    stopNats NATS2
     duration {
         # you should see "Removed N from the server pool" in the debug log...
         while {[$conn cget -status] ne $nats::status_closed} {
@@ -153,7 +155,7 @@ test server_pool-14.2 "Remove servers from the pool when they reach max_reconnec
 
 # cases 15.1 and 15.2 test for https://github.com/Kazmirchuk/nats-tcl/issues/28
 
-startNats NATS
+startNats NATS1
 startNats NATS2 -p 5222
 # reconnect_time_wait must be > 3*ping_interval
 # default max_outstanding_pings=2
@@ -197,7 +199,7 @@ test server_pool-15.2 "Check ErrBrokenSocket combined with reconnect_time_wait" 
     dict set srv2 last_attempt [clock milliseconds]
     lset serverList 0 $srv2
 
-    stopNats NATS  ;# 500ms
+    stopNats NATS1  ;# 500ms
     $conn publish foo bar
 
     duration {
@@ -217,7 +219,65 @@ test server_pool-15.2 "Check ErrBrokenSocket combined with reconnect_time_wait" 
     $conn disconnect
 }
 
-stopNats NATS
+proc break_chan {conn limit} {
+    set ns [info object namespace $conn]
+    set sock [set ${ns}::sock]
+    chan push $sock [broken_chan new $limit]
+}
+
+oo::class create broken_chan {
+    superclass tcl::transform::core
+    variable Limit
+    constructor {limit} {
+        set Limit $limit
+    }
+    method read {c data} {
+        if {$Limit > 0} {
+            # we are reading the MSG protocol - return it as-is
+            set Limit -1
+            return $data
+        } else {
+            # simulate lost connection to NATS
+            throw {POSIX ECONNRESET} "connection reset by peer"
+        }
+    }
+    method write {c data} {
+        return $data
+    }
+    # called before every read - ensures that reading the MSG protocol and payload are 2 separate calls
+    method limit? {c} {
+        return $Limit
+    }
+}
+
+startNats NATS1
+
+test server_pool-16 "Check ECONNRESET when reading a message body" -body {    
+    $conn configure -servers [list nats://localhost:4222 nats://localhost:5222] 
+    $conn connect
+    $conn subscribe subject1 -callback subCallback
+    $conn ping
+    break_chan $conn 18 ;# "MSG subject1 1 5\r\n" -> 18 bytes
+    $conn publish subject1 hello
+    duration {
+        wait_for ${connNs}::status 1000
+    } elapsed
+    assert {$elapsed < 500}
+    assert {[lastError $conn] eq "ErrBrokenSocket"}
+    assert {[$conn cget -status] eq $nats::status_reconnecting} 1
+    
+    duration {
+        while {[$conn cget -status] ne $nats::status_connected} {
+            wait_for ${connNs}::status 1000
+        }
+    } elapsed
+    assert {$elapsed < 1000}
+    assert {[$conn current_server] eq {localhost 5222}} 1
+} -cleanup {
+    $conn disconnect
+}
+
+stopNats NATS1
 stopNats NATS2
 
 $conn destroy

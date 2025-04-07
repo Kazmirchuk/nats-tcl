@@ -873,6 +873,7 @@ oo::class create ::nats::connection {
         array unset serverInfo ;# do not unset it in CloseSocket!
         # otherwise publishing messages while reconnecting does not work, due to the check for max_payload
         array set serverInfo [json::json2dict $cmd]
+        regexp {[\d\.]+} $serverInfo(version) serverInfo(version) ;# strip off whatever suffix after major.minor.patch to work around the NATS release 2.11.1-binary
         set tls_done false
         lassign [$serverPool current_server] host port scheme
         if {[info exists serverInfo(tls_required)] && $serverInfo(tls_required)} {

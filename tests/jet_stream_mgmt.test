@@ -72,9 +72,9 @@ test js_mgmt-1.5 "Try creating a stream with an overlapping subject" -body {
 } -result {*subjects overlap*} -match glob -errorCode {NATS ErrJSResponse 400*}
 
 test js_mgmt-1.6 "Update stream configuration" -body {
-    # MY_STREAM has storage=memory which is non-editable and not default
-    # so if I try to update the stream with only new properties, NATS will interpret it as trying to change storage to the default "file"
-    # so need to get the current config first
+    # MY_STREAM has storage=memory which is non-editable and not default,
+    # so if I try to update the stream with only new properties, NATS will interpret it as trying to change storage to the default "file",
+    # so I need to get the current config first
     set new_config [dict get [$js stream_info MY_STREAM] config]
     dict set new_config duplicate_window 60000
     dict set new_config max_msgs_per_subject 500
@@ -110,6 +110,7 @@ test js_mgmt-2 "Get stream information" -setup {
     # remove some new keys that are not yet returned by NATS CLI
     dict unset api_conf consumer_limits
     dict unset api_conf compression
+    dict unset api_conf allow_msg_ttl
     set api_state [dict get $response state]
     # get the same info from NATS CLI and check that they are in line
     set cli_info [json::json2dict [execNatsCmd stream info -j MY_STREAM]]

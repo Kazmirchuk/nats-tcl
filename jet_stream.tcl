@@ -954,7 +954,6 @@ oo::class create ::nats::ordered_consumer {
             }
         }
         
-        set Config [dict get $ConsumerInfo config]
         set Name [dict get $ConsumerInfo name]
         set StreamSeq [dict get $ConsumerInfo delivered stream_seq]
         set ConsumerSeq [dict get $ConsumerInfo delivered consumer_seq]
@@ -1103,9 +1102,6 @@ proc ::nats::_format_json {name val type} {
                 throw {NATS ErrInvalidArg} $errMsg
             }
             set formattedDict [dict map {k v} $val {
-                if [string match "_nats*" $k] {
-                    throw {NATS ErrInvalidArg} "_nats is a reserved prefix"
-                }
                 json::write string $v
             }]
             return [json::write object {*}$formattedDict]

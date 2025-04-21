@@ -318,6 +318,7 @@ namespace eval test_utils {
             if {[dict exists $dict2 $k] && [dict get $dict2 $k] == $v} {
                 continue
             } else {
+                log::info "$k = $v does not match with dict2"
                 return false
             }
         }

@@ -37,6 +37,34 @@ set stream_config2 [dict create \
                      subjects [list foo.*] \
                      deny_purge true \
                      compression s2 ] ;# requires NATS 2.10
+# make the test a bit more resilient against changes in NATS server
+set supported_stream_opts {
+    name 
+    description
+    subjects
+    retention
+    max_consumers
+    max_msgs
+    max_bytes
+    max_age
+    max_msgs_per_subject
+    max_msg_size
+    discard
+    storage
+    num_replicas
+    duplicate_window
+    allow_direct
+    mirror_direct
+    sealed
+    deny_delete
+    deny_purge
+    allow_rollup_hdrs
+    subject_transform
+    republish
+    allow_direct
+    mirror_direct
+    metadata
+}
 
 test js_mgmt-1.1 "Create a stream" -body {
     set response [$js add_stream MY_STREAM {*}$stream_config]
@@ -107,10 +135,11 @@ test js_mgmt-2 "Get stream information" -setup {
 } -body {
     set response [$js stream_info MY_STREAM]
     set api_conf [dict get $response config]
-    # remove some new keys that are not yet returned by NATS CLI
-    dict unset api_conf consumer_limits
-    dict unset api_conf compression
-    dict unset api_conf allow_msg_ttl
+
+    # check only for the supported options
+    set api_conf [dict filter $api_conf script {k v} {
+        expr {$k in $::supported_stream_opts}
+    }]
     set api_state [dict get $response state]
     # get the same info from NATS CLI and check that they are in line
     set cli_info [json::json2dict [execNatsCmd stream info -j MY_STREAM]]

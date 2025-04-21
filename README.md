@@ -66,14 +66,14 @@ ADRs (architecture decision records) provide a *single source of truth* that all
 | [ADR-1](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-1.md) | JetStream JSON API Design | |
 | [ADR-4](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-4.md) | NATS Message Headers | |
 | [ADR-6](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-6.md) | Naming Rules | |
-| [ADR-8](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-8.md) | JetStream based Key-Value Stores |Including Oct 2023 updates with API v1.1|
+| [ADR-8](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-8.md) | JetStream based Key-Value Stores |API v1.1 but without `Per-Message TTL`|
 | [ADR-9](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-9.md) | JetStream Consumer Idle Heartbeats | |
 | [ADR-10](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-10.md) | JetStream Extended Purge | |
 | [ADR-13](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-13.md) | Pull Subscribe internals | |
 | [ADR-15](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-15.md) | JetStream Subscribe Workflow | |
 | [ADR-17](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-17.md) | Ordered Consumer | |
 | [ADR-19](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-19.md) | API prefixes for materialized JetStream views | |
-| [ADR-31](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-31.md) | JetStream Direct Get | |
+| [ADR-31](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-31.md) | JetStream Direct Get | without `Batched requests` and `Multi-subject requests`|
 | [ADR-33](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-33.md) | Metadata for Stream and Consumer | |
 | [ADR-36](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-36.md) | Subject Mapping Transforms in Streams | |
 | [ADR-40](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-40.md) | NATS Connection |`tls_first` is not supported |

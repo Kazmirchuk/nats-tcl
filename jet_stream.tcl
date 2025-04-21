@@ -754,9 +754,7 @@ oo::class create ::nats::jet_stream {
                     lappend streamSources [my OriginToSource $origin $bucket]
                 }
                 dict set stream_config sources $streamSources
-                if {$writable} {
-                    dict set stream_config deny_delete false
-                } else {
+                if {!$writable} {
                     dict unset stream_config subjects
                 }
             }

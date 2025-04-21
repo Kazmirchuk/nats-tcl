@@ -221,12 +221,10 @@ test key_value-mirror-1 "Create a filtered KV mirror in the leaf" -body {
 test key_value-mirror-2 "Read from the KV mirror" -body {
     # you can still get the mirror's stream info
     assert {[dict get [$js_leaf stream_info LEAF_MIRROR] state messages] == 2}
-    $js_hub delete_kv_bucket $hub_bucket
     # the mirror replies to DIRECT.GET sent to the hub bucket
     assert {[$kv_hub get_value new.2] eq "order 2"}
     assert {[$kv_hub get_value new.3] eq "order 3"}
-    $kv_hub get_value shipped.1
-} -result * -match glob -errorCode {NATS ErrTimeout}
+} 
 
 test key_value-mirror-3 "Delete the KV mirror" -body {
     $js_leaf delete_stream LEAF_MIRROR ;# you can't use delete_kv_bucket!

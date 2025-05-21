@@ -19,7 +19,7 @@ oo::class create ::nats::SyncPullRequest {
         set ID [$conn request $subject $msg -dictmsg true -timeout $timeout -max_msgs $batch -callback [nats::mymethod OnMsg]]
         try {
             while {1} {
-                nats::_coroVwait [self namespace]::Status ;# wait for 1 message
+                nats::_coroVwait [my varname Status] ;# wait for 1 message
                 set msgCount [llength $MsgList]
                 switch -- $Status {
                     timeout {

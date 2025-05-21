@@ -261,7 +261,7 @@ oo::class create ::nats::connection {
             # so we shouldn't vwait in this case
             if {$status eq $::nats::status_connecting} {
                 log::debug "Waiting for connection status"
-                nats::_coroVwait [self namespace]::status
+                nats::_coroVwait [my varname status]
                 log::debug "Finished waiting for connection status"
             }
             if {$status ne $::nats::status_connected} {
@@ -465,11 +465,11 @@ oo::class create ::nats::connection {
         # sync request
         # remember that we can get a reply after timeout, so vwait must wait on a specific reqID
         if {$timeout != 0} {
-            set timerID [after $timeout [list dict set [self namespace]::requests($reqID) timedOut 1]]
+            set timerID [after $timeout [list dict set [my varname requests]($reqID) timedOut 1]]
         }
         # if connection is lost, we need to cancel this timer, see also CoroMain
         set requests($reqID) [dict create timer $timerID]
-        nats::_coroVwait [self namespace]::requests($reqID)
+        nats::_coroVwait [my varname requests]($reqID)
         if {![info exists requests($reqID)]} {
             if {$last_error eq ""} {
                 throw {NATS ErrConnectionClosed} "Connection closed"
@@ -511,11 +511,11 @@ oo::class create ::nats::connection {
         }
         #sync request
         if {$timeout != 0} {
-            set timerID [after $timeout [list dict set [self namespace]::requests($reqID) timedOut 1]]
+            set timerID [after $timeout [list dict set [my varname requests]($reqID) timedOut 1]]
         }
         set requests($reqID) [dict create timer $timerID]
         while {1} {
-            nats::_coroVwait [self namespace]::requests($reqID)
+            nats::_coroVwait [my varname requests]($reqID)
             if {![info exists requests($reqID)]} {
                 if {$last_error eq ""} {
                     throw {NATS ErrConnectionClosed} "Connection closed"
@@ -571,12 +571,12 @@ oo::class create ::nats::connection {
             throw {NATS ErrConnectionClosed} "No connection to NATS server"
         }
 
-        set timerID [after $timeout [list set [self namespace]::pong 0]]
+        set timerID [after $timeout [list set [my varname pong] 0]]
 
         lappend outBuffer "PING"
         log::debug "sending PING"
         my ScheduleFlush
-        nats::_coroVwait [self namespace]::pong
+        nats::_coroVwait [my varname pong]
         after cancel $timerID
         if {$pong} {
             return true

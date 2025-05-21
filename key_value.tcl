@@ -286,7 +286,7 @@ oo::class create ::nats::kv_watcher {
         set UserCb $cb
         set IgnoreDeletes $ignore_del
         if {$arr ne ""} {
-            upvar 2 $arr [self namespace]::ValuesArray
+            upvar 2 $arr [my varname ValuesArray]
         }
         try {
             set Consumer [$Js ordered_consumer $stream -callback [nats::mymethod OnMsg] -post false {*}$consumer_opts]
@@ -363,8 +363,8 @@ oo::class create ::nats::kv_watcher {
     method Gather {what} {
         set Gathering $what ;# keys or history
         set ResultList [list]
-        set timerID [after [$Js timeout] [list set [self namespace]::InitDone "timeout"]]
-        nats::_coroVwait [self namespace]::InitDone
+        set timerID [after [$Js timeout] [list set [my varname InitDone] timeout]]
+        nats::_coroVwait [my varname InitDone]
         if {$InitDone eq "timeout"} {
             throw {NATS ErrTimeout} "Timeout while gathering $what in bucket $Bucket"
         }

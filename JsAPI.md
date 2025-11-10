@@ -66,6 +66,7 @@ Unlike the core NATS server functionality that is simple, stable and well-docume
 - [docs.nats.io](https://docs.nats.io/nats-concepts/jetstream)
 - [ADRs](https://github.com/nats-io/nats-architecture-and-design)
 - [nats CLI](https://github.com/nats-io/natscli) subcommand `schema`
+- [JetStream Protocol](https://beta-docs.nats.io/ref/protocols/jetstream)
 - `nats-server` in tracing mode (-DV)
 - and of course studying source code of nats.go, nats.c and nats.py
 

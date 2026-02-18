@@ -10,6 +10,8 @@ With this package you can bring the power of the publish/subscribe mechanism to 
 
 The API reference documentation is split into [Core NATS](CoreAPI.md), [JetStream](JsAPI.md) and [Key-Value Store](KvAPI.md).
 
+LLM-generated documentation with more information about implementation details is available at [DeepWiki](https://deepwiki.com/Kazmirchuk/nats-tcl/) (useful for contributors).
+
 ## Supported platforms
 
 The package is written in pure Tcl, without any C code, and so will work anywhere with Tcl versions 8.6 or 9 and [Tcllib](https://core.tcl-lang.org/tcllib/doc/trunk/embedded/md/toc.md). If you need to connect to a NATS server using TLS, of course you will need the [TclTLS](https://core.tcl-lang.org/tcltls/index) package too. On Windows, these packages are normally included in Tcl installers, and on Linux they should be available from your distribution's package manager.

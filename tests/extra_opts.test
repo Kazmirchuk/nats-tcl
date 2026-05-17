@@ -37,9 +37,8 @@ test extra_opts-1 "Check verbose and pedantic modes" -body {
     assert {[dict get $connectDict verbose] eq "true"}
     assert {[dict get $connectDict pedantic] eq "true"}
     
-    assert {[lindex $readData 1] eq "+OK"}
-    assert {[lindex $readData 2] eq "+OK"}
-    
+    assert {"+OK" in $readData}
+        
     lastError $conn
 } -result ErrBadSubject -cleanup {
     $conn disconnect

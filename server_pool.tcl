@@ -97,35 +97,43 @@ oo::class create ::nats::server_pool {
             if { [llength $Servers] == 0 } {
                 throw {NATS ErrNoServers} "Server pool is empty"
             }
-            set attempts [$Conn cget max_reconnect_attempts]
-            set wait [$Conn cget reconnect_time_wait]
             #"pop" a server; using struct::queue seems like an overkill for such a small list
             set s [lindex $Servers 0]
+            set reconnects [dict get $s reconnects]
             # during initial connecting process we go through the pool only once
-            if {[$Conn cget -status] eq $::nats::status_connecting && [dict get $s reconnects]}  {
+            if {[$Conn cget -status] eq $::nats::status_connecting && $reconnects}  {
                 throw {NATS ErrNoServers} "No servers available for connection"
             }
             set Servers [lreplace $Servers 0 0]
             # max_reconnect_attempts == -1 means "unlimited". See also selectNextServer in nats.go
-            if {$attempts >= 0 && [dict get $s reconnects] >= $attempts} {
+            set attempts [$Conn cget max_reconnect_attempts]
+            if {$attempts >= 0 && $reconnects >= $attempts} {
                 ${ns}::log::debug "Removed [dict get $s host]:[dict get $s port] from the server pool"
                 continue
             }
-            
-            set now [clock milliseconds]
-            set last_attempt [dict get $s last_attempt]
-            if {$now < $last_attempt + $wait} {
-                # other clients simply wait for reconnect_time_wait, but this approach is more precise
-                set waiting_time [expr {$wait - ($now - $last_attempt)}]
-                ${ns}::log::debug "Waiting for $waiting_time ms before connecting to the next server"
-                set timer [after $waiting_time [info coroutine]]
-                set reason [yield]
-                if {$reason eq "stop" } {
-                    # user called "disconnect"
-                    after cancel $timer
-                    dict set s last_attempt [clock milliseconds]
-                    lappend Servers $s
-                    throw {NATS STOP_CORO} "Stop coroutine" ;# break from the main loop
+            if {$reconnects > 0} {
+                set waitCb [$Conn cget custom_reconnect_delay]
+                if {$waitCb eq ""} {
+                    set wait [$Conn cget reconnect_time_wait]
+                } else {
+                    set wait [{*}$waitCb $s]
+                }
+
+                set now [clock milliseconds]
+                set last_attempt [dict get $s last_attempt]
+                if {$now < $last_attempt + $wait} {
+                    # other clients simply wait for reconnect_time_wait, but this approach is more precise
+                    set waiting_time [expr {$wait - ($now - $last_attempt)}]
+                    ${ns}::log::debug "Waiting for $waiting_time ms before connecting to the next server"
+                    set timer [after $waiting_time [info coroutine]]
+                    set reason [yield]
+                    if {$reason eq "stop" } {
+                        # user called "disconnect"
+                        after cancel $timer
+                        dict set s last_attempt [clock milliseconds]
+                        lappend Servers $s
+                        throw {NATS STOP_CORO} "Stop coroutine" ;# break from the main loop
+                    }
                 }
             }
             lappend Servers $s

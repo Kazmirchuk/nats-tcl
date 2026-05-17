@@ -47,6 +47,7 @@ set ::nats::_option_spec {
     randomize bool true
     connect_timeout timeout 2000
     reconnect_time_wait timeout 2000
+    custom_reconnect_delay str ""
     max_reconnect_attempts int 60
     ping_interval timeout 120000
     max_outstanding_pings pos_int 2

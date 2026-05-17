@@ -113,7 +113,7 @@ test js_mgmt-1.6 "Update stream configuration" -body {
 
 test js_mgmt-1.7 "Try updating a non-editable property" -body {
     set new_config [dict get [$js stream_info MY_STREAM] config]
-    dict set new_config max_consumers 50
+    dict set new_config storage file
     $js update_stream MY_STREAM {*}$new_config
 } -result {*stream configuration update can not change*} -match glob -errorCode {NATS ErrJSResponse 500*}
 

@@ -170,6 +170,7 @@ test server_pool-15.1 "Check ErrStaleConnection combined with reconnect_time_wai
     set srv2 [lindex $serverList 0]
     assert {[dict get $srv2 port] == 5222}
     dict set srv2 last_attempt [clock milliseconds]
+    dict set srv2 reconnects 1
     lset serverList 0 $srv2
 
     intercept $conn [dict create "PONG\r\n" {}] "" ;# delete all PONGs sent by the server
@@ -190,13 +191,19 @@ test server_pool-15.1 "Check ErrStaleConnection combined with reconnect_time_wai
     $conn disconnect
 }
 
-test server_pool-15.2 "Check ErrBrokenSocket combined with reconnect_time_wait" -body {
-    $conn configure -servers [list nats://localhost:4222 nats://localhost:5222] 
+test server_pool-15.2 "Check ErrBrokenSocket combined with custom_reconnect_delay" -body {
+    $conn configure -servers [list nats://localhost:4222 nats://localhost:5222] -custom_reconnect_delay [lambda {server} {
+        assert {[dict get $server port] == 5222}
+        assert {[dict get $server reconnects] == 1}
+        return 3000
+    }]
     $conn connect
     upvar #0 [info object namespace $sp]::Servers serverList
     set srv2 [lindex $serverList 0]
-    assert {[dict get $srv2 port] == 5222}
+    
+    # pretend we already had a connection failure with this server
     dict set srv2 last_attempt [clock milliseconds]
+    dict set srv2 reconnects 1
     lset serverList 0 $srv2
 
     stopNats NATS1  ;# 500ms
@@ -210,11 +217,11 @@ test server_pool-15.2 "Check ErrBrokenSocket combined with reconnect_time_wait" 
     
     duration {
         while {[$conn cget -status] ne $nats::status_connected} {
-            # the client waits for approx 2000-500 = 1500ms
+            # the client waits for approx 3000-500 = 2500ms
             wait_for ${connNs}::status 5000
         }
     } elapsed
-    assert {[approx $elapsed 1500 150]}
+    assert {[approx $elapsed 2500 150]}
 } -cleanup {
     $conn disconnect
 }

@@ -94,6 +94,7 @@ The `configure` method accepts the following options. Make sure to set them *bef
 | -randomize | boolean | true | Shuffle server URLs passed to `configure` (useful for load balancing)| 
 | -connect_timeout | integer | 2000 | Connection timeout (ms) |
 | -reconnect_time_wait | integer | 2000 | How long to wait between two reconnect attempts to the same server (ms)|
+| -custom_reconnect_delay | callback | | User callback returning a delay (ms) before connecting to a server, [see below](#connection-status-and-the-reconnection-process)|
 | -max_reconnect_attempts | integer | 60 | Maximum number of reconnect attempts per server. Set it to -1 for infinite attempts. |
 | -ping_interval | integer | 120000 | Interval (ms) to send PING messages to a NATS server|
 | -max_outstanding_pings | integer | 2 | Max number of PINGs without a reply from a NATS server before closing the connection |
@@ -332,6 +333,29 @@ The connection can have one of the four statuses:
 - `$nats::status_connected`: the TCP connection to a NATS server is established (including TLS upgrade and credentials verification, if needed). Calling `disconnect` transitions the client into `$nats::status_closed`. If the connection is lost, the client transitions into `$nats::status_reconnecting`.
 - `$nats::status_reconnecting` - triggered by any of the above asynchronous errors that terminate the connection. The client is trying to connect to servers in the pool one by one. Consecutive attempts to connect to a specific server are at least `-reconnect_time_wait` ms apart. Every failed connection to a server increments its `reconnects` counter. Once this counter exceeds `-max_reconnect_attempts`, the server is removed from the pool. Once no servers are left in the pool, or the user calls `disconnect`, the client transitions into `$nats::status_closed`. Calling `subscribe`, `unsubscribe`, `publish` etc is allowed. As soon as the client transitions into `$nats::status_connected`, they will be flushed along with restoring all current subscriptions.
 
+Instead of a static `-reconnect_time_wait`, users can pass a callback `-custom_reconnect_delay`. It must have the following signature:<br/>
+**cmdPrefix** *server*<br/>
+where `server` is a dictionary with the following keys:
+- scheme (nats/tls)
+- host 
+- port 
+- discovered (from `INFO` message) 
+- reconnects 
+- last_attempt (a `[clock milliseconds]` timestamp with the last connection attempt to this server)
+
+The callback must return an integer (ms) that the connection will use instead of `-reconnect_time_wait` to wait before connecting to this server. E.g. this allows to introduce a random jitter to avoid the [Thundering Herd problem](https://docs.nats.io/using-nats/developer/connecting/reconnect/random).
+
+Sample code:
+```Tcl
+package require lambda
+# as always, you can add your own arguments to the lambda
+$conn configure -custom_reconnect_delay [lambda {server} {
+    set randomWait [expr {2000 + int(rand()*1000)}] ;# between 2 and 3s
+    puts "Waiting $randomWait ms before connecting to [dict get $server host]"
+    return $randomWait
+}]
+```
+
 Calling `connect` when the status is not `$nats::status_closed`, has no effect.<br/>
 Calling `ping` when the status is not `$nats::status_connected`, raises `ErrConnectionClosed`.<br/>
 Calling `disconnect` cancels all pending requests and pings as described in the table below.<br/>
@@ -372,7 +396,9 @@ You can configure the client to require a TLS connection in two ways:
 - use `-secure` option (applies to all servers in the pool)
 - use `tls://` schema in a NATS URL (applies only to this server)
 
-Make sure that the TclTLS package is available in your system[^1]. E.g. on OpenSUSE it is called `tls` in zypper. 
+Make sure that the TclTLS package is available in your system. E.g. on OpenSUSE it is called `tls` in zypper.
+
+[Version 2.0](https://core.tcl-lang.org/tcltls/wiki/Download) is recommended, because it has many improvements and bugfixes, including [verification of X509v3 SAN](https://core.tcl-lang.org/tcltls/tktview/3c42b2ba11).
 
 Most likely you will need to provide additional options via `-tls_opts`: at least one of `-cadir` or `-cafile`, otherwise the client can not recognize the server's certificate. E.g. if you have installed your CA certificate on OpenSUSE system-wide, you can use
 
@@ -410,5 +436,3 @@ key_value --> kv_watcher
 
 ```
 Note that `kv_watcher` can outlive the `key_value` object from which it was created.
-
-[^1]: Due to a [bug](https://core.tcl-lang.org/tcltls/tktview/3c42b2ba11) in TclTLS, the client does **not** verify that the certificate from NATS matches the hostname (X509v3 Subject Alternative Name).

@@ -122,13 +122,13 @@ namespace eval test_utils {
             unset ::test_utils::readData
             unset ::test_utils::writtenData
         }
-        set r_link [SnifferBinToList $r_link $all_lines $filter_ping]
-        set w_link [SnifferBinToList $w_link $all_lines $filter_ping]
+        set r_link [SnifferBinToList $r_link $all_lines $filter_ping true]
+        set w_link [SnifferBinToList $w_link $all_lines $filter_ping false]
         return
     }
         
     # private proc: convert raw data sent through socket into a list of NATS protocol tokens
-    proc SnifferBinToList {binData all_lines filter_ping} {
+    proc SnifferBinToList {binData all_lines filter_ping filter_info} {
         # NATS uses \r\n as a protocol delimiter
         # [split] supports splitting only by a single character, so at first replace \r\n with plain \n
         # and since binData ends with \r\n, resulting list will have 1 empty element in the end - discard it
@@ -137,13 +137,17 @@ namespace eval test_utils {
         if {$filter_ping} {
             # usually we are not interested in PING/PONG
             set result [lmap e $result {
-                if {$e eq "PING" || $e eq "PONG"} {
-                    continue
-                }
+                if {$e eq "PING" || $e eq "PONG"} continue
                 set e
             }]
         }
         if {$all_lines} {
+            if {$filter_info} {
+                set result [lmap e $result {
+                    if {[string match INFO* $e]} continue
+                    set e
+                }]
+            }
             return $result
         }
         # usually we are interested only in the first line of sniffed data

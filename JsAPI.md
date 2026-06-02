@@ -155,9 +155,9 @@ If a callback is given, the call returns immediately. When a reply from JetStrea
 - `timedOut` is a boolean equal to 1, if the request timed out or this was `ErrNoResponders`.<br/>
 - `pubAck` is a dict as described above (empty if JetStream reported an error)
 - `pubError` is a non-empty dict if JetStream reported an error, with following fields:
-  - code: high-level HTTP-like code e.g. 404 if a stream wasn't found
-  - err_code: more specific JetStream code, e.g. 10060
-  - errorMessage: human-readable error message, e.g. "expected stream does not match"
+  - `code`: high-level HTTP-like code e.g. 404 if a stream wasn't found
+  - `err_code`: more specific JetStream code, e.g. 10060
+  - `errorMessage`: human-readable error message, e.g. "expected stream does not match"
 
 Note that you can publish messages to a stream using [nats::connection publish](CoreAPI.md#objectname-publish-subject-message--reply-replyto) as well. But in this case you have no confirmation that the message has reached the NATS server, so it misses the whole point of using JetStream.
 ### js publish_msg *message ?args?*

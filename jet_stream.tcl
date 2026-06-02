@@ -258,6 +258,7 @@ oo::class create ::nats::jet_stream {
     method consume {args} {
         return [my fetch {*}$args]
     }
+    # https://docs.nats.io/reference/reference-protocols/nats_api_reference#fetching-the-next-message-from-a-pull-based-consumer
     # Pull Subscribe internals https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-13.md
     # JetStream Subscribe Workflow https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-15.md
     # nats schema info --yaml io.nats.jetstream.api.v1.consumer_getnext_request
@@ -307,6 +308,7 @@ oo::class create ::nats::jet_stream {
         # if there are no messages, and I send no_wait=false, I get 408 after the request expires
         # if there are some messages, I get them followed by 408
         # if there are all needed messages, there's no additional status message
+        # Starting 2.11.11 and 2.12.2, no_wait request without expiration always returns 404 instead of 408, see https://github.com/nats-io/nats-server/issues/5373
         
         # both classes self-destruct, when the pull request is done
         if {$callback eq ""} {

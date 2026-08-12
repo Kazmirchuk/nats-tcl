@@ -1127,7 +1127,7 @@ oo::class create ::nats::connection {
             after cancel [dict lookup $requests($reqID) timer]
             set callback [dict lookup $requests($reqID) callback]
             if {$callback eq ""} {
-                set requests($reqID) "" ;# leave vwait in all sync requests
+                catch {set requests($reqID) ""} ;# coroutine may have been destroyed while waiting
             } else {
                 if {[dict exists $requests($reqID) subID]} {
                     # most probably this is JS fetch - mark it as timed out for proper cleanup

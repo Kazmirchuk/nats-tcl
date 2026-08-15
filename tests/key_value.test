@@ -198,7 +198,7 @@ test key_value-empty-bucket-1 "Put some values in the bucket and empty it" -setu
     $large_kv put key2 value2
     $large_kv put key3 value3
 } -body {
-    assert {[dict get [$large_kv status] values] == 3} 1
+    assert {[dict get [$large_kv status] values] == 3}
     $js empty_kv_bucket large_bucket
     dict get [$large_kv status] values
 } -result 0

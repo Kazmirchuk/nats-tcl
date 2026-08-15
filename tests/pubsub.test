@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2023 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2022 Petro Kazmirchuk https://github.com/Kazmirchuk
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
@@ -37,7 +37,7 @@ test pubsub-1 "Publish and receive a message with a header" -body {
     assert {[nats::header get $inMsg "hdr2"] eq "val2"}
 
     # remove the first element in the list with SUB
-    assert {[lrange $writtenData 1 end] eq [list {HPUB nats_2.2  37 44} NATS/1.0 {hdr1: val 1} {hdr2: val2} {} payload]} 1
+    assert {[lrange $writtenData 1 end] eq [list {HPUB nats_2.2  37 44} NATS/1.0 {hdr1: val 1} {hdr2: val2} {} payload]}
     assert {$readData eq [list "HMSG nats_2.2 $subID 37 44" "NATS/1.0" "hdr1: val 1" "hdr2: val2" "" "payload"]}
 } -cleanup {
     $conn unsubscribe $subID
@@ -51,16 +51,16 @@ test pubsub-2 "Send requests with headers" -setup {
     nats::header set msg_out hdr1 "value 1"
     set response [$conn request_msg $msg_out -timeout 500 -dictmsg true]
 
-    assert {[nats::msg data $response] eq "msg with header" } 1
-    assert {[nats::header get $response "hdr1"] eq "value 1"} 1
+    assert {[nats::msg data $response] eq "msg with header" }
+    assert {[nats::header get $response "hdr1"] eq "value 1"}
     
     # test an async request
     nats::msg set msg_out -data "0 msg2 with header"
     
     $conn request_msg $msg_out -timeout 500 -dictmsg true -callback asyncReqCallback
     wait_for ::inMsg 1000
-    assert {[nats::msg data $inMsg] eq "msg2 with header"} 1
-    assert {[nats::header get $inMsg "hdr1"] eq "value 1"} 1
+    assert {[nats::msg data $inMsg] eq "msg2 with header"}
+    assert {[nats::header get $inMsg "hdr1"] eq "value 1"}
     
     # test a sync request, but get back a plain message with no header
     nats::msg set msg_out -data "0 msg3 with header"
@@ -115,7 +115,7 @@ test pubsub-5 "Receive no-responders from a sync request" -body {
 test pubsub-6 "Receive no-responders from an async request" -body {
     $conn request nats_2.2 "no response" -timeout 500 -dictmsg 1 -callback [lambda {timedOut msg} {
         assert {$timedOut}
-        assert {[nats::msg no_responders $msg]} 1
+        assert {[nats::msg no_responders $msg]}
         set ::inMsg 1
     }]
     duration {
@@ -137,7 +137,7 @@ test pubsub-7.1 "Old-style request - async - get all messages" -setup {
     while {[llength $gotMsgs] < 3} {
         wait_for ::gotMsgs
     }
-    assert {[llength $gotMsgs] == 3} 1
+    assert {[llength $gotMsgs] == 3}
     foreach i $gotMsgs {
         lassign $i timedOut msg
         assert {[nats::msg data $msg] eq "I need help 7.1"}
@@ -156,8 +156,8 @@ test pubsub-7.2 "Old-style request - async - not all messages" -body {
             wait_for ::gotMsgs 1000
         }
     } elapsed
-    assert {[approx $elapsed 500]}
-    assert {[llength $gotMsgs] == 4} 1
+    approx $elapsed 500
+    assert {[llength $gotMsgs] == 4}
     for {set i 0} {$i < 3} {incr i} {
         lassign [lindex $gotMsgs $i] timedOut msg
         assert {[nats::msg data $msg] eq "I need help 7.2"}
@@ -173,14 +173,14 @@ test pubsub-7.3 "Old-style request - async - timeout" -body {
     duration {
         wait_for ::inMsg
     } elapsed
-    assert {[approx $elapsed 100]}
+    approx $elapsed 100
     assert {$inMsg eq "timeout"}
     array size ${conn}::requests
 } -result 0
 
 test pubsub-7.4 "Old-style request - sync - get all messages" -body {    
     set responses [$conn request service "0 I need help 7.4" -max_msgs 3]
-    assert {[llength $responses] == 3} 1
+    assert {[llength $responses] == 3}
     foreach msg $responses {
         assert {[nats::msg data $msg] eq "I need help 7.4"}
     }
@@ -191,8 +191,8 @@ test pubsub-7.5 "Old-style request - sync - not all messages" -body {
     duration {
         set responses [$conn request service "0 I need help 7.5" -max_msgs 4 -timeout 1000]
     } elapsed
-    assert {[approx $elapsed 1000]}
-    assert {[llength $responses] == 3} 1
+    approx $elapsed 1000
+    assert {[llength $responses] == 3}
     foreach msg $responses {
         assert {[nats::msg data $msg] eq "I need help 7.5"}
     }
@@ -206,7 +206,7 @@ test pubsub-7.6 "Old-style request - sync - timeout" -body {
         } trap {NATS ErrTimeout} err {}
     } elapsed
     assert {$err eq "Request to service timed out"}
-    assert {[approx $elapsed 100]}
+    approx $elapsed 100
     array size ${conn}::requests
 } -result 0 -cleanup {
     stopAllResponders
@@ -224,7 +224,7 @@ test pubsub-8.1 "Cancel a new-style request" -setup {
     duration {
         wait_for ::inMsg 2000
     } elapsed
-    assert {[approx $elapsed 1000]}
+    approx $elapsed 1000
     set inMsg
 } -result "cancelled1"
 
@@ -237,8 +237,8 @@ test pubsub-8.2 "Cancel an old-style request" -body {
     duration {
         wait_for ::inMsg 2000
     } elapsed
-    assert {[approx $elapsed 1000]}
-    assert {[array size ${conn}::subscriptions] == 1} 1
+    approx $elapsed 1000
+    assert {[array size ${conn}::subscriptions] == 1}
     set inMsg
 } -result "cancelled2" -cleanup {
     $resp destroy
@@ -259,7 +259,7 @@ test pubsub-9 "Send 2 sync requests in coroutines" -setup {
             wait_for ::results 2000
         }
     } elapsed
-    assert {[approx $elapsed 600 200]}
+    approx $elapsed 600 200
     # the second response will arrive sooner than the first. This would be impossible without coroutines
     set results
 } -result "msg2 msg1" -cleanup {

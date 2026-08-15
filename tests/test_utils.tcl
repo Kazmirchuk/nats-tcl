@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2023 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2020 Petro Kazmirchuk https://github.com/Kazmirchuk
 # Copyright (c) 2021 ANT Solutions https://antsolutions.eu/
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
@@ -6,7 +6,7 @@
 
 # all *.test files source this file first
 
-if [namespace exists test_utils] {
+if {[namespace exists test_utils]} {
     # avoid sourcing this file multiple times when using -singleproc 1
     return
 }
@@ -278,23 +278,10 @@ namespace eval test_utils {
         }
     }
 
-    # control::assert is garbage and doesn't perform substitution on failed expressions, so I can't even know a value of offending variable etc
-    # if assert is used in a callback and fails, it will not be reported as a failed test, because it runs in the global scope
-    # so it must always be followed by a change to a variable that is then checked/vwaited in the test itself
-    proc assert {expression { subst_commands 0} } {
+    proc assert {expression} {
         set res [uplevel 1 [list expr $expression]]
-        if {![string is boolean -strict $res]} {
-            return -code error "invalid boolean expression: $expression"
-        }
         if {$res} return
-        if {$subst_commands} {
-            # useful for [binary encode hex] or [string length] etc
-            set msg "assertion failed: [uplevel 1 [list subst $expression]]"
-        } else {
-            # -nocommands is useful when using [approx]
-            set msg "assertion failed: [uplevel 1 [list subst -nocommands $expression]]"
-        }
-        return -code error $msg
+        return -code error "assertion failed: [uplevel 1 [list subst $expression]]"
     }
     # for nats::connection and nats::ordered_consumer
     proc lastError {obj {errVar ""}} {
@@ -313,7 +300,10 @@ namespace eval test_utils {
     
     #check that actual == ref within certain tolerance - useful for timers/duration
     proc approx {actual ref {tolerance 50}} {
-        return [expr {$actual > ($ref - $tolerance) && $actual < ($ref + $tolerance)}]
+        if {$actual > ($ref - $tolerance) && $actual < ($ref + $tolerance)} {
+            return
+        }
+        return -code error "approx failed: actual $actual ref $ref tolerance $tolerance"
     }
     
     # check that dict1 is a subset of dict2, with the same values
@@ -361,7 +351,6 @@ namespace eval test_utils {
         file delete -force [tcltest::temporaryDirectory]
         tcltest::cleanupTests
     }
-    
     namespace export {[a-z]*}
 }
 

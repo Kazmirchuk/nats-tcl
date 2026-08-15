@@ -36,7 +36,7 @@ test key_value_watchers-history-2 "Get history for a key" -setup {
     $kv put key1 value1_3
 } -body {
     set entries [$kv history key1]
-    assert {[llength $entries] == 4} 1
+    assert {[llength $entries] == 4}
     assert {[dict_in [dict create \
                       bucket $bucket \
                       key key1 \
@@ -76,7 +76,7 @@ test key_value_watchers-history-4 "Get history for a purged key" -setup {
     $kv put key1 value1_4
 } -body {
     set entries [$kv history key1]
-    assert {[llength $entries] == 2} 1
+    assert {[llength $entries] == 2}
     assert {[dict_in [dict create \
                       bucket $bucket \
                       key key1 \
@@ -212,7 +212,7 @@ test key_value_watchers-history-5 "history timeout" -body {
     sleep 200 ;# need some time to create the ordered consumer
     stopNats NATS_JS
     wait_for ::err 400 ;# JS timeout 1000ms - stopNats 500ms - sleep 200ms + tolerance 100ms
-    assert {[$conn cget -status] eq $nats::status_reconnecting} 1
+    assert {[$conn cget -status] eq $nats::status_reconnecting}
     return -options $errOpts $err
 } -result "Timeout while gathering history*" -match glob -errorCode {NATS ErrTimeout}
 

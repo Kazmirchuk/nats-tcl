@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2023 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2020 Petro Kazmirchuk https://github.com/Kazmirchuk
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
@@ -39,10 +39,10 @@ test cluster-1.1 "Dynamic expansion of the server pool with INFO message" -setup
         vwait ${conn}::serverInfo ;# can't use wait_for with arrays
     }
     # make sure that one of connect_urls was filtered out as a duplicate
-    assert {[llength [$conn all_servers]] == 2 } 1
+    assert {[llength [$conn all_servers]] == 2 }
     set discovered_server [lindex [$conn all_servers] 0]
-    assert {[dict get $discovered_server host] eq "localhost"} 1
-    assert {[dict get $discovered_server port] == 5222} 1
+    assert {[dict get $discovered_server host] eq "localhost"}
+    assert {[dict get $discovered_server port] == 5222}
     assert {[dict get $discovered_server discovered]}
     # check that we are still connected to the seed server
     $conn current_server
@@ -123,8 +123,8 @@ test cluster-2 "Outgoing messages are buffered while reconnecting" -body {
             wait_for ${connNs}::status 1000
         }
     } elapsed
-    assert {[$conn cget -status] eq $nats::status_connected} 1
-    assert {[approx $elapsed 50 100]}
+    assert {[$conn cget -status] eq $nats::status_connected}
+    approx $elapsed 50 100
     sleep 500  ;# let the watcher receive all messages
     assert {$connMsgCount == 31}
     assert {$bufMsgCount == 50}
@@ -158,7 +158,7 @@ test cluster-3.1 "Requests time out if connection is lost - async" -setup {
     } trap {NATS ErrConnectionClosed} err {} on ok result {
         assert {false}
     }
-    assert {[$conn cget -status] eq $nats::status_closed} 1
+    assert {[$conn cget -status] eq $nats::status_closed}
     wait_for ::cbResult
     lassign $cbResult timedOut msg timestamp
     assert {$timedOut}
@@ -184,7 +184,7 @@ test cluster-3.2 "Requests time out if connection is lost - sync" -setup {
     $resp destroy
     stopNats NATS1
     wait_for ::request_done 600 ;# connect_timeout=500ms
-    assert {[$conn cget -status] eq $nats::status_closed} 1
+    assert {[$conn cget -status] eq $nats::status_closed}
     dict get $request_done -errorcode
 } -result {NATS ErrTimeout} -cleanup {
     $conn disconnect
@@ -198,7 +198,7 @@ test cluster-4 "Requests can transfer from one server to another within a cluste
     $conn connect
     set resp [responder new -subject cluster -servers nats://localhost:5222]
 } -body {
-    assert {[$conn current_server] eq {localhost 4222}} 1
+    assert {[$conn current_server] eq {localhost 4222}}
     while {1} {
         try {
             # give time for both servers to exchange the subscription interest graph, otherwise we may get no-responders to our request
@@ -223,8 +223,8 @@ test cluster-4 "Requests can transfer from one server to another within a cluste
         wait_for ::inMsg 2000
     } elapsed
     assert {$elapsed < 1200} ;# should be ~1000ms
-    assert {[$conn cget -status] eq $nats::status_connected} 1
-    assert {[$conn current_server] eq {localhost 5222}} 1
+    assert {[$conn cget -status] eq $nats::status_connected}
+    assert {[$conn current_server] eq {localhost 5222}}
     set inMsg
 } -result "hello" -cleanup {
     $resp destroy

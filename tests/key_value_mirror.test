@@ -51,7 +51,7 @@ test key_value-leaf2hub-2 "Put values to the hub bucket using a leaf connection"
 
 test key_value_leaf2hub-3 "Get history of the hub bucket using a leaf connection" -body {
     set entries [$kv_leaf_to_hub history key1]
-    assert {[llength $entries] == 2} 1
+    assert {[llength $entries] == 2}
     assert {[dict_in [dict create \
                       bucket $hub_bucket \
                       key key1 \
@@ -124,7 +124,7 @@ test key_value-mirror-different-domain-2 "Put a value into the mirror and check 
 
 test key_value-mirror-different-domain-3 "Get history from the mirror across domains" -body {
     set entries [$kv_leaf history >]
-    assert {[llength $entries] == 2} 1
+    assert {[llength $entries] == 2}
     assert {[dict_in [dict create \
                       bucket $leaf_mirror_bucket \
                       key key2 \
@@ -143,8 +143,8 @@ test key_value-mirror-different-domain-3 "Get history from the mirror across dom
 
 test key_value-mirror-different-domain-4 "Bucket status should provide info about the source bucket" -body {
     set status [$kv_leaf status]
-    assert {[dict get $status mirror_name] eq $hub_bucket} 1
-    assert {[dict get $status mirror_domain] eq "hub"} 1
+    assert {[dict get $status mirror_name] eq $hub_bucket}
+    assert {[dict get $status mirror_domain] eq "hub"}
 } 
 
 $kv_leaf destroy
@@ -196,13 +196,13 @@ test key_value-aggregate-4 "Source a KV aggregate from a mirror" -body {
     set mirrorConfig [nats::make_stream_source -name "KV_$hub_bucket"]
     $js_hub add_stream MIRROR -allow_direct true -mirror $mirrorConfig
     sleep 500  ;# let them sync
-    assert {[dict get [$js_hub stream_info MIRROR] state messages] == 3} 1
+    assert {[dict get [$js_hub stream_info MIRROR] state messages] == 3}
     # in this case we need to specify both -bucket and -stream
     set origin [nats::make_kv_origin -bucket $hub_bucket -stream MIRROR -domain hub]
     set aggrKV [$js_leaf create_kv_aggregate ALL_ORDERS false [list $origin]]
     sleep 500
     set kvStatus [$aggrKV status]
-    assert {[dict get $kvStatus stream_state messages] == 3} 1
+    assert {[dict get $kvStatus stream_state messages] == 3}
     set streamConfig [dict get $kvStatus stream_config]
     dict get [lindex [dict get $streamConfig sources] 0] name
 } -result MIRROR -cleanup {

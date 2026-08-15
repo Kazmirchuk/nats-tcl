@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2023 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2020 Petro Kazmirchuk https://github.com/Kazmirchuk
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and  limitations under the License.
@@ -25,7 +25,7 @@ test basic-1 "Connect to NATS" -body {
     assert {[string match {INFO *} $readData]}
     # if the server supports headers, the client sends headers:true, no_responders:true as well, no need to check for them, so just *
     assert {[string match {CONNECT {"verbose":false,"pedantic":false,"tls_required":false,"name":"BasicNats","lang":"Tcl"*}} $writtenData]}
-    set ${conn}::last_error
+    lastError $conn
 } -result {}
 
 test basic-2.1 "Subscribe to a message" -body {
@@ -38,7 +38,7 @@ test basic-2.1 "Subscribe to a message" -body {
     # double space is not accidental
     assert {$writtenData eq "SUB subject1  $sub_id"}
     set sub_id
-}  -result 1
+} -result 1
 
 test basic-2.2 "Publish a message" -body {
     sniffer $conn {
@@ -165,7 +165,7 @@ test basic-6 "Synchronous request with timeout - success" -body {
     duration {
         set result [$conn request service "100 basic-6"]
     } elapsed
-    assert {[approx $elapsed 100]}
+    approx $elapsed 100
     set result
 } -result basic-6
 
@@ -175,7 +175,7 @@ test basic-7 "Synchronous request with timeout - failure" -body {
             $conn request service "600 basic-7"
         } trap {NATS ErrTimeout} err {}
     } elapsed
-    assert {[approx $elapsed 500]}
+    approx $elapsed 500
     set err
 } -result {Request to service timed out}
 
@@ -191,7 +191,7 @@ test basic-8 "Asynchronous request" -body {
     duration {
         wait_for ::inMsg
     } elapsed
-    assert {[approx $elapsed 140]}
+    approx $elapsed 140
     
     set inMsg
 } -result "async_req"
@@ -210,7 +210,7 @@ test basic-10 "Asynchronous request with timeout - failure" -body {
         $conn request service "1000 async_req3" -callback asyncReqCallback
         wait_for ::inMsg 900
     } elapsed
-    assert {[approx $elapsed 500]}
+    approx $elapsed 500
     assert {$inMsg eq "timeout"}
 } -cleanup {
     $conn reset request_timeout
@@ -229,7 +229,7 @@ test basic-11 "2 asynchronous requests" -body {
         wait_for ::inMsg 700
         assert {$inMsg eq "async_req4"}
     } elapsed
-    assert {[approx $elapsed 540]} 
+    approx $elapsed 540 
 }
 
 test basic-12 "Sending and receiving a binary message" -body {
@@ -238,14 +238,14 @@ test basic-12 "Sending and receiving a binary message" -body {
     $conn publish bin_subj $binString
     wait_for ::inMsg
     $conn unsubscribe $sub_id
-    assert { [binary encode hex $inMsg] eq [binary encode hex $binString] } 1
-    assert { [string length $inMsg] == 14} 1
+    assert { [binary encode hex $inMsg] eq [binary encode hex $binString] }
+    assert { [string length $inMsg] == 14}
 }
 
 test basic-13 "Binary message request" -body {
     set reply [$conn request service "0 $binString"]
-    assert { [binary encode hex $reply] eq [binary encode hex $binString] } 1
-    assert { [string length $reply] == 14} 1
+    assert { [binary encode hex $reply] eq [binary encode hex $binString] }
+    assert { [string length $reply] == 14}
 }
 
 for {set i 0} { $i < 5} {incr i} {
@@ -260,7 +260,7 @@ test basic-14 "Synchronous request with multiple responders" -body {
         sleep 500 ;# ensure we receive the other 4 replies
     } rdata wdata -all_lines 1
     assert {$elapsed < 300}
-    assert { [llength [lsearch -exact -all $rdata "foobar"]] == 5} 1
+    assert { [llength [lsearch -exact -all $rdata "foobar"]] == 5}
     set result
 } -result "foobar"
 
@@ -307,15 +307,15 @@ test basic-16 "Queue groups and publish with replyTo" -body {
 }
 
 test basic-17 "Check internal state before and after disconnection" -body {
-    assert {[array size ${conn}::requests] == 0} 1
-    assert {[array size ${conn}::subscriptions] == 2} 1
-    assert {[llength [set ${conn}::outBuffer]] == 0} 1
+    assert {[array size ${conn}::requests] == 0}
+    assert {[array size ${conn}::subscriptions] == 2}
+    assert {[llength [set ${conn}::outBuffer]] == 0}
     
     $conn disconnect
     
-    assert {[set ${conn}::sock] eq ""} 1
-    assert {[$conn cget -status] eq $nats::status_closed} 1
-    assert {[array size ${conn}::subscriptions] == 0} 1
+    assert {[set ${conn}::sock] eq ""}
+    assert {[$conn cget -status] eq $nats::status_closed}
+    assert {[array size ${conn}::subscriptions] == 0}
 }
 
 test basic-18.1 "Disconnection cancels pending async requests" -body {
@@ -340,7 +340,7 @@ test basic-18.2 "Disconnection makes sync requests raise ErrConnectionClosed" -b
             set reply [$conn request service "2000 foo" -timeout 1000]
         } trap {NATS ErrConnectionClosed} err {}
     } elapsed
-    assert {[approx $elapsed 200]}
+    approx $elapsed 200
     set err
 } -result "Connection closed" -cleanup {
     $resp destroy
@@ -355,7 +355,7 @@ test basic-18.3 "Disconnection makes pending pings raise ErrConnectionClosed" -b
             $conn ping -timeout 1000
         } trap {NATS ErrConnectionClosed} err {}
     } elapsed
-    assert {[approx $elapsed 200]}
+    approx $elapsed 200
     set err
 } -result "Connection closed"
 
@@ -367,7 +367,7 @@ test basic-19 "Test ping timeout" -body {
             $conn ping -timeout 500
         } trap {NATS ErrTimeout} err {}
     } elapsed
-    assert {[approx $elapsed 500]}
+    approx $elapsed 500
     set err
 } -result "PING timeout"
 

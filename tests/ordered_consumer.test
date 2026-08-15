@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2025 Petro Kazmirchuk https://github.com/Kazmirchuk
+# Copyright (c) 2021 Petro Kazmirchuk https://github.com/Kazmirchuk
 # Copyright (c) 2021 ANT Solutions https://antsolutions.eu/
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
@@ -9,7 +9,7 @@ source test_utils.tcl
 set stream_name MY_STREAM
 
 startNats NATS --jetstream
-set conn [nats::connection new JS]
+set conn [nats::connection new OrderedCons]
 $conn configure -servers nats://localhost:4222
 $conn connect
 set jet_stream [$conn jet_stream -timeout 1000]
@@ -55,7 +55,7 @@ test ordered-2 "Ordered consumer - nominal case" -body {
         }
     } elapsed
     assert {$elapsed < 500}
-    assert {[llength $gotMsgs] == 3} 1
+    assert {[llength $gotMsgs] == 3}
     set myconfig [dict get [$cons info] config]
     set consumerConfig [dict get [$jet_stream consumer_info $stream_name [$cons name]] config]
     assert {[dict_in $myconfig $consumerConfig]}
@@ -69,7 +69,7 @@ test ordered-2 "Ordered consumer - nominal case" -body {
         }
     } elapsed
     assert {$elapsed < 500}
-    assert {[lastError $cons] eq ""} 1
+    assert {[lastError $cons] eq ""}
     lmap msg $gotMsgs {nats::msg data $msg}
 } -result {1 2 3 4 5 6} -cleanup {
     $cons destroy
@@ -91,7 +91,7 @@ test ordered-3 "Ordered consumer - reset - missing heartbeats" -body {
     intercept_msg $cons
     wait_for ${cons}::last_error 1200  ;# wait for at least hb interval * 3
     intercept_clear $cons
-    assert {[lastError $cons] eq "ErrConsumerNotActive"} 1
+    assert {[lastError $cons] eq "ErrConsumerNotActive"}
     # reset in progress; meanwhile publish more messages
     foreach msg { 4 5 6 } {
         $jet_stream publish test.10 $msg -stream $stream_name
@@ -99,7 +99,7 @@ test ordered-3 "Ordered consumer - reset - missing heartbeats" -body {
     while {[llength $gotMsgs] < 6} {
         wait_for ::gotMsgs
     }
-    assert {$consumerName ne [$cons name]} 1  ;# check that the push consumer was recreated
+    assert {$consumerName ne [$cons name]}  ;# check that the push consumer was recreated
     lmap msg $gotMsgs {nats::msg data $msg}
 } -result {1 2 3 4 5 6} -cleanup {
     rename MsgFilter ""
@@ -120,11 +120,11 @@ test ordered-4 "Ordered consumer - reset - sequence mismatch in HB" -body {
     # the 1st HB triggers a reset
     wait_for ${cons}::last_error 800
     intercept_clear $cons
-    assert {[lastError $cons] eq "ErrConsumerSequenceMismatch"} 1
+    assert {[lastError $cons] eq "ErrConsumerSequenceMismatch"}
     while {[llength $gotMsgs] < 3} {
         wait_for ::gotMsgs
     }
-    assert {$consumerName ne [$cons name]} 1  ;# check that the push consumer was recreated
+    assert {$consumerName ne [$cons name]}  ;# check that the push consumer was recreated
     lmap msg $gotMsgs {nats::msg data $msg}
 } -result {1 2 3} -cleanup {
     rename MsgFilter ""
@@ -145,11 +145,11 @@ test ordered-5 "Ordered consumer - reset - sequence mismatch in a message" -body
     # the 3rd message triggers a reset
     wait_for ${cons}::last_error
     intercept_clear $cons
-    assert {[lastError $cons] eq "ErrConsumerSequenceMismatch"} 1
+    assert {[lastError $cons] eq "ErrConsumerSequenceMismatch"}
     while {[llength $gotMsgs] < 3} {
         wait_for ::gotMsgs 1000
     }
-    assert {$consumerName ne [$cons name]} 1  ;# check that the push consumer was recreated
+    assert {$consumerName ne [$cons name]}  ;# check that the push consumer was recreated
     lmap msg $gotMsgs {nats::msg data $msg}
 } -result {1 2 3} -cleanup {
     rename MsgFilter ""
@@ -197,7 +197,7 @@ test ordered-7 "Ordered consumer - quick reconnect" -body {
     wait_for ::gotMsgs 500
     assert {$allErrors eq "ErrServer"} ;# unknown protocol operation
     assert {$consumerName eq [$cons name]}  ;# still the same push consumer in NATS
-    assert {[set ${cons}::last_error] eq ""}
+    assert {[lastError $cons] eq ""}
     lmap msg $gotMsgs {nats::msg data $msg}
 } -result {1 3} -cleanup {
     $cons destroy

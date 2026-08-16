@@ -11,7 +11,6 @@
 package require Tcl 8.6-
 package require json
 package require json::write
-package require coroutine
 
 # optional packages
 catch {package require tls}
@@ -1127,7 +1126,9 @@ oo::class create ::nats::connection {
             after cancel [dict lookup $requests($reqID) timer]
             set callback [dict lookup $requests($reqID) callback]
             if {$callback eq ""} {
-                catch {set requests($reqID) ""} ;# coroutine may have been destroyed while waiting
+                # resume sync requests, incl. in user's coroutines. 
+                # NB! they will resume *after* this method finishes and we return to the event loop, so the requests array will be empty by then
+                set requests($reqID) ""
             } else {
                 if {[dict exists $requests($reqID) subID]} {
                     # most probably this is JS fetch - mark it as timed out for proper cleanup
@@ -1457,8 +1458,22 @@ proc ::nats::timestamp {} {
 proc ::nats::_coroVwait {var} {
     if {[info coroutine] eq ""} {
         vwait $var
+        return
+    }
+    # we're in a user's coroutine, so we need to yield to an outer vwait
+    # coroutine::util vwait is not ideal because it breaks if the user's coroutine has been deleted 
+    upvar 1 $var v
+    trace add variable v write [list ::nats::_vwait_cb [info coroutine]]
+    yield
+}
+proc ::nats::_vwait_cb {coro var idx op} {
+    upvar 1 $var v
+    trace remove variable v write [list ::nats::_vwait_cb $coro]
+    if {[llength [info commands $coro]]} {
+        after 0 $coro
     } else {
-        coroutine::util vwait $var
+        # too cumbersome to use the connection's logger; use [interp bgerror] to handle this
+        after 0 [list throw {NATS ErrInvalidCoroutine} "Invalid coroutine $coro"]
     }
 }
 # returns a dict, where each key points to a list of values

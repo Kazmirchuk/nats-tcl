@@ -231,6 +231,7 @@ test pubsub-8.1 "Cancel a new-style request" -setup {
 test pubsub-8.2 "Cancel an old-style request" -body {
     set inMsg ""
     set reqID [$conn request service "500 cancel" -callback asyncReqCallback -timeout 600 -max_msgs 1]
+    assert {[array size ${conn}::subscriptions] == 2}
     sleep 100
     $conn cancel_request $reqID
     after 1000 {set inMsg "cancelled2"}
@@ -253,8 +254,8 @@ test pubsub-9 "Send 2 sync requests in coroutines" -setup {
         lappend ::results [$::conn request service "$delay $msg"] 
     }
     duration {
-        coroutine coro1 coro_body 600 "msg1"
-        coroutine coro2 coro_body 0 "msg2"
+        coroutine coro1 coro_body 600 msg1
+        coroutine coro2 coro_body 0 msg2
         while {[llength $results] != 2} {
             wait_for ::results 2000
         }
@@ -263,6 +264,28 @@ test pubsub-9 "Send 2 sync requests in coroutines" -setup {
     # the second response will arrive sooner than the first. This would be impossible without coroutines
     set results
 } -result "msg2 msg1" -cleanup {
+    $resp destroy
+}
+
+test pubsub-10 "Kill a coroutine waiting for a sync request" -setup {
+    set resp [responder new]
+} -body {
+    interp bgerror "" [lambda { errMsg errOpts } {
+        set ::test_bgerror [dict get $errOpts -errorcode]
+    }]
+
+    set inMsg ""
+    proc coro_body {} {
+        set ::inMsg [$::conn request service "100 Lost" -timeout 200]
+    }
+    coroutine coro1 coro_body
+    rename coro1 ""
+    $conn disconnect ;# trigger CancelAllRequests
+    sleep 500
+    assert {[$resp reply_count] == 1}
+    assert {[lindex $test_bgerror 1] eq "ErrInvalidCoroutine"}
+    set inMsg
+} -result "" -cleanup {
     $resp destroy
 }
 

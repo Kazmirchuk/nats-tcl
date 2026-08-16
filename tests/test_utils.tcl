@@ -232,19 +232,15 @@ namespace eval test_utils {
     }
     
     oo::class create responder {
-        variable responderThread
-        variable id
+        variable responderThread id
         
         constructor {args} {
             nats::_parse_args $args {
-                id valid_str ""
                 subject valid_str service
                 queue valid_str ""
                 servers valid_str ""
             }
-            if {$id eq ""} {
-                set id [namespace tail [self]]
-            }
+            set id [namespace tail [self]]
 
             set thread_script {
                 source responder.tcl
@@ -264,11 +260,16 @@ namespace eval test_utils {
             test_utils::log::info $log_msg
             # no need in thread::errorproc - if there's an unexpected error in the thread, it will be logged to stderr by itself
         }
-        
         destructor {
             thread::release $responderThread ;# makes the thread return from thread::wait
             thread::join $responderThread
             test_utils::log::info "Responder $id finished"
+        }
+        method reply_count {} {
+            if {[thread::send $responderThread {set ::responder::reply_count} result] == 1} {
+                error "Failed to get reply count: $result"
+            }
+            return $result
         }
     }
     

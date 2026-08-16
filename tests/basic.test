@@ -322,10 +322,12 @@ test basic-18.1 "Disconnection cancels pending async requests" -body {
     set resp [responder new]
     set inMsg -1
     $conn connect
-    $conn request service "2000 foo" -timeout 1000 -callback asyncReqCallback
+    $conn request service "100 foo" -timeout 500 -callback asyncReqCallback
     $conn ping
     $conn disconnect
-    sleep 1500  ;# more than -timeout
+    sleep 800  ;# more than -timeout
+    assert {[$resp reply_count] == 1}
+    assert {[array size ${conn}::requests] == 0}
     set inMsg ;# asyncReqCallback was not invoked
 } -result -1 -cleanup {
     $resp destroy

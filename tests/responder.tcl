@@ -13,6 +13,7 @@ package require lambda
 
 namespace eval ::responder {
     variable conn ""
+    variable reply_count 0
 }
 
 proc ::responder::echo {subj msg reply} {
@@ -25,7 +26,9 @@ proc ::responder::echo {subj msg reply} {
     nats::msg set msg -subject $reply
     nats::msg set msg -data $payload
     nats::msg set msg -reply ""
-    after $delay [lambda {conn msg} {
+    after $delay [lambda@ ::responder {msg} {
+        variable conn
+        variable reply_count
         set s [$conn cget -status]
         if {$s ne "connected"} {
             # avoid that a message is buffered while the responder is reconnecting; if we get here, test timings are wrong
@@ -33,7 +36,8 @@ proc ::responder::echo {subj msg reply} {
             return
         }
         $conn publish_msg $msg
-    } $::responder::conn $msg]
+        incr reply_count
+    } $msg]
 }
 
 proc ::responder::init {id subj queue servers} {
